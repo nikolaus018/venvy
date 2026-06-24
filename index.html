@@ -1,3 +1,2870 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Venvy</title>
+
+    <!-- ── PWA meta ─────────────────────────────────────────────────────────── -->
+    <meta name="application-name" content="Venvy">
+    <meta name="description" content="Manage, deploy and monitor your Python applications">
+
+    <!-- Android / Chrome -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#080d14" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#080d14">
+
+    <!-- iOS Safari -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Venvy">
+
+    <!-- Prevent phone number detection -->
+    <meta name="format-detection" content="telephone=no">
+
+    <!-- ── Icons ────────────────────────────────────────────────────────────── -->
+    <!-- Inline SVG icon as data URI — works offline, no external dep -->
+    <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23090b0f'/%3E%3Cdefs%3E%3ClinearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2338bdf8' /%3E%3Cstop offset='100%25' stop-color='%230284c7' /%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M28 32 L46 72 C48 76 52 76 54 72 L72 32' stroke='url(%23grad)' stroke-width='14' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+
+    <!-- Apple touch icon — must be PNG-compatible; use a canvas-generated one -->
+    <script>
+        (function () {
+            // Generate a 180×180 PNG icon on a canvas and set it as apple-touch-icon
+            try {
+                const c = document.createElement('canvas');
+                c.width = c.height = 180;
+                const ctx = c.getContext('2d');
+                const r = (x, y, w, h, rad, col) => {
+                    ctx.beginPath(); ctx.roundRect(x, y, w, h, rad); ctx.fillStyle = col; ctx.fill();
+                };
+                r(0, 0, 180, 180, 40, '#090b0f');
+                ctx.strokeStyle = '#38bdf8';
+                ctx.lineWidth = 24; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                ctx.beginPath(); ctx.moveTo(50, 56); ctx.lineTo(90, 132); ctx.lineTo(130, 56); ctx.stroke();
+                const link = document.createElement('link');
+                link.rel = 'apple-touch-icon';
+                link.href = c.toDataURL('image/png');
+                document.currentScript.parentNode.appendChild(link);
+            } catch (e) { }
+
+            // Inject manifest as blob — richer than before, proper PNG icon via canvas
+            try {
+                const c2 = document.createElement('canvas');
+                c2.width = c2.height = 512;
+                const ctx2 = c2.getContext('2d');
+                const r2 = (x, y, w, h, rad, col) => {
+                    ctx2.beginPath(); ctx2.roundRect(x, y, w, h, rad); ctx2.fillStyle = col; ctx2.fill();
+                };
+                const s = 512;
+                r2(0, 0, s, s, s * 0.22, '#090b0f');
+                ctx2.strokeStyle = '#38bdf8';
+                ctx2.lineWidth = 68; ctx2.lineCap = 'round'; ctx2.lineJoin = 'round';
+                ctx2.beginPath(); ctx2.moveTo(s * 0.28, s * 0.31); ctx2.lineTo(s * 0.5, s * 0.73); ctx2.lineTo(s * 0.72, s * 0.31); ctx2.stroke();
+                const iconDataUrl = c2.toDataURL('image/png');
+
+                const manifest = {
+                    name: 'Venvy',
+                    short_name: 'Venvy',
+                    description: 'Manage, deploy and monitor your Python applications',
+                    start_url: window.location.origin + '/',
+                    scope: window.location.origin + '/',
+                    display: 'standalone',
+                    orientation: 'any',
+                    background_color: '#080d14',
+                    theme_color: '#080d14',
+                    categories: ['developer', 'utilities', 'productivity'],
+                    icons: [
+                        { src: iconDataUrl, sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+                    ],
+                    shortcuts: [],
+                    prefer_related_applications: false,
+                };
+                const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+                const mlink = document.createElement('link');
+                mlink.rel = 'manifest'; mlink.href = URL.createObjectURL(blob);
+                document.currentScript.parentNode.appendChild(mlink);
+            } catch (e) { }
+        })();
+    </script>
+
+    <!-- Tailwind CSS — using the CDN play version for single-file deployments.
+         For production builds consider switching to a compiled CSS file. -->
+    <script>
+        const _warn = console.warn;
+        console.warn = function (...args) {
+            if (args[0] && typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com should not be used in production')) return;
+            _warn.apply(console, args);
+        };
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/ace.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/ext-searchbox.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/feather-icons/4.29.2/feather.min.js"></script>
+    <script>
+        // Safe wrapper for _featherReplace() — gracefully handles offline / CDN failure
+        window._featherReplace = function () {
+            try { if (window.feather) feather.replace(); } catch (e) { }
+        };
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@500;600;700;800&family=Inter:wght@300;400;500;600&display=swap"
+        rel="stylesheet">
+
+    <style>
+        :root {
+            /* ── Backgrounds — deep rich slate (less monochrome) ── */
+            --bg: #0c111c;
+            --surface: #111826;
+            --surface2: #1c2638;
+            --surface3: #27364d;
+            --surface4: #334763;
+            --sidebar-bg: #0c111c;
+
+            /* ── Borders ── */
+            --border: rgba(148, 163, 184, 0.1);
+            --border2: rgba(148, 163, 184, 0.15);
+            --border3: rgba(148, 163, 184, 0.25);
+
+            /* ── Text ── */
+            --text: #f1f5f9;
+            --text2: #94a3b8;
+            --text3: #64748b;
+
+            /* ── Accent: Professional sky-blue — clean, technical ── */
+            --accent: #38bdf8;
+            --accent-rgb: 56, 189, 248;
+            --accent-dark: #0ea5e9;
+            --accent-light: #7dd3fc;
+            --accent-glow: rgba(56, 189, 248, 0.15);
+            --accent-glow-strong: rgba(56, 189, 248, 0.28);
+            --grad-accent: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%);
+            --cf-orange: #f38020;
+
+            /* ── Status & Utility Colors ── */
+            --red: #f87171;
+            --red-rgb: 248, 113, 113;
+            --green: #34d399;
+            --green-rgb: 52, 211, 153;
+            --yellow: #f59e0b;
+            --yellow-rgb: 245, 158, 11;
+            --blue: #93c5fd;
+            --blue-rgb: 147, 197, 253;
+            --purple: #c084fc;
+            --purple-rgb: 192, 132, 252;
+
+            /* ── Semantic colors ── */
+            --green-dim: rgba(var(--green-rgb), 0.12);
+            --green-border: rgba(var(--green-rgb), 0.22);
+            --red-dim: rgba(var(--red-rgb), 0.1);
+            --red-border: rgba(var(--red-rgb), 0.22);
+            --amber: var(--yellow);
+            --amber-dim: rgba(var(--yellow-rgb), 0.1);
+            --amber-border: rgba(var(--yellow-rgb), 0.22);
+            --orange: #fb923c;
+
+            /* ── Design Tokens ── */
+            /* Border Radius — 3 values only */
+            --radius-sm: 8px;
+            /* inputs, chips, badges, file rows, toolbar buttons */
+            --radius-md: 12px;
+            /* cards, modals, nav items, panels, toasts */
+            --radius-lg: 20px;
+            /* auth card, large feature panels */
+
+            /* Shadows */
+            --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+            --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            --shadow-modal: 0 32px 72px rgba(0, 0, 0, 0.88), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+
+            /* Transitions — standard durations */
+            --transition-fast: 0.15s ease;
+            --transition-med: 0.25s ease;
+        }
+
+        /* ── Base & Resets ─────────────────────────────────────────────── */
+        html,
+        body {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            overscroll-behavior: none;
+            -webkit-user-select: none;
+            user-select: none;
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .overflow-y-auto {
+            touch-action: pan-y;
+        }
+
+        .overflow-x-auto {
+            touch-action: pan-x;
+        }
+
+        pre,
+        .select-text,
+        #log-viewer,
+        .ace_editor {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+
+        .pt-safe {
+            padding-top: env(safe-area-inset-top, 0px);
+        }
+
+        .pb-safe-content {
+            padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+        }
+
+        /* ── Scrollbars ────────────────────────────────────────────────── */
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        .xterm-viewport {
+            overflow-y: auto !important;
+        }
+
+        @media (min-width: 768px) {
+            ::-webkit-scrollbar {
+                width: 5px;
+                height: 5px;
+            }
+
+            ::-webkit-scrollbar-track {
+                background: transparent;
+            }
+
+            ::-webkit-scrollbar-thumb {
+                background: rgba(255, 255, 255, 0.08);
+                border-radius: 99px;
+            }
+
+            ::-webkit-scrollbar-thumb:hover {
+                background: rgba(255, 255, 255, 0.14);
+            }
+        }
+
+        /* ── Typography ────────────────────────────────────────────────── */
+        .brand-text {
+            font-family: 'Inter', sans-serif;
+            font-weight: 800;
+            letter-spacing: -0.04em;
+        }
+
+        .app-title {
+            font-family: 'Inter', sans-serif;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+        }
+
+        .section-label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.07em;
+            text-transform: uppercase;
+            color: var(--text3);
+        }
+
+        /* ── Cards ─────────────────────────────────────────────────────── */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-md);
+            transition: border-color var(--transition-med), box-shadow var(--transition-med);
+            box-shadow: var(--shadow-card);
+        }
+
+        .card:hover {
+            border-color: var(--border3);
+            box-shadow: var(--shadow-elevated);
+        }
+
+        .card-inner {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+        }
+
+        /* ── Inputs ────────────────────────────────────────────────────── */
+        .inp {
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            transition: border-color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
+            outline: none;
+        }
+
+        .inp:focus {
+            border-color: var(--accent);
+            background: var(--surface3);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .inp:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 1px;
+        }
+
+        .inp::placeholder {
+            color: var(--text3);
+        }
+
+        textarea.inp {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        select.inp {
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2355556b' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 2.5rem;
+        }
+
+        /* ── Buttons ───────────────────────────────────────────────────── */
+        .btn-primary {
+            background: var(--accent-dark);
+            color: #fff;
+            font-weight: 600;
+            border-radius: var(--radius-sm);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all var(--transition-fast);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-primary::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, transparent 60%);
+            pointer-events: none;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent);
+            border-color: rgba(255, 255, 255, 0.15);
+            transform: translateY(-1px);
+        }
+
+        .btn-primary:active {
+            transform: scale(0.97);
+        }
+
+        .btn-primary:focus-visible {
+            outline: 2px solid var(--accent-light);
+            outline-offset: 2px;
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            transition: all var(--transition-fast);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-ghost:hover {
+            background: var(--surface3);
+            color: var(--text);
+            border-color: var(--border3);
+            transform: translateY(-1px);
+        }
+
+        .btn-ghost:active {
+            transform: scale(0.97);
+        }
+
+        .btn-ghost:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        .btn-danger {
+            background: rgba(var(--red-rgb), 0.08);
+            color: var(--red);
+            border: 1px solid rgba(var(--red-rgb), 0.18);
+            border-radius: var(--radius-sm);
+            transition: all var(--transition-fast);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-danger:hover {
+            background: rgba(var(--red-rgb), 0.14);
+            border-color: rgba(var(--red-rgb), 0.35);
+        }
+
+        .btn-danger:active {
+            transform: scale(0.97);
+        }
+
+        .btn-danger:focus-visible {
+            outline: 2px solid var(--red);
+            outline-offset: 2px;
+        }
+
+        /* Solid danger — for destructive confirm actions */
+        .btn-danger-solid {
+            background: var(--red);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-weight: 700;
+            transition: all var(--transition-fast);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-danger-solid:hover {
+            filter: brightness(1.1);
+            transform: translateY(-1px);
+        }
+
+        .btn-danger-solid:active {
+            transform: scale(0.97);
+        }
+
+        .btn-danger-solid:focus-visible {
+            outline: 2px solid var(--red);
+            outline-offset: 2px;
+        }
+
+        /* Secondary — neutral surface action (publish, export, save-cf, etc.) */
+        .btn-secondary {
+            background: var(--surface3);
+            color: var(--text);
+            border: 1px solid var(--border3);
+            border-radius: var(--radius-sm);
+            font-weight: 600;
+            transition: all var(--transition-fast);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-secondary:hover {
+            background: var(--surface4);
+            border-color: var(--border3);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary:active {
+            transform: scale(0.97);
+        }
+
+        .btn-secondary:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        /* Warning — yellow confirm actions (overwrite) */
+        .btn-warning {
+            background: var(--yellow);
+            color: #000;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-weight: 700;
+            transition: all var(--transition-fast);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-warning:hover {
+            filter: brightness(1.1);
+            transform: translateY(-1px);
+        }
+
+        .btn-warning:active {
+            transform: scale(0.97);
+        }
+
+        .btn-orange {
+            background: linear-gradient(135deg, var(--orange) 0%, #ea580c 100%) !important;
+            color: #fff !important;
+            font-weight: 600 !important;
+            border: none !important;
+            box-shadow: 0 4px 14px rgba(251, 146, 60, 0.25) !important;
+            border-radius: var(--radius-sm) !important;
+        }
+
+        .btn-orange:hover {
+            filter: brightness(1.08);
+            transform: translateY(-1px);
+        }
+
+        .btn-orange:active {
+            transform: scale(0.97);
+        }
+
+        .btn-orange:focus-visible {
+            outline: 2px solid var(--orange);
+            outline-offset: 2px;
+        }
+
+        /* ── Toggles ───────────────────────────────────────────────────── */
+        .toggle-track {
+            width: 44px;
+            height: 24px;
+            border-radius: 12px;
+            background: var(--surface3);
+            border: 1px solid var(--border2);
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .toggle-track.on {
+            background: var(--accent);
+            border-color: transparent;
+            box-shadow: 0 0 12px var(--accent-glow);
+        }
+
+        .toggle-track.amber-on {
+            background: var(--amber);
+            border-color: transparent;
+        }
+
+        .toggle-knob {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .toggle-track.on .toggle-knob,
+        .toggle-track.amber-on .toggle-knob {
+            left: 22px;
+        }
+
+        /* ── Sidebar Nav ──────────────────────────────────────────────────── */
+        .nav-item {
+            border-radius: var(--radius-sm);
+            border: 1px solid transparent;
+            transition: all var(--transition-fast);
+        }
+
+        .nav-item.active {
+            background: rgba(var(--accent-rgb), 0.1);
+            border-color: rgba(var(--accent-rgb), 0.18);
+            color: var(--accent-light) !important;
+        }
+
+        .nav-item.active .nav-dot {
+            background: var(--accent);
+            box-shadow: 0 0 8px var(--accent-glow-strong);
+        }
+
+        .nav-item:hover:not(.active) {
+            background: var(--surface2);
+            border-color: var(--border2);
+            color: var(--text) !important;
+        }
+
+        /* ── File List ─────────────────────────────────────────────────── */
+        .file-row {
+            border-radius: 8px;
+            transition: background 0.12s ease;
+        }
+
+        .file-row:hover {
+            background: var(--surface2);
+        }
+
+        .file-row:active {
+            transform: scale(0.99);
+        }
+
+        /* ── Context Menu & Modals ──────────────────────────────────────── */
+        #ctx-menu {
+            background: rgba(10, 10, 14, 0.96);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid var(--border3);
+            border-radius: 12px;
+            box-shadow: 0 20px 48px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        #ctx-menu button:hover {
+            background: var(--surface3);
+            color: var(--text);
+        }
+
+        .modal-overlay {
+            background: rgba(0, 0, 0, 0.78);
+            backdrop-filter: blur(10px) saturate(150%);
+            -webkit-backdrop-filter: blur(10px) saturate(150%);
+        }
+
+        .modal-panel {
+            background: linear-gradient(145deg, rgba(14, 14, 20, 0.98) 0%, rgba(10, 10, 15, 1) 100%);
+            border: 1px solid var(--border3);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-modal);
+        }
+
+        .modal-panel-sheet {
+            background: linear-gradient(to top, rgba(14, 14, 20, 1) 0%, rgba(10, 10, 15, 1) 100%);
+            border: 1px solid var(--border3);
+            border-radius: var(--radius-md) var(--radius-md) 0 0;
+            box-shadow: 0 -12px 48px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+
+        /* ── Badges & Status ───────────────────────────────────────────── */
+        .badge-metric {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 5px;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .badge-cpu {
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text2);
+            border: 1px solid var(--border);
+        }
+
+        .badge-mem {
+            background: rgba(45, 212, 160, 0.08);
+            color: var(--green);
+            border: 1px solid rgba(45, 212, 160, 0.18);
+        }
+
+        .status-running {
+            background: rgba(45, 212, 160, 0.09);
+            color: var(--green);
+            border: 1px solid rgba(45, 212, 160, 0.2);
+            letter-spacing: 0.05em;
+            box-shadow: 0 0 12px rgba(45, 212, 160, 0.1);
+        }
+
+        .status-stopped {
+            background: var(--surface3);
+            color: var(--text3);
+            border: 1px solid var(--border);
+            letter-spacing: 0.05em;
+        }
+
+        .status-stale {
+            background: rgba(var(--red-rgb), 0.09);
+            color: var(--red);
+            border: 1px solid rgba(var(--red-rgb), 0.2);
+            letter-spacing: 0.05em;
+        }
+
+        /* ── Terminal ──────────────────────────────────────────────────── */
+        .term-key {
+            font-size: 11px;
+            background: var(--surface2);
+            color: var(--text2);
+            border: 1px solid var(--border2);
+            border-radius: 6px;
+            padding: 5px 10px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            transition: all 0.12s ease;
+        }
+
+        .term-key:active {
+            background: var(--surface3);
+            border-color: var(--border3);
+            transform: scale(0.93);
+        }
+
+        .term-mob-key {
+            font-size: 13px;
+            background: var(--surface2);
+            color: var(--text2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            padding: 6px 12px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Inter', sans-serif;
+            transition: all var(--transition-fast);
+        }
+
+        .term-mob-key:active {
+            background: var(--surface3);
+            border-color: var(--border3);
+            transform: scale(0.93);
+        }
+
+        .term-mob-key:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 1px;
+        }
+
+        .mod-active {
+            background: var(--surface3) !important;
+            border-color: var(--accent) !important;
+            box-shadow: 0 0 8px var(--accent-glow) !important;
+        }
+
+        .more-open {
+            background: var(--surface3);
+            color: var(--text);
+        }
+
+        .mod-accent-blue {
+            color: var(--blue) !important;
+        }
+
+        .mod-accent-purple {
+            color: var(--purple) !important;
+        }
+
+        .account-footer-btn-hover:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .term-action-btn {
+            width: 30px;
+            height: 30px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text3);
+            background: transparent;
+            border: 1px solid transparent;
+            transition: all 0.12s ease;
+        }
+
+        .term-action-btn:hover {
+            color: var(--text2);
+            background: var(--surface2);
+            border-color: var(--border);
+        }
+
+        .term-action-btn:active {
+            transform: scale(0.88);
+        }
+
+        /* ── Tab Bar ───────────────────────────────────────────────────── */
+        .tab-btn {
+            position: relative;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text3);
+            padding: 0 4px;
+            transition: color 0.18s ease;
+            white-space: nowrap;
+        }
+
+        .tab-btn.active {
+            color: var(--text) !important;
+            font-weight: 600;
+        }
+
+        .tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent), var(--accent-light));
+            border-radius: 2px 2px 0 0;
+        }
+
+        .tab-btn:not(.active):hover {
+            color: var(--text2) !important;
+        }
+
+        /* ── Animations ────────────────────────────────────────────────── */
+        @keyframes pulse-dot {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.35;
+            }
+        }
+
+        .pulse-dot {
+            animation: pulse-dot 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-active {
+            0% {
+                box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 6px rgba(245, 158, 11, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+            }
+        }
+
+        .pulse-active {
+            animation: pulse-active 2s infinite;
+            border-color: rgba(245, 158, 11, 0.5) !important;
+        }
+
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(12px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fade-up {
+            animation: fadeUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes tabFadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .tab-content-active {
+            animation: tabFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        /* ── Toasts ────────────────────────────────────────────────────── */
+        #toast-container {
+            position: fixed;
+            bottom: max(1.75rem, env(safe-area-inset-bottom, 1.75rem));
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            pointer-events: none;
+        }
+
+        .toast {
+            padding: 0.75rem 1rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.8125rem;
+            font-weight: 500;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(12px) scale(0.94);
+            transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+            max-width: 360px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            background: rgba(10, 10, 16, 0.97);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--border3);
+            box-shadow: 0 10px 36px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            font-family: 'Inter', sans-serif;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        .toast.success {
+            border-left: 3px solid var(--green);
+        }
+
+        .toast.error {
+            border-left: 3px solid var(--red);
+        }
+
+        .toast.info {
+            border-left: 3px solid var(--accent);
+        }
+
+        .toast.warn {
+            border-left: 3px solid var(--amber);
+        }
+
+        /* ── Transitions ───────────────────────────────────────────────── */
+        .file-panel-transition {
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .slide-out-left {
+            transform: translateX(-100%);
+        }
+
+        /* ── App tweaks ─────────────────────────────────────────────────── */
+        #log-viewer {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12.5px;
+            line-height: 1.65;
+            color: var(--text2);
+        }
+
+        #term-mobile-keys {
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* ── Auth screen premium background ──────────────────────────── */
+        #auth-screen {
+            background:
+                radial-gradient(ellipse 80% 50% at 20% 10%, rgba(var(--accent-rgb), 0.07) 0%, transparent 70%),
+                radial-gradient(ellipse 60% 40% at 85% 85%, rgba(var(--accent-rgb), 0.04) 0%, transparent 60%),
+                var(--bg);
+        }
+
+        #auth-screen::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image: radial-gradient(rgba(var(--accent-rgb), 0.12) 1px, transparent 1px);
+            background-size: 40px 40px;
+            -webkit-mask-image: radial-gradient(ellipse 55% 45% at 50% 50%, #000 50%, transparent 100%);
+            mask-image: radial-gradient(ellipse 55% 45% at 50% 50%, #000 50%, transparent 100%);
+        }
+
+        /* Auth card glassmorphism */
+        .auth-card {
+            background: rgba(11, 11, 16, 0.88);
+            backdrop-filter: blur(24px) saturate(150%);
+            -webkit-backdrop-filter: blur(24px) saturate(150%);
+            border: 1px solid rgba(var(--accent-rgb), 0.13);
+            border-radius: var(--radius-lg);
+            box-shadow:
+                0 40px 90px rgba(0, 0, 0, 0.75),
+                0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+                0 1px 0 rgba(255, 255, 255, 0.06) inset;
+        }
+
+        .auth-logo-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto;
+        }
+
+        /* ── Sidebar premium ─────────────────────────────────────────── */
+        .sidebar-logo-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        /* ── Control buttons ─────────────────────────────────────────── */
+        .ctrl-btn {
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            border: 1px solid var(--border2);
+            background: var(--surface2);
+            color: var(--text2);
+        }
+
+        .ctrl-btn:hover {
+            background: var(--surface3);
+            border-color: var(--border3);
+            color: var(--text);
+        }
+
+        .ctrl-btn:active {
+            transform: scale(0.91);
+        }
+
+        .ctrl-btn.stop-btn {
+            background: rgba(240, 100, 90, 0.07);
+            border-color: rgba(240, 100, 90, 0.15);
+            color: var(--red);
+        }
+
+        .ctrl-btn.stop-btn:hover {
+            background: rgba(240, 100, 90, 0.13);
+            border-color: rgba(240, 100, 90, 0.28);
+        }
+    </style>
+
+    <script>
+
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#eff6ff', 100: '#dbeafe', 500: 'var(--text)', 600: 'var(--text)', 700: '#1d4ed8' }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+
+
+<body class="flex flex-col select-none" onclick="closeCtxMenu()">
+
+    <!-- Toast -->
+    <div id="toast-container"></div>
+
+
+
+    <!-- Mobile Header -->
+    <div class="md:hidden border-b shrink-0 z-30 pt-safe transition duration-300"
+        style="background:var(--surface);border-color:var(--border)">
+        <div class="h-14 flex items-center justify-between px-4">
+            <button onclick="toggleSidebar()" class="p-2 -ml-2 rounded-lg transition-colors" style="color:var(--text2)">
+                <i data-feather="menu" class="w-5 h-5"></i>
+            </button>
+            <div class="flex items-center gap-0">
+                <svg class="-mt-[1px]" width="20" height="20" viewBox="0 0 100 100" fill="none" stroke="url(#grad)"
+                    stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M28 32 L46 72 C48 76 52 76 54 72 L72 32"></path>
+                    <defs>
+                        <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#38bdf8" />
+                            <stop offset="100%" stop-color="#0284c7" />
+                        </linearGradient>
+                    </defs>
+                </svg>
+                <span class="brand-text text-[17px] -ml-1" style="color:var(--text);letter-spacing:-0.05em">envy</span>
+            </div>
+            <div class="w-9"></div>
+        </div>
+    </div>
+
+    <!-- Sidebar overlay -->
+    <div id="sidebar-overlay" onclick="closeSidebar()"
+        class="fixed inset-0 z-40 hidden md:hidden backdrop-blur-sm transition-opacity opacity-0 duration-300"
+        style="background:rgba(0,0,0,0.6)"></div>
+
+    <!-- Context Menu -->
+    <div id="ctx-menu"
+        class="fixed py-1.5 w-48 hidden z-[60] text-sm font-medium transform origin-top-left scale-95 opacity-0 transition duration-100">
+        <div class="px-3 py-2 section-label border-b truncate" id="ctx-header" style="border-color:var(--border)">File
+            Options</div>
+        <button id="ctx-rename" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors"
+            style="color:var(--text2)">
+            <i data-feather="edit-2" class="w-3.5 h-3.5"></i> Rename
+        </button>
+        <button id="ctx-cut" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors"
+            style="color:var(--text2)">
+            <i data-feather="scissors" class="w-3.5 h-3.5"></i> Cut
+        </button>
+        <button id="ctx-copy" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors"
+            style="color:var(--text2)">
+            <i data-feather="copy" class="w-3.5 h-3.5"></i> Copy
+        </button>
+        <button id="ctx-paste" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors border-t"
+            style="color:var(--text2);border-color:var(--border)">
+            <i data-feather="clipboard" class="w-3.5 h-3.5"></i> Paste
+        </button>
+        <button id="ctx-delete" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors border-t"
+            style="color:var(--red);border-color:var(--border)">
+            <i data-feather="trash-2" class="w-3.5 h-3.5"></i> Delete
+        </button>
+    </div>
+
+    <!-- License Screen -->
+    <div id="license-screen" class="fixed inset-0 z-[75] overflow-y-auto hidden">
+        <div class="min-h-full flex items-center justify-center p-4">
+            <div class="auth-card w-full max-w-sm p-9 relative fade-up">
+                <div class="relative text-center mb-8">
+                    <div class="flex items-center justify-center gap-0 mb-5">
+                        <svg class="-mt-[2px]" width="40" height="40" viewBox="0 0 100 100" fill="none"
+                            stroke="url(#auth-grad-lic)" stroke-width="14" stroke-linecap="round"
+                            stroke-linejoin="round">
+                            <path d="M28 32 L46 72 C48 76 52 76 54 72 L72 32"></path>
+                            <defs>
+                                <linearGradient id="auth-grad-lic" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#38bdf8" />
+                                    <stop offset="100%" stop-color="#0284c7" />
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                        <h1 class="text-4xl brand-text -ml-[6px]" style="color:var(--text);letter-spacing:-0.06em">envy
+                        </h1>
+                    </div>
+                    <p class="text-sm mt-2" style="color:var(--text3)">Activate your license</p>
+                </div>
+                <div class="space-y-3">
+                    <input type="text" id="license-key" placeholder="VENVY-XXXX-XXXX-XXXX"
+                        class="inp w-full px-4 py-3.5 text-sm font-medium mono text-center">
+                    <button type="button" onclick="activateLicense()" id="license-activate-btn"
+                        class="btn-primary w-full py-4 text-sm font-semibold mt-1" style="border-radius:12px">
+                        Activate
+                    </button>
+                    <div id="license-error" class="hidden text-xs text-center px-3 py-2 rounded-lg"
+                        style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)">
+                    </div>
+                </div>
+                <div class="mt-5 text-center text-xs rounded-xl py-3 px-4"
+                    style="background:rgba(var(--accent-rgb),0.07);color:var(--text3);border:1px solid rgba(var(--accent-rgb),0.15)">
+                    Purchase a license at <a href="https://venvy.dev" target="_blank" class="underline">venvy.dev</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth / Login Screen -->
+    <div id="auth-screen" class="fixed inset-0 z-[70] overflow-y-auto hidden">
+        <div class="min-h-full flex items-center justify-center p-4">
+            <div class="auth-card w-full max-w-sm p-9 relative fade-up">
+                <div class="relative text-center mb-8">
+                    <div class="flex items-center justify-center gap-0 mb-5">
+                        <svg class="-mt-[2px]" width="40" height="40" viewBox="0 0 100 100" fill="none"
+                            stroke="url(#auth-grad)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M28 32 L46 72 C48 76 52 76 54 72 L72 32"></path>
+                            <defs>
+                                <linearGradient id="auth-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#38bdf8" />
+                                    <stop offset="100%" stop-color="#0284c7" />
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                        <h1 class="text-4xl brand-text -ml-[6px]" style="color:var(--text);letter-spacing:-0.06em">envy
+                        </h1>
+                    </div>
+                    <p class="text-sm mt-2" id="auth-msg" style="color:var(--text3)">Sign in to your dashboard</p>
+                </div>
+                <form id="login-form" class="space-y-3">
+                    <div id="login-step-password" class="space-y-3">
+                        <input type="text" id="username" placeholder="Username" autocomplete="username"
+                            class="inp w-full px-4 py-3.5 text-sm font-medium">
+                        <input type="password" id="password" placeholder="Password" autocomplete="current-password"
+                            class="inp w-full px-4 py-3.5 text-sm font-medium">
+                    </div>
+                    <div id="login-step-totp" class="hidden space-y-3">
+                        <div class="flex items-center gap-2.5 px-4 py-3 rounded-xl text-xs"
+                            style="background:rgba(var(--accent-rgb),0.08);border:1px solid rgba(var(--accent-rgb),0.18);color:var(--accent-light)">
+                            <i data-feather="shield" class="w-3.5 h-3.5 shrink-0"></i>
+                            <span>Enter the 6-digit code from your authenticator app.</span>
+                        </div>
+                        <input type="text" id="totp-code" placeholder="000 000" autocomplete="one-time-code"
+                            inputmode="numeric" maxlength="6"
+                            class="inp w-full px-4 py-3.5 text-lg font-semibold mono text-center tracking-[0.5em]">
+                        <button type="button" onclick="cancelTotpStep()"
+                            class="btn-ghost w-full py-2.5 text-sm font-medium rounded-xl">← Back</button>
+                    </div>
+                    <button type="submit" class="btn-primary w-full py-4 text-sm font-semibold mt-1"
+                        id="login-submit-btn" style="border-radius:12px">
+                        Sign In
+                    </button>
+                </form>
+                <div id="setup-hint" class="hidden mt-5 text-center text-xs rounded-xl py-3 px-4"
+                    style="background:rgba(var(--accent-rgb),0.07);color:var(--text3);border:1px solid rgba(var(--accent-rgb),0.15)">
+                    First run? A default admin account will be created.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- App Interface -->
+    <div id="app-shell" class="flex-1 flex overflow-hidden hidden relative">
+
+        <!-- Sidebar -->
+        <aside id="main-sidebar"
+            class="fixed inset-y-0 left-0 flex flex-col h-full z-50 transform -translate-x-full md:translate-x-0 transition-transform duration-300 ease-in-out md:relative pt-safe w-[280px] md:w-[260px]"
+            style="background:var(--sidebar-bg);border-right:1px solid var(--border);">
+
+            <!-- Brand Header -->
+            <div class="px-5 flex items-center justify-between shrink-0 h-[60px]"
+                style="border-bottom:1px solid var(--border)">
+                <div class="flex items-center gap-0">
+                    <div class="sidebar-logo-icon">
+                        <svg class="-mt-[1px]" width="20" height="20" viewBox="0 0 100 100" fill="none"
+                            stroke="url(#sidebar-grad)" stroke-width="15" stroke-linecap="round"
+                            stroke-linejoin="round">
+                            <path d="M28 32 L46 72 C48 76 52 76 54 72 L72 32"></path>
+                            <defs>
+                                <linearGradient id="sidebar-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#38bdf8" />
+                                    <stop offset="100%" stop-color="#0284c7" />
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                    </div>
+                    <span class="brand-text text-[17px] -ml-1"
+                        style="color:var(--text);letter-spacing:-0.05em">envy</span>
+                </div>
+                <button onclick="closeSidebar()" class="md:hidden p-1.5 rounded-lg" style="color:var(--text3)"><i
+                        data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+
+            <!-- Actions -->
+            <div class="px-3 py-3 shrink-0 space-y-1.5">
+                <button onclick="openModal('create-app-modal')"
+                    class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition active:scale-95"
+                    style="background:rgba(var(--accent-rgb),0.09);color:var(--accent-light);border:1px dashed rgba(var(--accent-rgb),0.3);letter-spacing:-0.01em">
+                    <i data-feather="plus" class="w-4 h-4"></i> New Application
+                </button>
+                <button id="admin-users-btn" onclick="openUsersModal()"
+                    class="btn-ghost w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium hidden">
+                    <i data-feather="users" class="w-4 h-4"></i> Manage Users
+                </button>
+            </div>
+
+            <!-- App list -->
+            <div class="px-4 pb-1.5 section-label">Applications</div>
+            <nav class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5 min-h-0" id="app-list"></nav>
+
+            <!-- System nav -->
+            <div class="px-3 py-2 shrink-0" style="border-top:1px solid var(--border)">
+                <button onclick="openSystemView(true)" id="system-nav-btn"
+                    class="nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition"
+                    style="color:var(--text2)">
+                    <i data-feather="monitor" class="w-4 h-4 shrink-0"></i> System
+                </button>
+            </div>
+
+            <!-- User footer -->
+            <div class="px-3 py-3 shrink-0 pb-safe-content" style="border-top:1px solid var(--border)">
+                <button onclick="openAccountMenu()"
+                    class="account-footer-btn-hover w-full flex items-center gap-3 px-2 py-2 rounded-xl transition active:scale-95 text-left"
+                    style="transition: background 0.15s" id="account-footer-btn">
+                    <div class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0"
+                        style="background:rgba(255, 255, 255,0.1);color:var(--text);border:1px solid rgba(255, 255, 255,0.2)"
+                        id="user-avatar">U</div>
+                    <div class="flex flex-col flex-1 min-w-0">
+                        <span class="text-sm font-semibold truncate" style="color:var(--text)"
+                            id="current-user">User</span>
+                        <span class="text-xs" style="color:var(--text3)">Account settings</span>
+                    </div>
+                    <i data-feather="chevron-up" class="w-3.5 h-3.5 shrink-0" style="color:var(--text3)"></i>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex flex-col relative overflow-hidden w-full" style="background:var(--bg)">
+
+            <!-- Empty State -->
+            <div id="empty-state" class="absolute inset-0 flex flex-col items-center justify-center px-4 text-center">
+                <div class="w-20 h-20 rounded-xl flex items-center justify-center mb-6"
+                    style="background:var(--surface2);border:1px solid var(--border2);box-shadow:0 4px 12px rgba(0,0,0,0.2);">
+                    <i data-feather="package" class="w-8 h-8" style="color:var(--text3)"></i>
+                </div>
+                <h3 class="text-lg font-semibold mb-1" style="color:var(--text)">No Application Selected</h3>
+                <p class="text-sm max-w-xs" style="color:var(--text3)">Select an app from the sidebar or create a new
+                    one to get started.</p>
+                <button onclick="toggleSidebar()" class="mt-5 md:hidden text-sm font-medium"
+                    style="color:var(--text)">Open Menu →</button>
+            </div>
+
+            <!-- System View -->
+            <div id="system-view" class="absolute inset-0 hidden flex flex-col" style="background:var(--bg);">
+                <div class="px-5 py-3 md:py-0 md:h-[60px] shrink-0 flex items-center gap-4 z-10 relative"
+                    style="border-bottom:1px solid var(--border);background:var(--surface)">
+                    <button onclick="closeSystemView()" class="md:hidden p-1.5 rounded-lg" style="color:var(--text2)"><i
+                            data-feather="arrow-left" class="w-4 h-4"></i></button>
+                    <div>
+                        <h2 class="text-xl font-bold" style="color:var(--text);font-family:'Inter',sans-serif">System
+                        </h2>
+                        <p class="text-xs mt-0.5" style="color:var(--text3)">Port usage &amp; network overview</p>
+                    </div>
+                    <button onclick="loadSystemView(this)"
+                        class="ml-auto flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50"
+                        style="color:var(--text3)">
+                        <i data-feather="refresh-cw" class="w-3.5 h-3.5"></i> Refresh
+                    </button>
+                </div>
+
+                <div class="flex-1 overflow-y-auto" style="touch-action:pan-y">
+                    <div class="p-4 md:p-8 max-w-3xl mx-auto w-full space-y-5 pb-32 md:pb-12">
+
+                        <!-- Server Status -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="card p-5 space-y-4">
+                                <div class="flex items-center justify-between">
+                                    <h3 class="text-xs font-bold uppercase tracking-wider" style="color:var(--text3)">
+                                        Host
+                                        CPU</h3>
+                                    <span id="sys-cpu-val" class="text-lg font-black mono"
+                                        style="color:var(--text)">0%</span>
+                                </div>
+                                <div class="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                                    <div id="sys-cpu-bar" class="h-full transition duration-500"
+                                        style="width:0%;background:var(--accent)"></div>
+                                </div>
+                            </div>
+                            <div class="card p-5 space-y-4">
+                                <div class="flex items-center justify-between">
+                                    <h3 class="text-xs font-bold uppercase tracking-wider" style="color:var(--text3)">
+                                        Host
+                                        Memory</h3>
+                                    <span id="sys-mem-val" class="text-lg font-black mono"
+                                        style="color:var(--green)">0%</span>
+                                </div>
+                                <div class="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                                    <div id="sys-mem-bar" class="h-full bg-emerald-500 transition duration-500"
+                                        style="width:0%"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card px-5 py-4 flex items-center justify-between">
+                            <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center"
+                                    style="background:rgba(255, 255, 255,0.1);border:1px solid rgba(255, 255, 255,0.2)">
+                                    <i data-feather="hard-drive" class="w-4 h-4" style="color:var(--text)"></i>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] font-bold uppercase tracking-widest"
+                                        style="color:var(--text3)">
+                                        Disk Usage</p>
+                                    <p id="sys-disk-text" class="text-sm font-semibold" style="color:var(--text)">
+                                        Loading…
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-[10px] font-bold uppercase tracking-widest" style="color:var(--text3)">
+                                    Uptime
+                                </p>
+                                <p id="sys-uptime-text" class="text-sm font-semibold mono" style="color:var(--text2)">0s
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Used Ports -->
+                        <div class="card overflow-hidden">
+                            <div class="px-5 py-3.5 flex items-center gap-2.5"
+                                style="border-bottom:1px solid var(--border)">
+                                <div class="w-1.5 h-4 rounded-full" style="background:var(--red)"></div>
+                                <h3 class="text-sm font-semibold" style="color:var(--text)">Ports In Use</h3>
+                                <span id="sys-used-count" class="ml-auto section-label"></span>
+                            </div>
+                            <div id="sys-used-ports" class="p-5 min-h-[60px] flex items-center">
+                                <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
+                            </div>
+                        </div>
+
+                        <!-- Free Ports -->
+                        <div class="card overflow-hidden">
+                            <div class="px-5 py-3.5 flex items-center gap-2.5"
+                                style="border-bottom:1px solid var(--border)">
+                                <div class="w-1.5 h-4 rounded-full" style="background:var(--green)"></div>
+                                <h3 class="text-sm font-semibold" style="color:var(--text)">Recommended Free Ports</h3>
+                                <span class="ml-auto text-xs" style="color:var(--text3)">Click to copy</span>
+                            </div>
+                            <div id="sys-free-ports" class="p-5 min-h-[60px] flex items-center">
+                                <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
+                            </div>
+                        </div>
+
+                        <!-- Cloudflare Tunnel -->
+                        <div class="card overflow-hidden">
+                            <div class="px-5 py-4 flex items-center gap-3"
+                                style="border-bottom:1px solid var(--border)">
+                                <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="var(--cf-orange)">
+                                    <path
+                                        d="M16.5 7.5C16.5 7.5 15.75 4.5 12 4.5C8.68 4.5 6 7.18 6 10.5C6 10.5 3 11.25 3 14.25C3 16.93 5.07 19.5 8.25 19.5H17.25C19.73 19.5 21.75 17.48 21.75 15C21.75 12.8 20.12 10.98 18 10.58" />
+                                </svg>
+                                <div>
+                                    <h3 class="text-sm font-semibold" style="color:var(--text)">Cloudflare Tunnel</h3>
+                                    <p class="text-xs mt-0.5" style="color:var(--text3)">Configure once — publish any
+                                        app to
+                                        your domain</p>
+                                </div>
+                                <div id="cf-creds-badge"
+                                    class="ml-auto hidden items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold"
+                                    style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);color:var(--green)">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                        stroke-width="2.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                                    </svg> Configured
+                                </div>
+                            </div>
+
+                            <div class="p-5 space-y-5">
+                                <!-- Setup guide -->
+                                <div class="rounded-xl overflow-hidden"
+                                    style="border:1px solid rgba(255, 255, 255,0.2)">
+                                    <button onclick="toggleCfGuide()" id="cf-guide-toggle"
+                                        class="w-full flex items-center gap-2.5 px-4 py-3 transition text-left"
+                                        style="background:rgba(255, 255, 255,0.08)">
+                                        <svg class="w-4 h-4 shrink-0" fill="none" stroke="var(--text)"
+                                            viewBox="0 0 24 24" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10" />
+                                            <path d="M12 16v-4m0-4h.01" />
+                                        </svg>
+                                        <span class="text-xs font-bold flex-1" style="color:var(--text)">How to set this
+                                            up
+                                            —
+                                            step by step</span>
+                                        <svg id="cf-guide-chevron" class="w-4 h-4 transition-transform duration-200"
+                                            fill="none" stroke="var(--text)" viewBox="0 0 24 24" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                                        </svg>
+                                    </button>
+                                    <div id="cf-guide-body" class="hidden p-4 space-y-4 text-xs"
+                                        style="background:var(--surface2);border-top:1px solid rgba(255, 255, 255,0.15);color:var(--text2)">
+                                        <div class="space-y-2">
+                                            <p class="font-bold flex items-center gap-2" style="color:var(--text)">
+                                                <span
+                                                    class="w-5 h-5 rounded-full text-white text-[10px] font-black flex items-center justify-center shrink-0"
+                                                    style="background:var(--cf-orange)">1</span>
+                                                Create your API Token
+                                            </p>
+                                            <div class="ml-7 space-y-1.5">
+                                                <p>Go to <a href="https://dash.cloudflare.com/profile/api-tokens"
+                                                        target="_blank" class="font-semibold hover:underline"
+                                                        style="color:var(--cf-orange)">dash.cloudflare.com → My Profile
+                                                        →
+                                                        API
+                                                        Tokens</a></p>
+                                                <p>Click <strong style="color:var(--cf-orange)">Create Token</strong> →
+                                                    scroll
+                                                    past templates → <strong style="color:var(--cf-orange)">Create
+                                                        Custom
+                                                        Token</strong></p>
+                                                <p class="font-semibold mt-2" style="color:var(--text)">Add these
+                                                    permissions:</p>
+                                                <div class="space-y-1">
+                                                    <div class="flex items-center gap-2 rounded-lg px-3 py-2 mono text-[11px]"
+                                                        style="background:var(--surface)"><span
+                                                            style="color:var(--text3)">Account</span><span
+                                                            style="color:var(--border2)">›</span><span
+                                                            style="color:var(--text)">Cloudflare Tunnel</span><span
+                                                            style="color:var(--border2)">›</span><span class="font-bold"
+                                                            style="color:var(--text)">Edit</span></div>
+                                                    <div class="flex items-center gap-2 rounded-lg px-3 py-2 mono text-[11px]"
+                                                        style="background:var(--surface)"><span
+                                                            style="color:var(--text3)">Account</span><span
+                                                            style="color:var(--border2)">›</span><span
+                                                            style="color:var(--text)">Account Settings</span><span
+                                                            style="color:var(--border2)">›</span><span class="font-bold"
+                                                            style="color:var(--text)">Read</span></div>
+                                                    <div class="flex items-center gap-2 rounded-lg px-3 py-2 mono text-[11px]"
+                                                        style="background:var(--surface)"><span
+                                                            style="color:var(--text3)">Zone</span><span
+                                                            style="color:var(--border2)">›</span><span
+                                                            style="color:var(--text)">Zone</span><span
+                                                            style="color:var(--border2)">›</span><span class="font-bold"
+                                                            style="color:var(--text)">Read</span></div>
+                                                    <div class="flex items-center gap-2 rounded-lg px-3 py-2 mono text-[11px]"
+                                                        style="background:var(--surface)"><span
+                                                            style="color:var(--text3)">Zone</span><span
+                                                            style="color:var(--border2)">›</span><span
+                                                            style="color:var(--text)">DNS</span><span
+                                                            style="color:var(--border2)">›</span><span class="font-bold"
+                                                            style="color:var(--text)">Edit</span><span
+                                                            class="font-sans normal-case ml-1.5 text-[10px]"
+                                                            style="color:var(--text)">← required for auto DNS</span>
+                                                    </div>
+                                                </div>
+                                                <p>Also set <strong style="color:var(--cf-orange)">Zone Resources →
+                                                        Include
+                                                        → All
+                                                        zones</strong>.</p>
+                                                <p class="mt-1.5 text-[11px] px-3 py-2 rounded-lg"
+                                                    style="background:rgba(255, 255, 255,0.06);border:1px solid rgba(255, 255, 255,0.12);color:var(--text)">
+                                                    <strong>Why DNS:Edit?</strong> When you publish a hostname here,
+                                                    Venvy
+                                                    automatically creates a proxied CNAME record
+                                                    (<code>hostname → tunnel-id.cfargotunnel.com</code>) — the same
+                                                    record
+                                                    the Cloudflare dashboard creates manually. Without this the tunnel
+                                                    ingress rule exists but DNS never resolves the hostname.
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div class="space-y-2">
+                                            <p class="font-bold flex items-center gap-2" style="color:var(--text)">
+                                                <span
+                                                    class="w-5 h-5 rounded-full text-white text-[10px] font-black flex items-center justify-center shrink-0"
+                                                    style="background:var(--cf-orange)">2</span>
+                                                Get your Account ID &amp; Tunnel ID
+                                            </p>
+                                            <div class="ml-7 space-y-1.5">
+                                                <p>Your <strong style="color:var(--cf-orange)">Account ID</strong> is in
+                                                    the
+                                                    right sidebar of any Cloudflare dashboard page.</p>
+                                                <p>Your <strong style="color:var(--cf-orange)">Tunnel ID</strong>: go to
+                                                    <a href="https://one.dash.cloudflare.com" target="_blank"
+                                                        class="hover:underline font-semibold"
+                                                        style="color:var(--cf-orange)">one.dash.cloudflare.com</a> →
+                                                    Networks →
+                                                    Tunnels → click your tunnel → copy the ID from the URL.
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div class="space-y-2">
+                                            <p class="font-bold flex items-center gap-2" style="color:var(--text)">
+                                                <span
+                                                    class="w-5 h-5 rounded-full text-white text-[10px] font-black flex items-center justify-center shrink-0"
+                                                    style="background:var(--cf-orange)">3</span>
+                                                Paste credentials below &amp; save
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Token input -->
+                                <div>
+                                    <label class="block section-label mb-2">API Token</label>
+                                    <div class="relative">
+                                        <input type="password" id="cf-cred-token" placeholder="Paste your API token…"
+                                            autocomplete="off" spellcheck="false"
+                                            class="inp w-full px-4 py-2.5 text-xs mono pr-10">
+                                        <button type="button" onclick="toggleCfTokenVis('cf-cred-token','cf-tok-eye')"
+                                            class="absolute right-3 top-1/2 -translate-y-1/2 transition"
+                                            style="color:var(--text3)">
+                                            <svg id="cf-tok-eye" class="w-4 h-4" fill="none" stroke="currentColor"
+                                                viewBox="0 0 24 24" stroke-width="2">
+                                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                                <circle cx="12" cy="12" r="3" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block section-label mb-2">Account ID</label>
+                                        <input type="text" id="cf-cred-account" placeholder="32-char hex…"
+                                            autocomplete="off" spellcheck="false"
+                                            class="inp w-full px-4 py-2.5 text-xs mono">
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-2">Tunnel ID</label>
+                                        <input type="text" id="cf-cred-tunnel" placeholder="UUID…" autocomplete="off"
+                                            spellcheck="false" class="inp w-full px-4 py-2.5 text-xs mono">
+                                    </div>
+                                </div>
+                                <div class="flex gap-3">
+                                    <button onclick="saveCfCreds()" id="cf-creds-save-btn"
+                                        class="btn-secondary flex-1 py-2.5 text-sm">Save</button>
+                                    <button onclick="testCfCreds()" id="cf-creds-test-btn"
+                                        class="flex-1 btn-ghost py-2.5 text-sm font-semibold flex items-center justify-center gap-2 rounded-xl">
+                                        <svg class="w-4 h-4" style="color:var(--text)" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24" stroke-width="2">
+                                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                                        </svg>
+                                        Test
+                                    </button>
+                                </div>
+                                <div id="cf-test-results" class="hidden space-y-2">
+                                    <div id="cf-test-account"
+                                        class="flex items-start gap-2.5 px-3 py-2.5 rounded-xl text-xs font-medium card-inner"
+                                        style="color:var(--text2)">
+                                        <span id="cf-test-account-icon" class="shrink-0 mt-0.5"></span>
+                                        <span id="cf-test-account-text" class="leading-relaxed"></span>
+                                    </div>
+                                    <div id="cf-test-tunnel"
+                                        class="flex items-start gap-2.5 px-3 py-2.5 rounded-xl text-xs font-medium card-inner"
+                                        style="color:var(--text2)">
+                                        <span id="cf-test-tunnel-icon" class="shrink-0 mt-0.5"></span>
+                                        <span id="cf-test-tunnel-text" class="leading-relaxed"></span>
+                                    </div>
+                                    <div id="cf-test-dns-zones"
+                                        class="flex items-start gap-2.5 px-3 py-2.5 rounded-xl text-xs font-medium card-inner"
+                                        style="color:var(--text2)">
+                                        <span id="cf-test-dns-zones-icon" class="shrink-0 mt-0.5"></span>
+                                        <span id="cf-test-dns-zones-text" class="leading-relaxed"></span>
+                                    </div>
+                                    <div id="cf-test-permission-hint" class="hidden rounded-xl overflow-hidden"
+                                        style="border:1px solid rgba(255, 255, 255,0.2)">
+                                        <div class="px-4 py-2.5 flex items-center gap-2"
+                                            style="background:rgba(255, 255, 255,0.1);border-bottom:1px solid rgba(255, 255, 255,0.2)">
+                                            <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="var(--yellow)"
+                                                viewBox="0 0 24 24" stroke-width="2">
+                                                <path stroke-linecap="round" stroke-linejoin="round"
+                                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                            </svg>
+                                            <p class="text-xs font-bold" style="color:var(--text)">Token permission
+                                                issue —
+                                                fix:
+                                            </p>
+                                        </div>
+                                        <div class="px-4 py-3 text-xs space-y-1.5" style="color:var(--text2)">
+                                            <p>Edit your token at <a
+                                                    href="https://dash.cloudflare.com/profile/api-tokens"
+                                                    target="_blank" class="font-semibold hover:underline"
+                                                    style="color:var(--text)">API Tokens</a> and ensure all four
+                                                permissions
+                                                are
+                                                set.</p>
+                                            <div class="grid grid-cols-1 gap-1 mt-2">
+                                                <div class="mono rounded px-2.5 py-1.5 text-[11px] flex items-center gap-1.5"
+                                                    style="background:var(--surface)"><span
+                                                        style="color:var(--text3)">Account ›</span><span
+                                                        style="color:var(--text)">Cloudflare Tunnel ›</span><span
+                                                        class="font-bold" style="color:var(--text)">Edit</span></div>
+                                                <div class="mono rounded px-2.5 py-1.5 text-[11px] flex items-center gap-1.5"
+                                                    style="background:var(--surface)"><span
+                                                        style="color:var(--text3)">Account ›</span><span
+                                                        style="color:var(--text)">Account Settings ›</span><span
+                                                        class="font-bold" style="color:var(--text)">Read</span></div>
+                                                <div class="mono rounded px-2.5 py-1.5 text-[11px] flex items-center gap-1.5"
+                                                    style="background:var(--surface)"><span
+                                                        style="color:var(--text3)">Zone
+                                                        ›</span><span style="color:var(--text)">Zone ›</span><span
+                                                        class="font-bold" style="color:var(--text)">Read</span></div>
+                                                <div class="mono rounded px-2.5 py-1.5 text-[11px] flex items-center gap-1.5"
+                                                    style="background:var(--surface)"><span
+                                                        style="color:var(--text3)">Zone
+                                                        ›</span><span style="color:var(--text)">DNS ›</span><span
+                                                        class="font-bold" style="color:var(--text)">Edit</span></div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                </div>
+                            </div>
+                        </div>
+
+
+
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- App Dashboard -->
+            <div id="dashboard" class="flex-1 flex flex-col hidden h-full w-full">
+
+                <!-- App Header -->
+                <header
+                    class="flex flex-col md:flex-row md:items-center justify-between px-5 py-3 md:py-0 md:h-[60px] shrink-0 z-10 gap-3 md:gap-0"
+                    style="background:var(--surface);border-bottom:1px solid var(--border)">
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-lg flex items-center justify-center"
+                            style="background:var(--surface2);border:1px solid var(--border2)">
+                            <i data-feather="box" class="w-4 h-4" style="color:var(--text3)"></i>
+                        </div>
+                        <div>
+                            <h2 class="app-title text-lg leading-none" style="color:var(--text)" id="dash-title">App
+                                Name</h2>
+                            <div class="flex items-center gap-2 mt-1">
+                                <span id="dash-status"
+                                    class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-stopped">Stopped</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div
+                        class="flex items-center justify-between md:justify-end gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 scrollbar-hide">
+                        <div class="flex gap-1.5">
+                            <button onclick="controlApp('start')" id="btn-start"
+                                class="p-2 rounded-lg transition disabled:opacity-40 active:scale-95"
+                                style="background:var(--green-dim);color:var(--green);border:1px solid var(--green-border)"
+                                title="Start"><i data-feather="play" class="w-4 h-4"></i></button>
+                            <button onclick="controlApp('restart')" id="btn-restart"
+                                class="p-2 rounded-lg transition disabled:opacity-40 active:scale-95"
+                                style="background:var(--amber-dim);color:var(--amber);border:1px solid var(--amber-border)"
+                                title="Restart"><i data-feather="refresh-cw" class="w-4 h-4"></i></button>
+                            <button onclick="controlApp('stop')" id="btn-stop"
+                                class="p-2 rounded-lg transition disabled:opacity-40 active:scale-95"
+                                style="background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)"
+                                title="Stop"><i data-feather="square" class="w-4 h-4"></i></button>
+                        </div>
+                        <div class="w-px h-5 mx-1 hidden md:block" style="background:var(--border)"></div>
+                        <button onclick="openExternal()" id="btn-open"
+                            class="h-9 px-4 rounded-xl flex items-center gap-2 font-semibold text-sm whitespace-nowrap active:scale-95 transition disabled:opacity-30 disabled:cursor-not-allowed ml-auto md:ml-0"
+                            style="background:var(--surface3);color:var(--text2);border:1px solid var(--border2)">
+                            Open App <i data-feather="external-link" class="w-3 h-3"></i>
+                        </button>
+                    </div>
+                </header>
+
+                <!-- Tab Bar -->
+                <div class="flex items-stretch shrink-0"
+                    style="background:var(--surface);border-bottom:1px solid var(--border)">
+                    <!-- Scrollable tab buttons -->
+                    <div
+                        class="flex-1 min-w-0 px-4 md:px-6 flex gap-5 text-sm font-medium overflow-x-auto scrollbar-hide h-[44px]">
+                        <button class="tab-btn active h-full whitespace-nowrap"
+                            onclick="switchTab('terminal')">Terminal</button>
+                        <button class="tab-btn h-full whitespace-nowrap" onclick="switchTab('files')">Files</button>
+                        <button class="tab-btn h-full whitespace-nowrap" onclick="switchTab('logs')">Live Logs</button>
+                        <button class="tab-btn h-full whitespace-nowrap"
+                            onclick="switchTab('packages')">Packages</button>
+                        <button class="tab-btn h-full whitespace-nowrap"
+                            onclick="switchTab('settings')">Settings</button>
+                    </div>
+
+                    <!-- Save Settings Button (Visible only on Settings tab) — outside scroll so always reachable -->
+                    <div id="settings-save-container" class="hidden items-center px-3 shrink-0 h-[44px]">
+                        <button id="settings-save-btn" onclick="saveSettings()"
+                            class="btn-primary px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-2 active:scale-95 disabled:opacity-50">
+                            <span id="save-status-dot"
+                                class="w-1.5 h-1.5 rounded-full bg-orange-500 hidden animate-pulse"></span>
+                            <span id="save-btn-text">Save</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab Content -->
+                <div class="flex-1 overflow-hidden relative" style="background:var(--bg)">
+
+                    <!-- TERMINAL -->
+                    <div id="tab-terminal" class="tab-content absolute inset-0 overflow-hidden flex flex-col"
+                        style="background:var(--surface);">
+
+                        <!-- Entrypoint warning banner -->
+                        <div id="entrypoint-warning"
+                            class="hidden shrink-0 px-4 py-2 text-xs font-semibold flex items-center gap-2"
+                            style="background:var(--surface3);border-bottom:1px solid var(--border3);color:var(--text)">
+                            <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            No entrypoint set — <button onclick="switchTab('settings')"
+                                class="underline ml-0.5 font-bold">configure one in Settings</button> before starting.
+                        </div>
+
+                        <!-- Toolbar: always one slim row -->
+                        <div id="term-toolbar" class="shrink-0 flex items-center gap-1.5 px-2"
+                            style="height:40px;background:var(--surface2);border-bottom:1px solid var(--border2);">
+
+                            <!-- Jail badge -->
+                            <div class="flex items-center gap-1 px-1.5 py-0.5 rounded shrink-0"
+                                style="background:rgba(48,209,88,0.08);border:1px solid rgba(48,209,88,0.2)">
+                                <svg class="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="var(--green)"
+                                    stroke-width="2.5">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" />
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                                </svg>
+                                <span class="text-[10px] font-bold tracking-wide"
+                                    style="color:var(--green);font-family:'JetBrains Mono',monospace">JAILED</span>
+                            </div>
+
+                            <!-- App label — desktop only -->
+                            <span id="term-app-label" class="text-xs font-medium truncate hidden md:block"
+                                style="color:var(--text2);font-family:'JetBrains Mono',monospace;max-width:140px">~/app</span>
+
+                            <!-- Spacer -->
+                            <div class="flex-1"></div>
+
+                            <!-- Global quick-keys -->
+                            <div class="flex items-center gap-1">
+                                <button onclick="termSend('\x03')" class="term-key" title="Ctrl+C">^C</button>
+                                <button onclick="termSend('\x04')" class="term-key" title="Ctrl+D">^D</button>
+                                <button onclick="termSend('\t')" class="term-key hidden md:block">Tab</button>
+                            </div>
+                            <div class="w-px h-5 shrink-0 mx-1" style="background:var(--border2)"></div>
+
+                            <!-- Clear + reconnect + status (always visible) -->
+                            <button onclick="_termClear()" title="Clear" class="term-action-btn">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                    stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                            </button>
+                            <button onclick="_termReconnect()" id="term-reconnect-btn" title="Reconnect"
+                                class="term-action-btn">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                    stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                            </button>
+                            <div id="term-status-dot" title="Disconnected"
+                                class="w-2 h-2 rounded-full shrink-0 ml-1 transition" style="background:#334155">
+                            </div>
+                        </div>
+
+                        <!-- xterm.js mount — fills all available space -->
+                        <div id="terminal-container" class="flex-1 overflow-hidden min-h-0" style="padding:0"
+                            onclick="if(window.term) window.term.focus()"></div>
+
+                        <!-- Mobile quick-key keyboard — stacks above the soft keyboard -->
+                        <!-- Row 1: always visible primary keys -->
+                        <div id="term-mobile-keys" class="md:hidden shrink-0 flex flex-col"
+                            style="background:var(--surface);border-top:1px solid var(--border2);">
+
+                            <!-- Primary row -->
+                            <div class="flex items-center gap-1 px-2 py-1.5 overflow-x-auto scrollbar-hide"
+                                style="touch-action:pan-x;">
+                                <!-- Sticky Ctrl modifier -->
+                                <button id="mob-ctrl-btn" onclick="termModToggle('ctrl')"
+                                    class="term-mob-key mod-accent-blue font-bold tracking-wider"
+                                    style="min-width:46px;"
+                                    title="Sticky Ctrl — tap then press another key">Ctrl</button>
+
+                                <!-- Sticky Alt modifier -->
+                                <button id="mob-alt-btn" onclick="termModToggle('alt')"
+                                    class="term-mob-key mod-accent-purple font-bold tracking-wider"
+                                    style="min-width:40px;" title="Sticky Alt">Alt</button>
+
+                                <div class="w-px h-6 shrink-0 mx-0.5" style="background:var(--border2)"></div>
+
+                                <!-- Tab -->
+                                <button onclick="termMobKey('\t')" class="term-mob-key shrink-0"
+                                    style="min-width:42px;">Tab</button>
+
+                                <!-- Arrows -->
+                                <button onclick="termMobKey('\x1b[A')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;font-size:16px;">↑</button>
+                                <button onclick="termMobKey('\x1b[B')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;font-size:16px;">↓</button>
+                                <button onclick="termMobKey('\x1b[D')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;font-size:16px;">←</button>
+                                <button onclick="termMobKey('\x1b[C')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;font-size:16px;">→</button>
+
+                                <div class="w-px h-6 shrink-0 mx-0.5" style="background:var(--border2)"></div>
+
+                                <!-- Backspace -->
+                                <button onclick="termMobKey('\x7f')" class="term-mob-key shrink-0"
+                                    style="min-width:42px;font-size:15px;">⌫</button>
+                                <!-- Esc -->
+                                <button onclick="termMobKey('\x1b')" class="term-mob-key shrink-0"
+                                    style="min-width:38px;">Esc</button>
+
+                                <div class="w-px h-6 shrink-0 mx-0.5" style="background:var(--border2)"></div>
+
+                                <!-- Expand/collapse more row -->
+                                <button id="mob-more-btn" onclick="termMobToggleMore()" class="term-mob-key ml-auto"
+                                    style="min-width:36px;font-size:15px;" title="More keys">⋯</button>
+                            </div>
+
+                            <!-- Secondary row: hidden by default, toggled by ⋯ -->
+                            <div id="term-mob-more-row"
+                                class="hidden flex items-center gap-1 px-2 pb-1.5 overflow-x-auto scrollbar-hide"
+                                style="touch-action:pan-x;">
+                                <!-- Ctrl shortcuts -->
+                                <button onclick="termMobKey('\x03')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;color:var(--red);" title="Ctrl+C — interrupt">^C</button>
+                                <button onclick="termMobKey('\x04')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;color:var(--text);" title="Ctrl+D — EOF/logout">^D</button>
+                                <button onclick="termMobKey('\x1a')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;color:var(--text);" title="Ctrl+Z — suspend">^Z</button>
+                                <button onclick="termMobKey('\x0c')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;color:var(--green);" title="Ctrl+L — clear">^L</button>
+                                <button onclick="termMobKey('\x01')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;" title="Ctrl+A — line start">^A</button>
+                                <button onclick="termMobKey('\x05')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;" title="Ctrl+E — line end">^E</button>
+                                <button onclick="termMobKey('\x15')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;" title="Ctrl+U — clear line">^U</button>
+                                <button onclick="termMobKey('\x17')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;" title="Ctrl+W — delete word">^W</button>
+                                <button onclick="termMobKey('\x0b')" class="term-mob-key shrink-0"
+                                    style="min-width:36px;" title="Ctrl+K — kill to end">^K</button>
+
+                                <div class="w-px h-6 shrink-0 mx-0.5" style="background:var(--border2)"></div>
+
+                                <!-- Special chars often needed in terminal -->
+                                <button onclick="termMobKey('/')" class="term-mob-key shrink-0"
+                                    style="min-width:30px;">/</button>
+                                <button onclick="termMobKey('~')" class="term-mob-key shrink-0"
+                                    style="min-width:30px;">~</button>
+                                <button onclick="termMobKey('-')" class="term-mob-key shrink-0"
+                                    style="min-width:30px;">-</button>
+                                <button onclick="termMobKey('.')" class="term-mob-key shrink-0"
+                                    style="min-width:30px;">.</button>
+                                <button onclick="termMobKey('|')" class="term-mob-key shrink-0"
+                                    style="min-width:30px;">|</button>
+                                <button onclick="termMobKey('>')" class="term-mob-key shrink-0"
+                                    style="min-width:30px;">&gt;</button>
+                                <button onclick="termMobKey('\n')" class="term-mob-key shrink-0"
+                                    style="min-width:46px;color:var(--green);">↵ Enter</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- FILES -->
+                    <div id="tab-files"
+                        class="tab-content absolute inset-0 md:inset-4 hidden flex flex-col md:flex-row rounded-none md:rounded-xl overflow-hidden pb-safe-content md:pb-0"
+                        style="background:var(--surface);border:1px solid var(--border)">
+                        <!-- File Tree -->
+                        <div class="w-full md:w-64 flex flex-col relative h-full file-panel-transition z-10"
+                            id="file-tree-container" style="border-right:1px solid var(--border)">
+                            <!-- Toolbar -->
+                            <div class="px-3 py-2.5 flex gap-1.5 shrink-0 items-center overflow-x-auto scrollbar-hide"
+                                style="border-bottom:1px solid var(--border);background:var(--surface2)">
+                                <button onclick="fileOp('refresh')" class="p-2 rounded-lg transition"
+                                    style="color:var(--text3)" title="Refresh"><i data-feather="refresh-cw"
+                                        class="w-3.5 h-3.5"></i></button>
+                                <div class="w-px h-4 mx-0.5" style="background:var(--border)"></div>
+                                <button onclick="promptFileOp('create_folder')" class="p-2 rounded-lg transition"
+                                    style="color:var(--text3)" title="New Folder"><i data-feather="folder-plus"
+                                        class="w-3.5 h-3.5"></i></button>
+                                <button onclick="promptFileOp('create_file')" class="p-2 rounded-lg transition"
+                                    style="color:var(--text3)" title="New File"><i data-feather="file-plus"
+                                        class="w-3.5 h-3.5"></i></button>
+                                <label class="p-2 rounded-lg cursor-pointer transition ml-auto"
+                                    style="color:var(--text3)" title="Upload">
+                                    <i data-feather="upload-cloud" class="w-3.5 h-3.5"></i>
+                                    <input type="file" class="hidden" multiple onchange="uploadFile(this)">
+                                </label>
+                            </div>
+                            <!-- Breadcrumb -->
+                            <div class="px-3 py-1.5 text-xs mono flex items-center gap-1.5 overflow-hidden"
+                                style="background:var(--bg);border-bottom:1px solid var(--border);color:var(--text3)">
+                                <i data-feather="home"
+                                    class="w-3 h-3 shrink-0 cursor-pointer hover:text-white transition"
+                                    onclick="loadFiles('')" title="Root"></i>
+                                <div id="current-browser-path" class="truncate flex items-center gap-1"></div>
+                            </div>
+                            <div id="file-tree" class="flex-1 overflow-y-auto p-2 text-sm space-y-0.5 relative"></div>
+                            <!-- Global Drop Overlay -->
+                            <div id="file-drop-overlay"
+                                class="absolute inset-0 z-50 flex flex-col items-center justify-center p-6 hidden opacity-0 transition-opacity duration-200 pointer-events-none"
+                                style="background:rgba(0,0,0,0.8); backdrop-filter:blur(4px);">
+                                <div class="w-16 h-16 rounded-xl flex items-center justify-center mb-4 scale-90 transition-transform duration-200 group-hover:scale-100"
+                                    style="background:rgba(var(--accent-rgb),0.2); border:2px dashed var(--accent);">
+                                    <i data-feather="upload-cloud" class="w-8 h-8" style="color:var(--text)"></i>
+                                </div>
+                                <p class="text-sm font-bold text-white text-center">Drop files to upload</p>
+                                <p class="text-xs text-center mt-1" style="color:var(--text3)">to current folder</p>
+                            </div>
+                        </div>
+
+                        <!-- Editor -->
+                        <div id="editor-panel"
+                            class="absolute md:static inset-0 flex flex-col transform translate-x-full md:translate-x-0 file-panel-transition z-20 md:flex-1 w-full min-w-0"
+                            style="background:var(--surface)">
+                            <div class="h-11 flex items-center justify-between px-3 shrink-0 shadow-sm z-10"
+                                style="border-bottom:1px solid var(--border);background:var(--surface2)">
+                                <div class="flex items-center gap-2 min-w-0 flex-1">
+                                    <button onclick="closeEditorMobile()" class="md:hidden p-1.5 rounded-md -ml-1"
+                                        style="color:var(--text3)">
+                                        <i data-feather="arrow-left" class="w-4 h-4"></i>
+                                    </button>
+                                    <span id="current-filename" class="text-xs mono truncate"
+                                        style="color:var(--text2)">No file open</span>
+                                </div>
+                                <div class="flex items-center gap-2 ml-2">
+                                    <span id="editor-dirty-indicator" class="hidden w-2 h-2 rounded-full shrink-0"
+                                        style="background:var(--yellow)" title="Unsaved changes"></span>
+                                    <button onclick="aceSearch()" class="p-1.5 rounded-lg transition"
+                                        style="color:var(--text3)" title="Search (Ctrl+F)"><i data-feather="search"
+                                            class="w-3.5 h-3.5"></i></button>
+                                    <button onclick="downloadCurrentFile()" class="p-1.5 rounded-lg transition"
+                                        style="color:var(--text3)" title="Download"><i data-feather="download"
+                                            class="w-3.5 h-3.5"></i></button>
+                                    <button id="editor-save-btn" onclick="saveCurrentFile()"
+                                        class="text-xs btn-primary px-3 py-1.5 rounded-lg text-sm font-medium">Save</button>
+                                </div>
+                            </div>
+                            <div id="file-editor" class="flex-1" style="background:var(--surface)"></div>
+                        </div>
+                    </div>
+
+                    <!-- LOGS -->
+                    <div id="tab-logs"
+                        class="tab-content absolute inset-0 md:inset-4 hidden flex flex-col rounded-none md:rounded-xl overflow-hidden pb-safe-content md:pb-0"
+                        style="background:var(--surface);border:1px solid var(--border)">
+                        <div class="h-11 flex items-center justify-end px-4 gap-2.5 shrink-0"
+                            style="border-bottom:1px solid var(--border);background:var(--surface2)">
+                            <span class="mr-auto text-xs flex items-center gap-2 font-medium"
+                                style="color:var(--text3)">
+                                <div class="w-2 h-2 rounded-full pulse-dot" style="background:var(--green)"></div>
+                                Live Stream
+                            </span>
+                            <button onclick="copyLogs()"
+                                class="btn-ghost text-xs px-3 py-1.5 rounded-lg font-medium">Copy</button>
+                            <button onclick="deleteLogs()"
+                                class="btn-danger text-xs px-3 py-1.5 rounded-lg font-medium">Clear</button>
+                        </div>
+                        <pre id="log-viewer"
+                            class="flex-1 p-4 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed"><span class="italic" style="color:var(--text3)">No log output yet — start the app to see live logs here.</span></pre>
+                    </div>
+
+                    <!-- PACKAGES -->
+                    <div id="tab-packages"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-3xl mx-auto">
+                            <!-- Install input -->
+                            <div class="flex gap-3 mb-5 flex-col md:flex-row">
+                                <input type="text" id="pkg-input" placeholder="Package name (e.g. numpy==1.26)"
+                                    class="inp flex-1 px-4 py-3 text-sm"
+                                    onkeydown="if(event.key==='Enter') installPackage()">
+                                <button onclick="installPackage()" id="pkg-install-btn"
+                                    class="btn-primary px-8 py-3 text-sm">Install</button>
+                            </div>
+
+                            <!-- Auto-scan -->
+                            <div class="card overflow-hidden mb-5">
+                                <div class="flex items-center justify-between px-5 py-4"
+                                    style="border-bottom:1px solid var(--border)">
+                                    <div>
+                                        <p class="text-sm font-semibold" style="color:var(--text)">Auto-scan project</p>
+                                        <p class="text-xs mt-0.5" style="color:var(--text3)">Finds imports missing from
+                                            your venv</p>
+                                    </div>
+                                    <button onclick="scanImports()" id="scan-btn"
+                                        class="shrink-0 text-xs font-bold px-4 py-2 rounded-xl transition active:scale-95 flex items-center gap-2"
+                                        style="background:var(--surface2);color:var(--text);border:1px solid var(--border2)">
+                                        <i data-feather="search" class="w-3.5 h-3.5"></i> Scan
+                                    </button>
+                                </div>
+                                <div id="scan-results" class="hidden">
+                                    <div id="scan-missing-section" class="hidden">
+                                        <div class="px-5 py-3 flex items-center justify-between gap-3"
+                                            style="background:var(--surface3);border-bottom:1px solid var(--border3)">
+                                            <span class="text-xs font-bold flex items-center gap-1.5"
+                                                style="color:var(--text)"><i data-feather="alert-triangle"
+                                                    class="w-3.5 h-3.5"></i> <span id="scan-missing-count"></span>
+                                                missing</span>
+                                            <button onclick="installAllMissing()" id="install-all-btn"
+                                                class="btn-secondary text-xs px-4 py-1.5 flex items-center gap-1.5">
+                                                <i data-feather="download" class="w-3 h-3"></i> Install All
+                                            </button>
+                                        </div>
+                                        <ul id="scan-missing-list" class="divide-y max-h-48 overflow-y-auto"
+                                            style="border-color:var(--border)"></ul>
+                                    </div>
+                                    <div id="scan-ok-section"
+                                        class="hidden px-5 py-3 text-xs font-bold flex items-center gap-2"
+                                        style="background:rgba(16,185,129,0.08);color:var(--green)">
+                                        <i data-feather="check-circle" class="w-3.5 h-3.5"></i> All imports satisfied
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Package list -->
+                            <div class="card overflow-hidden">
+                                <table class="w-full text-left text-sm">
+                                    <thead class="section-label"
+                                        style="background:var(--surface2);border-bottom:1px solid var(--border)">
+                                        <tr>
+                                            <th class="px-4 md:px-6 py-3.5 font-bold">Library</th>
+                                            <th class="px-2 md:px-6 py-3.5 font-bold hidden sm:table-cell">Version</th>
+                                            <th class="px-3 md:px-6 py-3.5 text-right font-bold">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="pkg-list" class="divide-y" style="border-color:var(--border)">
+                                        <tr>
+                                            <td colspan="3" class="px-6 py-8 text-center text-sm"
+                                                style="color:var(--text3)">Loading environment...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SETTINGS -->
+                    <div id="tab-settings"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-2xl mx-auto space-y-5 pb-10">
+
+                            <!-- Lifecycle -->
+                            <div class="card p-5">
+                                <h3 class="text-sm font-semibold mb-5 flex items-center gap-2"
+                                    style="color:var(--text)">
+                                    <i data-feather="refresh-cw" class="w-4 h-4" style="color:var(--text)"></i>
+                                    Lifecycle
+                                </h3>
+                                <div class="mb-5">
+                                    <label class="block section-label mb-2">App Name</label>
+                                    <input type="text" id="setting-name"
+                                        class="inp w-full px-4 py-3 text-sm font-semibold" placeholder="My App">
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    <div>
+                                        <label class="block section-label mb-2">Runtime Environment</label>
+                                        <select id="setting-runtime" class="inp w-full px-4 py-3 text-sm font-semibold"
+                                            onchange="onRuntimeChange('settings')">
+                                            <option value="python">Python 3 (Venv)</option>
+                                            <option value="rust">Rust (Cargo)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-2">Restart Policy</label>
+                                        <select id="setting-policy" class="inp w-full px-4 py-3 text-sm font-semibold">
+                                            <option value="never">Never (Manual only)</option>
+                                            <option value="on-failure">On Failure (Crash)</option>
+                                            <option value="always">Always (Keep alive)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-2">Auto-Start</label>
+                                        <div class="h-[46px] flex items-center px-4 rounded-xl"
+                                            style="background:var(--surface2);border:1px solid var(--border)">
+                                            <label class="flex items-center gap-3 cursor-pointer select-none w-full">
+                                                <input type="checkbox" id="setting-boot" class="rounded"
+                                                    style="accent-color:var(--text)">
+                                                <span class="text-sm font-medium" style="color:var(--text2)">Start on
+                                                    System Boot</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mt-5">
+                                    <label class="block section-label mb-2">Entrypoint File</label>
+                                    <input type="text" id="setting-entrypoint" class="inp w-full px-4 py-3 mono text-sm"
+                                        placeholder="main.py">
+                                    <p class="text-xs mt-1.5" style="color:var(--text3)">The Python file that launches
+                                        your app (e.g. <code class="px-1 py-0.5 rounded mono"
+                                            style="background:var(--surface2)">main.py</code>). Upload files first if
+                                        the app has none yet.</p>
+                                </div>
+                            </div>
+
+                            <!-- Privileges -->
+
+                            <!-- Networking -->
+                            <div class="card p-5">
+                                <h3 class="text-sm font-semibold mb-4 flex items-center gap-2"
+                                    style="color:var(--text)">
+                                    <i data-feather="globe" class="w-4 h-4" style="color:var(--text)"></i> Networking
+                                    &amp; Config
+                                </h3>
+                                <div id="net-status-card" class="mb-4"></div>
+                                <!-- Open-App URL preference — only shown when CF tunnel is live -->
+                                <div id="open-url-pref-row"
+                                    class="hidden mb-5 flex items-center justify-between px-4 py-3 rounded-xl"
+                                    style="background:var(--surface2);border:1px solid var(--border)">
+                                    <div>
+                                        <p class="text-xs font-semibold" style="color:var(--text2)">Open App button uses
+                                        </p>
+                                        <p class="text-xs mt-0.5" style="color:var(--text3)">Choose which URL the button
+                                            opens</p>
+                                    </div>
+                                    <div class="flex items-center gap-1 p-1 rounded-xl"
+                                        style="background:var(--surface);border:1px solid var(--border)">
+                                        <button id="open-pref-local" onclick="setOpenUrlPref('local')"
+                                            class="px-3 py-1.5 text-xs font-bold rounded-lg transition"
+                                            style="color:var(--text3)">Local IP</button>
+                                        <button id="open-pref-public" onclick="setOpenUrlPref('public')"
+                                            class="px-3 py-1.5 text-xs font-bold rounded-lg transition"
+                                            style="color:var(--text3)">Public URL</button>
+                                    </div>
+                                </div>
+
+                                <details id="port-override-details" class="mb-5 group">
+                                    <summary
+                                        class="flex items-center gap-1.5 cursor-pointer select-none list-none text-xs font-medium transition-colors"
+                                        style="color:var(--text3)">
+                                        <svg class="w-3.5 h-3.5 transition-transform duration-150 group-open:rotate-90"
+                                            fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                                        </svg>
+                                        Set ports manually (comma-separated, overrides auto-detection)
+                                    </summary>
+                                    <div class="mt-3 pl-5 space-y-2">
+                                        <div class="flex justify-between items-center mb-1">
+                                            <label class="block section-label">Port Numbers</label>
+                                            <button
+                                                onclick="document.getElementById('setting-port').value='';saveSettings()"
+                                                class="text-[10px] uppercase font-bold tracking-wider opacity-40 hover:opacity-100 transition-opacity">Clear
+                                                All</button>
+                                        </div>
+                                        <div class="flex gap-2">
+                                            <input type="text" id="setting-port"
+                                                class="inp flex-1 px-4 py-3 mono text-sm" placeholder="e.g. 8000, 8080"
+                                                onblur="saveSettings()">
+                                        </div>
+                                        <p class="text-xs leading-relaxed" style="color:var(--text3)">Injected as
+                                            <code class="px-1 py-0.5 rounded mono text-[10px]"
+                                                style="background:var(--surface2)">PORT</code>
+                                            on next start. First port is primary.
+                                        </p>
+                                    </div>
+                                </details>
+
+                                <label class="block section-label mb-2">Environment Variables <span
+                                        style="color:var(--text3)" class="font-normal normal-case">(JSON)</span></label>
+                                <textarea id="setting-env"
+                                    class="inp textarea w-full px-4 py-3 h-36 mono text-xs leading-relaxed"
+                                    placeholder='{"DEBUG": "true"}'></textarea>
+                            </div>
+
+                            <!-- Cloudflare per-app -->
+                            <div class="card overflow-hidden">
+                                <div class="px-5 py-4 flex items-center gap-3"
+                                    style="border-bottom:1px solid var(--border)">
+                                    <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="var(--cf-orange)">
+                                        <path
+                                            d="M16.5 7.5C16.5 7.5 15.75 4.5 12 4.5C8.68 4.5 6 7.18 6 10.5C6 10.5 3 11.25 3 14.25C3 16.93 5.07 19.5 8.25 19.5H17.25C19.73 19.5 21.75 17.48 21.75 15C21.75 12.8 20.12 10.98 18 10.58" />
+                                    </svg>
+                                    <div class="flex-1 min-w-0">
+                                        <h3 class="text-sm font-semibold" style="color:var(--text)">Cloudflare Tunnel
+                                        </h3>
+                                        <p class="text-xs mt-0.5 truncate" style="color:var(--text3)">Publish this app
+                                            to your domain</p>
+                                    </div>
+                                    <div id="cf-route-badge"
+                                        class="hidden items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold shrink-0"
+                                        style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);color:var(--green)">
+                                        <span class="w-1.5 h-1.5 rounded-full inline-block pulse-dot"
+                                            style="background:var(--green)"></span> Live
+                                    </div>
+                                </div>
+                                <div class="p-5 space-y-4">
+                                    <!-- Warning: no CF creds configured -->
+                                    <div id="cf-no-creds-warn"
+                                        class="hidden items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-medium"
+                                        style="background:var(--surface3);border:1px solid var(--border3);color:var(--text)">
+                                        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round"
+                                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                        <span>Not configured. <button onclick="openSystemView()"
+                                                class="underline font-bold">System → Cloudflare Tunnel</button></span>
+                                    </div>
+                                    <!-- Warning: no port set -->
+                                    <div id="cf-no-port-warn"
+                                        class="hidden items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-medium"
+                                        style="background:var(--surface3);border:1px solid var(--border3);color:var(--text)">
+                                        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round"
+                                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                        <span>No port set. Add one in the Networking card above first.</span>
+                                    </div>
+                                    <!-- Live URL banner (published state only) -->
+                                    <div id="cf-route-url-banner" class="hidden px-4 py-3.5 rounded-xl"
+                                        style="background:var(--surface3);border:1px solid var(--border3)">
+                                        <p class="section-label mb-1.5" style="color:var(--text)">Live Public URL</p>
+                                        <div class="flex items-center gap-2">
+                                            <a id="cf-route-url-link" href="#" target="_blank"
+                                                class="flex-1 text-sm mono font-bold hover:underline truncate min-w-0 select-text"
+                                                style="color:var(--text)"></a>
+                                            <button onclick="copyCfRouteUrl()" title="Copy URL"
+                                                class="shrink-0 p-1.5 rounded-lg transition active:scale-95"
+                                                style="color:var(--text)">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                                                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                                                </svg>
+                                            </button>
+                                            <a id="cf-route-url-open" href="#" target="_blank" title="Open in browser"
+                                                class="shrink-0 p-1.5 rounded-lg transition active:scale-95"
+                                                style="color:var(--text)">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+                                                    <polyline points="15 3 21 3 21 9" />
+                                                    <line x1="10" y1="14" x2="21" y2="3" />
+                                                </svg>
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <!-- Hostname + buttons — hidden when tunnel is not configured -->
+                                    <div id="cf-inputs-section" class="space-y-4">
+                                        <!-- Hostname input -->
+                                        <div id="cf-hostname-row">
+                                            <label class="block section-label mb-2">Public Hostname</label>
+                                            <!-- Subdomain + domain dropdown row -->
+                                            <div class="flex items-stretch gap-2">
+                                                <!-- Subdomain part (optional) -->
+                                                <div class="flex items-center rounded-xl overflow-hidden focus-within:ring-2 flex-1 min-w-0"
+                                                    style="background:var(--surface2);border:1px solid var(--border);transition:border-color 0.15s">
+                                                    <input type="text" id="cf-subdomain-input"
+                                                        placeholder="subdomain (optional)" autocomplete="off"
+                                                        spellcheck="false"
+                                                        class="flex-1 bg-transparent px-3 py-3 text-sm mono outline-none min-w-0 select-text"
+                                                        style="color:var(--text)" oninput="updateCfHostnamePreview()"
+                                                        onkeydown="if(event.key==='Enter') publishCfRoute()">
+                                                </div>
+                                                <!-- Dot separator -->
+                                                <span class="flex items-center text-sm mono shrink-0 px-1 select-none"
+                                                    style="color:var(--text3)">.</span>
+                                                <!-- Domain dropdown -->
+                                                <div class="relative flex-1 min-w-0">
+                                                    <select id="cf-domain-select"
+                                                        class="w-full h-full rounded-xl px-3 py-3 text-sm mono outline-none appearance-none cursor-pointer"
+                                                        style="background:var(--surface2);border:1px solid var(--border);color:var(--text);transition:border-color 0.15s"
+                                                        onchange="updateCfHostnamePreview()">
+                                                        <option value="" disabled selected style="color:var(--text3)">
+                                                            loading domains…</option>
+                                                    </select>
+                                                    <!-- Dropdown arrow -->
+                                                    <div
+                                                        class="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+                                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                            viewBox="0 0 24 24" stroke-width="2.5">
+                                                            <polyline points="6 9 12 15 18 9" />
+                                                        </svg>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <!-- Live preview of the full hostname -->
+                                            <p id="cf-hostname-preview" class="text-xs mt-2 mono font-medium"
+                                                style="color:var(--text);min-height:1.2em"></p>
+                                            <p class="text-xs mt-0.5" style="color:var(--text3)">Leave subdomain blank
+                                                to use the root domain.</p>
+                                        </div>
+                                        <!-- Button row — mutually exclusive states managed by loadCfRouteStatus() -->
+                                        <div class="flex gap-3">
+                                            <!-- UNPUBLISHED: single Publish button -->
+                                            <button onclick="publishCfRoute()" id="cf-publish-btn"
+                                                class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
+                                                style="display:flex">
+                                                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                                    <path
+                                                        d="M16.5 7.5C16.5 7.5 15.75 4.5 12 4.5C8.68 4.5 6 7.18 6 10.5C6 10.5 3 11.25 3 14.25C3 16.93 5.07 19.5 8.25 19.5H17.25C19.73 19.5 21.75 17.48 21.75 15C21.75 12.8 20.12 10.98 18 10.58" />
+                                                </svg>
+                                                Publish
+                                            </button>
+                                            <!-- PUBLISHED: Republish + Remove side-by-side -->
+                                            <button onclick="publishCfRoute()" id="cf-republish-btn"
+                                                class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
+                                                style="display:none">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <polyline points="1 4 1 10 7 10" />
+                                                    <path d="M3.51 15a9 9 0 1 0 .49-4.85" />
+                                                </svg>
+                                                Republish
+                                            </button>
+                                            <button onclick="unpublishCfRoute()" id="cf-unpublish-btn"
+                                                class="btn-danger py-3 px-5 text-sm items-center justify-center gap-2"
+                                                style="display:none">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <polyline points="3 6 5 6 21 6" />
+                                                    <path d="M19 6l-1 14H6L5 6" />
+                                                    <path d="M10 11v6M14 11v6" />
+                                                    <path d="M9 6V4h6v2" />
+                                                </svg>
+                                                Remove
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Export -->
+                            <div class="card p-5">
+                                <h3 class="text-sm font-semibold mb-2 flex items-center gap-2"
+                                    style="color:var(--text)">
+                                    <i data-feather="download-cloud" class="w-4 h-4" style="color:var(--text)"></i>
+                                    Export Application
+                                </h3>
+                                <p class="text-sm mb-4" style="color:var(--text3)">Download a .zip archive with all
+                                    source files for this application.</p>
+                                <button onclick="downloadAppZip()" id="btn-download-zip"
+                                    class="btn-secondary w-full py-3 text-sm flex items-center justify-center gap-2">
+                                    <i data-feather="archive" class="w-4 h-4"></i> Download Source Code
+                                </button>
+                            </div>
+
+                            <!-- Danger zone -->
+                            <div class="card p-5" style="border-color:rgba(239,68,68,0.2)">
+                                <h3 class="text-sm font-semibold mb-1 flex items-center gap-2" style="color:var(--red)">
+                                    <i data-feather="alert-triangle" class="w-4 h-4"></i> Danger Zone
+                                </h3>
+                                <p class="text-xs mb-4" style="color:var(--text3)">Permanently delete this application
+                                    and all its files.</p>
+                                <button onclick="deleteApp()"
+                                    class="btn-danger w-full py-3 rounded-xl text-sm font-medium">Delete
+                                    Application</button>
+                            </div>
+                            <!-- Auto-save status indicator -->
+                            <div id="autosave-indicator" class="hidden flex items-center gap-2 justify-end px-1"
+                                style="color:var(--text3)">
+                                <svg id="autosave-spinner" class="hidden w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 12a9 9 0 11-6.219-8.56" />
+                                </svg>
+                                <svg id="autosave-check" class="hidden w-3.5 h-3.5" fill="none" stroke="var(--green)"
+                                    viewBox="0 0 24 24" stroke-width="2.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span id="autosave-text" class="text-xs font-medium"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- ══════════ MODALS ══════════ -->
+
+    <!-- Create App Modal -->
+    <div id="create-app-modal"
+        class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-0 md:p-4">
+        <div class="modal-panel-sheet md:modal-panel p-5 w-full max-w-lg shadow-lg max-h-[92vh] flex flex-col">
+            <div class="flex justify-between items-center mb-5 shrink-0">
+                <h2 class="text-lg font-bold" style="color:var(--text)">New Application</h2>
+                <button onclick="closeModal('create-app-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
+                        data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <form id="create-form" class="space-y-4 overflow-y-auto flex-1 pb-2" style="touch-action: pan-y;">
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="col-span-2">
+                        <label class="block section-label mb-2">App Name</label>
+                        <input type="text" name="name" required class="inp w-full px-4 py-3 text-sm">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block section-label mb-2">Runtime</label>
+                        <select name="runtime" class="inp w-full px-4 py-3 text-sm"
+                            onchange="onRuntimeChange('create')">
+                            <option value="python">Python</option>
+                            <option value="rust">Rust</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block section-label mb-2">Entrypoint <span class="font-normal normal-case"
+                            style="color:var(--text3)">(e.g. main.py)</span></label>
+                    <input type="text" name="entrypoint" class="inp w-full px-4 py-3 text-sm mono"
+                        placeholder="main.py">
+                </div>
+                <div id="create-app-dropzone" class="relative group mt-1">
+                    <label class="block section-label mb-2">Source Files or Folders <span
+                            class="font-normal normal-case" style="color:var(--text3)">(drag & drop here, or click to
+                            browse)</span></label>
+                    <div id="create-app-drop-area"
+                        class="relative flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-xl transition-colors cursor-pointer"
+                        style="border-color:var(--border);background:var(--surface2)">
+                        <input id="create-app-file-input" type="file" name="files" multiple
+                            class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                        <div class="flex flex-col items-center pointer-events-none text-center">
+                            <i data-feather="upload-cloud" class="w-6 h-6 mb-2" style="color:var(--text3)"></i>
+                            <span class="text-sm font-medium" style="color:var(--text2)" id="create-app-files-text">Drop
+                                files/folders here<br><span class="text-xs" style="color:var(--text3)">or click to
+                                    browse</span></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex gap-3 pt-2">
+                    <button type="button" onclick="closeModal('create-app-modal')"
+                        class="btn-ghost flex-1 py-3 text-sm font-semibold rounded-xl">Cancel</button>
+                    <button type="submit" class="btn-primary flex-1 py-3 text-sm rounded-xl">Create App</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Users Modal -->
+    <div id="users-modal"
+        class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0">
+        <div class="modal-panel p-5 w-full max-w-2xl shadow-lg h-[80vh] md:h-[580px] flex flex-col">
+            <div class="flex justify-between items-center mb-5 shrink-0">
+                <h2 class="text-lg font-bold" style="color:var(--text)">Manage Users</h2>
+                <button onclick="closeModal('users-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
+                        data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <div class="flex flex-col md:flex-row gap-3 mb-5 shrink-0">
+                <input type="text" id="new-user-name" placeholder="Username" class="inp flex-1 px-4 py-3 text-sm">
+                <input type="password" id="new-user-pwd" placeholder="Password" class="inp flex-1 px-4 py-3 text-sm">
+                <button onclick="createUser()" class="btn-primary px-6 py-3 md:py-0 text-sm rounded-xl">Add
+                    User</button>
+            </div>
+            <div class="flex-1 overflow-y-auto rounded-xl" style="border:1px solid var(--border)">
+                <table class="w-full text-left text-sm">
+                    <thead class="section-label sticky top-0"
+                        style="background:var(--surface2);border-bottom:1px solid var(--border)">
+                        <tr>
+                            <th class="px-5 py-3 font-bold">User</th>
+                            <th class="px-5 py-3 font-bold">Role</th>
+                            <th class="px-5 py-3 text-right font-bold">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-list" class="divide-y" style="border-color:var(--border)"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+
+
+
+    <!-- Delete App Modal -->
+    <div id="delete-app-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2)">
+                    <i data-feather="trash-2" class="w-5 h-5" style="color:var(--red)"></i>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" style="color:var(--text)">Delete Application</h2>
+                    <p class="text-xs" style="color:var(--text3)">This action cannot be undone</p>
+                </div>
+            </div>
+            <p class="text-sm mb-6" style="color:var(--text2)">All files, packages, and logs for <strong
+                    id="delete-app-name" style="color:var(--text)"></strong> will be permanently deleted.</p>
+            <div class="flex gap-3">
+                <button onclick="closeModal('delete-app-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmDeleteApp()" class="btn-danger-solid flex-1 py-2.5 text-sm">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete User Modal -->
+    <div id="delete-user-modal" class="fixed inset-0 z-[96] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2)">
+                    <i data-feather="user-x" class="w-5 h-5" style="color:var(--red)"></i>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" style="color:var(--text)">Delete User</h2>
+                    <p class="text-xs" style="color:var(--text3)">This action cannot be undone</p>
+                </div>
+            </div>
+            <p class="text-sm mb-2" style="color:var(--text2)">Delete user <strong id="delete-user-name"
+                    style="color:var(--text)"></strong>?</p>
+            <p class="text-xs mb-6 px-3 py-2.5 rounded-xl"
+                style="color:var(--red);background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.15)">
+                ⚠️ All of this user's applications, files, packages, and logs will be <strong>permanently
+                    deleted</strong>.
+            </p>
+            <div class="flex gap-3">
+                <button onclick="closeModal('delete-user-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmDeleteUser()" id="delete-user-confirm-btn"
+                    class="btn-danger-solid flex-1 py-2.5 text-sm flex items-center justify-center gap-2">
+                    <i data-feather="trash-2" class="w-4 h-4"></i> Delete User
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tunnel Hostname Conflict Modal -->
+    <div id="tunnel-conflict-modal"
+        class="fixed inset-0 z-[97] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:var(--surface3);border:1px solid var(--border3)">
+                    <svg class="w-5 h-5" fill="none" stroke="var(--yellow)" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" style="color:var(--text)">Hostname Already In Use</h2>
+                    <p class="text-xs" style="color:var(--text3)">Publishing will overwrite the existing route</p>
+                </div>
+            </div>
+            <p id="tunnel-conflict-msg" class="text-sm mb-6 leading-relaxed" style="color:var(--text2)"></p>
+            <div class="flex gap-3">
+                <button onclick="closeModal('tunnel-conflict-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmPublishOverwrite()" class="btn-warning flex-1 py-2.5 text-sm">Overwrite</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Remove Package Modal -->
+    <div id="remove-pkg-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2)">
+                    <i data-feather="package" class="w-5 h-5" style="color:var(--red)"></i>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" style="color:var(--text)">Remove Package</h2>
+                    <p class="text-xs" style="color:var(--text3)">Will be uninstalled from the app's venv</p>
+                </div>
+            </div>
+            <p class="text-sm mb-6" style="color:var(--text2)">Remove <strong id="remove-pkg-name" class="mono"
+                    style="color:var(--text)"></strong>?</p>
+            <div class="flex gap-3">
+                <button onclick="closeModal('remove-pkg-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmRemovePackage()" class="btn-danger-solid flex-1 py-2.5 text-sm">Remove</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Name Modal -->
+    <div id="file-name-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <h2 class="text-base font-bold mb-4" id="file-name-modal-title" style="color:var(--text)">New File</h2>
+            <input type="text" id="file-name-input" class="inp w-full px-4 py-3 text-sm mb-5" placeholder="filename.py">
+            <div class="flex gap-3">
+                <button onclick="closeModal('file-name-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
+                <button onclick="confirmFileNameOp()" id="file-name-confirm-btn"
+                    class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div id="change-pwd-modal" class="fixed inset-0 z-[90] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg space-y-4">
+            <div>
+                <h2 class="text-base font-bold" style="color:var(--text)">Change Password</h2>
+                <p class="text-xs mt-1" style="color:var(--text3)">Enter your current password, then choose a new one.
+                </p>
+            </div>
+            <div class="space-y-3">
+                <div>
+                    <label class="block section-label mb-1.5">Current password</label>
+                    <input type="password" id="current-pwd-input" placeholder="Current password"
+                        autocomplete="current-password" class="inp w-full px-4 py-2.5 text-sm"
+                        onkeydown="if(event.key==='Enter')document.getElementById('new-pwd-input').focus()">
+                </div>
+                <div>
+                    <label class="block section-label mb-1.5">New password</label>
+                    <input type="password" id="new-pwd-input" placeholder="New password" autocomplete="new-password"
+                        class="inp w-full px-4 py-2.5 text-sm"
+                        onkeydown="if(event.key==='Enter')document.getElementById('confirm-pwd-input').focus()">
+                </div>
+                <div>
+                    <label class="block section-label mb-1.5">Confirm new password</label>
+                    <input type="password" id="confirm-pwd-input" placeholder="Repeat new password"
+                        autocomplete="new-password" class="inp w-full px-4 py-2.5 text-sm"
+                        onkeydown="if(event.key==='Enter')changePassword()">
+                </div>
+                <div id="pwd-match-hint" class="hidden text-xs px-3 py-2 rounded-lg"
+                    style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)">
+                    Passwords
+                    do not match.</div>
+            </div>
+            <div class="flex gap-3 pt-1">
+                <button onclick="closeModal('change-pwd-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
+                <button onclick="changePassword()" id="change-pwd-btn"
+                    class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Account Menu Modal -->
+    <div id="account-menu-modal"
+        class="fixed inset-0 z-[90] modal-overlay hidden flex items-end md:items-end justify-start p-0 md:p-0">
+        <div class="modal-panel-sheet md:modal-panel p-0 w-full md:w-72 md:mb-4 md:ml-4 shadow-lg overflow-hidden rounded-t-xl md:rounded-xl"
+            style="max-height:90vh">
+            <!-- Header -->
+            <div class="px-5 py-4 flex items-center gap-3" style="border-bottom:1px solid var(--border)">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0"
+                    style="background:rgba(255, 255, 255,0.15);color:var(--text);border:1px solid rgba(255, 255, 255,0.2)"
+                    id="acct-menu-avatar">U</div>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm font-semibold truncate" style="color:var(--text)" id="acct-menu-username">User
+                    </div>
+                    <div class="text-xs" style="color:var(--text3)">Your account</div>
+                </div>
+                <button onclick="closeModal('account-menu-modal')" class="p-1.5 rounded-lg"
+                    style="color:var(--text3)"><i data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <!-- Menu items -->
+            <div class="py-2">
+                <button onclick="closeModal('account-menu-modal');openChangePwdModal()"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover:bg-white/5 text-left"
+                    style="color:var(--text2)">
+                    <i data-feather="lock" class="w-4 h-4 shrink-0"></i>
+                    Change Password
+                </button>
+                <button onclick="closeModal('account-menu-modal');openTotpSetup()" id="acct-totp-btn"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover:bg-white/5 text-left"
+                    style="color:var(--text2)">
+                    <i data-feather="shield" class="w-4 h-4 shrink-0"></i>
+                    <span id="acct-totp-label">Set up Authenticator (2FA)</span>
+                    <span id="acct-totp-badge" class="hidden ml-auto px-2 py-0.5 rounded text-[10px] font-bold"
+                        style="background:rgba(16,185,129,0.15);color:var(--green);border:1px solid rgba(16,185,129,0.2)">ON</span>
+                </button>
+
+            </div>
+            <!-- Logout -->
+            <div style="border-top:1px solid var(--border)" class="py-2">
+                <button onclick="logout()"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover:bg-white/5 text-left"
+                    style="color:var(--red)">
+                    <i data-feather="log-out" class="w-4 h-4 shrink-0"></i>
+                    Sign Out
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOTP Setup Modal -->
+    <div id="totp-setup-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg space-y-5">
+            <!-- Header -->
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(255, 255, 255,0.15);border:1px solid rgba(255, 255, 255,0.2)">
+                    <i data-feather="shield" class="w-5 h-5" style="color:var(--text)"></i>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" style="color:var(--text)" id="totp-modal-title">Set Up Authenticator
+                    </h2>
+                    <p class="text-xs mt-0.5" style="color:var(--text3)" id="totp-modal-sub">Scan the QR code with your
+                        app</p>
+                </div>
+            </div>
+
+            <!-- Setup flow -->
+            <div id="totp-setup-flow">
+                <!-- QR code display -->
+                <div class="flex flex-col items-center gap-4">
+                    <div id="totp-qr-container" class="w-48 h-48 rounded-xl flex items-center justify-center"
+                        style="background:white">
+                        <span class="text-xs" style="color:#888">Loading…</span>
+                    </div>
+                    <div class="w-full space-y-1.5">
+                        <p class="text-xs text-center" style="color:var(--text3)">Can't scan? Enter this key manually:
+                        </p>
+                        <div class="flex items-center gap-2 px-3 py-2 rounded-xl"
+                            style="background:var(--surface2);border:1px solid var(--border)">
+                            <code class="text-xs mono flex-1 break-all" id="totp-secret-display"
+                                style="color:var(--text2)"></code>
+                            <button onclick="copyTotpSecret()"
+                                class="shrink-0 text-[10px] px-2 py-1 rounded-lg font-semibold transition"
+                                style="background:var(--surface);color:var(--text3)">Copy</button>
+                        </div>
+                    </div>
+                </div>
+                <p class="text-xs text-center mt-3" style="color:var(--text3)">Scan in Google Authenticator, Authy, or
+                    any TOTP app, then enter the 6-digit code below.</p>
+                <div class="mt-4 space-y-3">
+                    <input type="text" id="totp-confirm-code" placeholder="000000" inputmode="numeric" maxlength="6"
+                        class="inp w-full px-4 py-3 text-sm font-medium mono text-center tracking-[0.4em]"
+                        autocomplete="one-time-code" onkeydown="if(event.key==='Enter')confirmTotpSetup()">
+                    <div id="totp-setup-error" class="hidden text-xs px-3 py-2 rounded-lg"
+                        style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)">
+                    </div>
+                </div>
+                <div class="flex gap-3 mt-4">
+                    <button onclick="closeModal('totp-setup-modal')"
+                        class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
+                    <button onclick="confirmTotpSetup()" id="totp-confirm-btn"
+                        class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Verify &amp; Enable</button>
+                </div>
+            </div>
+
+            <!-- Disable flow -->
+            <div id="totp-disable-flow" class="hidden space-y-4">
+                <div class="px-4 py-3 text-xs rounded-xl"
+                    style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.15);color:var(--red)">
+                    ⚠️ This will remove 2FA from your account. Enter your password to confirm.
+                </div>
+                <input type="password" id="totp-disable-pwd" placeholder="Your current password"
+                    autocomplete="current-password" class="inp w-full px-4 py-3 text-sm"
+                    onkeydown="if(event.key==='Enter')disableTotp()">
+                <div id="totp-disable-error" class="hidden text-xs px-3 py-2 rounded-lg"
+                    style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)"></div>
+                <div class="flex gap-3">
+                    <button onclick="closeModal('totp-setup-modal')"
+                        class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
+                    <button onclick="disableTotp()" id="totp-disable-btn"
+                        class="flex-1 py-2.5 text-sm font-bold rounded-xl transition"
+                        style="background:rgba(239,68,68,0.15);color:var(--red);border:1px solid rgba(239,68,68,0.2)">Disable
+                        2FA</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- PWA Install Banner -->
+    <div id="pwa-install-banner" class="rounded-xl shadow-lg overflow-hidden"
+        style="background:var(--surface);border:1px solid var(--border2);display:none">
+        <div class="px-4 py-3.5 flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                style="background:rgba(255, 255, 255,0.15);border:1px solid rgba(255, 255, 255,0.2)">
+                <svg class="w-4 h-4" fill="none" stroke="var(--text)" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                        d="M12 18.5a6.5 6.5 0 100-13 6.5 6.5 0 000 13z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l2 2" />
+                </svg>
+            </div>
+            <div class="flex-1 min-w-0">
+                <p class="text-sm font-semibold" style="color:var(--text)">Install Venvy</p>
+                <p class="text-xs" style="color:var(--text3)">Add to home screen for the best experience</p>
+            </div>
+            <button onclick="dismissPwaBanner()" class="p-1.5 rounded-lg transition" style="color:var(--text3)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+            </button>
+        </div>
+        <div class="px-4 pb-3.5">
+            <button onclick="triggerPwaInstall()"
+                class="w-full py-2.5 text-sm font-bold rounded-xl transition active:scale-95"
+                style="background:var(--accent);color:white">Install</button>
+        </div>
+    </div>
+
+    <!-- Upload Progress Modal/Toast -->
+    <div id="upload-progress-container"
+        class="fixed bottom-4 right-4 z-[100] w-80 rounded-xl shadow-lg p-4 hidden transition-transform translate-y-full"
+        style="background:var(--surface);border:1px solid var(--border)">
+        <div class="flex items-center justify-between mb-2">
+            <span id="upload-progress-title" class="text-sm font-bold" style="color:var(--text)">Uploading...</span>
+            <button id="upload-progress-cancel" class="text-xs px-2 py-1 rounded transition hover:bg-neutral-800"
+                style="color:var(--red)">Cancel</button>
+        </div>
+        <div class="w-full h-1.5 rounded-full overflow-hidden mb-2" style="background:var(--surface2)">
+            <div id="upload-progress-bar" class="h-full transition duration-200"
+                style="background:var(--accent); width:0%"></div>
+        </div>
+        <div class="flex items-center justify-between text-[10px] mono" style="color:var(--text3)">
+            <span id="upload-progress-stats">0% (0 / 0 MB)</span>
+            <span id="upload-progress-speed-time">0 MB/s • 0s left</span>
+        </div>
+    </div>
+
+    <!-- ══════════ JAVASCRIPT (all original logic preserved) ══════════ -->
+    <script>
         const API = window.location.origin + "/api";
 
         // --- CSRF Protection Wrapper ---
@@ -32,7 +2899,6 @@
 
         let selectedFiles = new Set();
         let lastSelectedPath = null;
-        let _lastActiveAppId = null;  // tracks the previously-active app for switch detection
 
         function escapeHtml(str) {
             if (str == null) return '';
@@ -153,15 +3019,9 @@
                                 const badge = document.getElementById('dash-status');
                                 if (badge) {
                                     badge.innerText = app.status;
-                                    const statusClass = {
-                                        running: 'status-running',
-                                        stopped: 'status-stopped',
-                                        starting: 'status-starting',
-                                        stopping: 'status-stopping',
-                                        error: 'status-error',
-                                        stale: 'status-stale',
-                                    }[app.status] || 'status-stopped';
-                                    badge.className = `px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${statusClass}`;
+                                    badge.className = app.status === 'running'
+                                        ? 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-running'
+                                        : 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-stopped';
                                 }
                             }
                             // Network card — update on port or url change
@@ -205,7 +3065,7 @@
                 } finally {
                     _pollInflight = false;
                 }
-            }, 2000);
+            }, 1000);
         }
 
         // ── Context Menu ─────────────────────────────────────────────────────────
@@ -342,8 +3202,52 @@
         // ── Auth ─────────────────────────────────────────────────────────────────
         let _appInitialized = false;
 
+        async function activateLicense() {
+            const key = document.getElementById('license-key').value.trim();
+            const errEl = document.getElementById('license-error');
+            const btn = document.getElementById('license-activate-btn');
+            errEl.classList.add('hidden');
+            if (!key) { errEl.innerText = "Please enter a key."; errEl.classList.remove('hidden'); return; }
+
+            btn.disabled = true;
+            btn.innerText = "Activating...";
+            try {
+                const res = await fetch(`${API}/license/activate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key })
+                });
+                if (res.ok) {
+                    showToast('License activated!', 'success');
+                    checkAuth();
+                } else {
+                    const err = await res.json();
+                    errEl.innerText = err.detail || 'Activation failed.';
+                    errEl.classList.remove('hidden');
+                }
+            } catch (e) {
+                errEl.innerText = 'Network error during activation.';
+                errEl.classList.remove('hidden');
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Activate";
+            }
+        }
+
         async function checkAuth() {
             try {
+                // Pre-check License
+                const licRes = await fetch(`${API}/license/status`);
+                if (licRes.ok) {
+                    const licData = await licRes.json();
+                    if (!licData.valid) {
+                        document.getElementById('app-shell').classList.add('hidden');
+                        document.getElementById('auth-screen').classList.add('hidden');
+                        document.getElementById('license-screen').classList.remove('hidden');
+                        return;
+                    }
+                }
+                document.getElementById('license-screen').classList.add('hidden');
 
                 const res = await fetch(`${API}/auth/status`);
                 if (!res.ok) return;
@@ -698,51 +3602,15 @@
                 if (!res.ok) return;
                 const users = await res.json();
                 const listEl = document.getElementById('users-list');
-                listEl.replaceChildren();
-                users.forEach(u => {
-                    const tr = document.createElement('tr');
-                    tr.className = 'transition';
-                    tr.style.borderColor = 'var(--border)';
-
-                    // Username cell
-                    const tdUser = document.createElement('td');
-                    tdUser.className = 'px-5 py-3.5 font-medium text-sm';
-                    tdUser.style.color = 'var(--text)';
-                    tdUser.textContent = u.username;
-                    tr.appendChild(tdUser);
-
-                    // Role cell
-                    const tdRole = document.createElement('td');
-                    tdRole.className = 'px-5 py-3.5';
-                    const badge = document.createElement('span');
-                    badge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide';
-                    if (u.is_admin) {
-                        Object.assign(badge.style, {
-                            background: 'rgba(139,92,246,0.15)',
-                            color: '#c4b5fd',
-                            border: '1px solid rgba(139,92,246,0.2)',
-                        });
-                    } else {
-                        badge.classList.add('status-stopped');
-                    }
-                    badge.textContent = u.is_admin ? 'Admin' : 'User';
-                    tdRole.appendChild(badge);
-                    tr.appendChild(tdRole);
-
-                    // Action cell
-                    const tdAction = document.createElement('td');
-                    tdAction.className = 'px-5 py-3.5 text-right';
-                    if (!u.is_admin) {
-                        const btn = document.createElement('button');
-                        btn.className = 'user-del-btn btn-danger text-xs px-3 py-1.5 rounded-lg font-bold';
-                        btn.textContent = 'Delete';
-                        btn.addEventListener('click', () => deleteUser(u.id, u.username));
-                        tdAction.appendChild(btn);
-                    }
-                    tr.appendChild(tdAction);
-
-                    listEl.appendChild(tr);
-                });
+                listEl.innerHTML = users.map(u => `
+            <tr class="transition" style="border-color:var(--border)">
+                <td class="px-5 py-3.5 font-medium text-sm" style="color:var(--text)">${escapeHtml(u.username)}</td>
+                <td class="px-5 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${u.is_admin ? '' : 'status-stopped'}" style="${u.is_admin ? 'background:rgba(139,92,246,0.15);color:#c4b5fd;border:1px solid rgba(139,92,246,0.2)' : ''}">${u.is_admin ? 'Admin' : 'User'}</span></td>
+                <td class="px-5 py-3.5 text-right">
+                    ${!u.is_admin ? `<button data-uid="${u.id}" data-uname="${escapeHtml(u.username)}" class="user-del-btn btn-danger text-xs px-3 py-1.5 rounded-lg font-bold">Delete</button>` : ''}
+                </td>
+            </tr>`).join('');
+                listEl.querySelectorAll('.user-del-btn').forEach(btn => btn.addEventListener('click', () => deleteUser(Number(btn.dataset.uid), btn.dataset.uname)));
             } catch (e) { showToast('Failed to load users.', 'error'); }
         }
         async function createUser() {
@@ -794,38 +3662,31 @@
 
         let _lastAppListHash = '';
         function renderAppList(apps) {
-            const hash = apps.map(a => `${a.id}:${a.name}:${a.status}:${a.port}`).join('|') + '|active:' + activeAppId;
+            const hash = apps.map(a => `${a.id}:${a.name}:${a.status}`).join('|') + '|active:' + activeAppId;
             if (hash === _lastAppListHash) return;
             _lastAppListHash = hash;
             if (!apps.length) {
-                document.getElementById('app-list').innerHTML = `
-                <div class="flex flex-col items-center justify-center py-10 px-4 text-center">
-                    <div class="w-10 h-10 rounded-xl mx-auto flex items-center justify-center mb-3" style="background:rgba(255,255,255,0.03);border:1px solid var(--border)">
-                        <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5" style="color:var(--text3);width:18px;height:18px"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
-                    </div>
-                    <p class="text-xs font-semibold" style="color:var(--text3)">No applications yet</p>
-                    <p class="text-[11px] mt-1" style="color:var(--text3);opacity:0.6">Click <strong>New Application</strong> above</p>
-                </div>`;
+                document.getElementById('app-list').innerHTML = `<div class="text-center py-10 px-4">
+                <div class="w-9 h-9 rounded-xl mx-auto flex items-center justify-center mb-3" style="background:var(--surface2);border:1px solid var(--border)">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" style="color:var(--text3)"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                </div>
+                <p class="text-xs font-medium" style="color:var(--text3)">No apps yet</p>
+                <p class="text-xs mt-1" style="color:var(--border2)">Tap <strong style="color:var(--text3)">New Application</strong></p>
+            </div>`;
+                // If no app is selected, show system view as the default dashboard
                 if (!activeAppId) openSystemView();
                 return;
             }
             document.getElementById('app-list').innerHTML = apps.map(app => {
                 const isActive = app.id === activeAppId;
-                const isRunning = app.status === 'running';
-                const runtimeColor = app.runtime === 'python' ? '#3b82f6' : app.runtime === 'rust' ? '#f97316' : null;
-                const runtimeBg = app.runtime === 'python' ? 'rgba(59,130,246,0.12)' : app.runtime === 'rust' ? 'rgba(249,115,22,0.12)' : 'rgba(255,255,255,0.05)';
-                const runtimeBorder = app.runtime === 'python' ? 'rgba(59,130,246,0.25)' : app.runtime === 'rust' ? 'rgba(249,115,22,0.25)' : 'rgba(255,255,255,0.08)';
-                const runtimeColorStyle = runtimeColor ? `color:${runtimeColor}` : 'color:var(--text3)';
-                const runtimeLabel = app.runtime === 'python' ? 'PY' : app.runtime === 'rust' ? 'RS' : '??';
                 return `
                 <div onclick="selectApp(${app.id})"
-                     class="nav-item group flex items-center gap-2.5 px-3 py-2.5 cursor-pointer transition active:scale-95 ${isActive ? 'active' : ''}"
-                     style="color:${isActive ? 'var(--accent-light)' : 'var(--text2)'}">
-                    <div class="relative shrink-0">
-                        <div id="status-dot-${app.id}" class="w-2 h-2 rounded-full nav-dot ${isRunning ? 'pulse-dot' : ''}" style="background:${isRunning ? 'var(--green)' : 'var(--border3)'};box-shadow:${isRunning ? '0 0 6px rgba(52,211,153,0.4)' : 'none'}"></div>
+                     class="nav-item flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition active:scale-95 ${isActive ? 'active' : ''}"
+                     style="color:${isActive ? '#93c5fd' : 'var(--text2)'}">
+                    <div class="flex items-center gap-2.5 min-w-0">
+                        <div id="status-dot-${app.id}" class="w-2 h-2 rounded-full flex-shrink-0 nav-dot ${app.status === 'running' ? 'pulse-dot' : ''}" style="background:${app.status === 'running' ? 'var(--green)' : 'var(--border3)'}"></div>
+                        <span class="truncate text-sm font-medium">${escapeHtml(app.name)}</span>
                     </div>
-                    <span class="truncate text-[13px] font-medium flex-1 min-w-0">${escapeHtml(app.name)}</span>
-                    <span class="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded mono" style="${runtimeColorStyle};background:${runtimeBg};border:1px solid ${runtimeBorder};letter-spacing:0.04em">${runtimeLabel}</span>
                 </div>`;
             }).join('');
         }
@@ -1015,19 +3876,13 @@
             document.getElementById('dash-title').innerText = app.name;
             const badge = document.getElementById('dash-status');
             badge.innerText = app.status;
-            const statusClass = {
-                running: 'status-running',
-                stopped: 'status-stopped',
-                starting: 'status-starting',
-                stopping: 'status-stopping',
-                error: 'status-error',
-                stale: 'status-stale',
-            }[app.status] || 'status-stopped';
-            badge.className = `px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${statusClass}`;
+            badge.className = app.status === 'running'
+                ? 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-running'
+                : 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-stopped';
 
             // ONLY update settings if they are not dirty (preserving user unsaved changes)
             // EXCEPT if we are switching to a completely different app.
-            const isAppSwitch = (_lastActiveAppId !== null && _lastActiveAppId !== app.id);
+            const isAppSwitch = (typeof _lastActiveAppId !== 'undefined' && _lastActiveAppId !== app.id);
             const isCurrentlyDirty = !isAppSwitch && document.getElementById('save-status-dot') && !document.getElementById('save-status-dot').classList.contains('hidden');
 
             if (!isCurrentlyDirty) {
@@ -1043,10 +3898,10 @@
                     document.getElementById('setting-runtime').value = app.runtime || 'python';
                 }
                 document.getElementById('setting-entrypoint').value = app.entrypoint || '';
-                document.getElementById('setting-boot').checked = app.start_on_boot;
+                const boot = document.getElementById('setting-boot');
+                if (app.start_on_boot) boot.checked = true; else boot.checked = false;
 
                 onRuntimeChange('settings');
-                // Re-apply entrypoint after onRuntimeChange since it may reset the field
                 document.getElementById('setting-entrypoint').value = app.entrypoint || '';
                 _tempOpenUrlPref = app.url_source_pref || 'local';
                 _renderOpenPrefButtons(_tempOpenUrlPref);
@@ -1060,10 +3915,10 @@
             checkSettingsDirty();
 
             // ONLY clear path if we are switching to a COMPLETELY DIFFERENT app
-            if (_lastActiveAppId !== null && _lastActiveAppId !== app.id) {
+            if (typeof _lastActiveAppId !== 'undefined' && _lastActiveAppId !== app.id) {
                 currentBrowserPath = ""; fileClipboard = null; _openFilePath = null; _setEditorDirty(false);
             }
-            _lastActiveAppId = app.id;
+            window._lastActiveAppId = app.id;
         }
 
         // ── Control App ──────────────────────────────────────────────────────────
@@ -1408,10 +4263,10 @@
             // ── Create xterm instance ────────────────────────────────────────────
             window.term = new Terminal({
                 theme: {
-                    background: '#000000',
-                    foreground: '#ffffff',
+                    background: '#111826',  /* matches --surface token */
+                    foreground: '#f2f2f2',
                     cursor: '#ffffff',
-                    cursorAccent: '#000000',
+                    cursorAccent: '#111826',  /* matches --surface token */
                     selectionBackground: 'rgba(255, 255, 255, 0.25)',
                     selectionForeground: '#ffffff',
                     black: '#1a1a1a',
@@ -3882,3 +6737,7 @@ self.addEventListener('fetch', e => {
             _installBanner.style.display = 'none';
             localStorage.setItem('pwa-dismissed', '1');
         }
+    </script>
+</body>
+
+</html>
