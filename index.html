@@ -13,8 +13,8 @@
 
     <!-- Android / Chrome -->
     <meta name="mobile-web-app-capable" content="yes">
-    <meta name="theme-color" content="#080d14" media="(prefers-color-scheme: dark)">
-    <meta name="theme-color" content="#080d14">
+    <meta name="theme-color" content="#0c111c" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#0c111c">
 
     <!-- iOS Safari -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -27,7 +27,7 @@
     <!-- ── Icons ────────────────────────────────────────────────────────────── -->
     <!-- Inline SVG icon as data URI — works offline, no external dep -->
     <link rel="icon" type="image/svg+xml"
-        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23090b0f'/%3E%3Cdefs%3E%3ClinearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2338bdf8' /%3E%3Cstop offset='100%25' stop-color='%230284c7' /%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M28 32 L46 72 C48 76 52 76 54 72 L72 32' stroke='url(%23grad)' stroke-width='14' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230c111c'/%3E%3Cdefs%3E%3ClinearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%233b82f6' /%3E%3Cstop offset='100%25' stop-color='%232563eb' /%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M28 32 L46 72 C48 76 52 76 54 72 L72 32' stroke='url(%23grad)' stroke-width='14' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
 
     <!-- Apple touch icon — must be PNG-compatible; use a canvas-generated one -->
     <script>
@@ -41,7 +41,7 @@
                     ctx.beginPath(); ctx.roundRect(x, y, w, h, rad); ctx.fillStyle = col; ctx.fill();
                 };
                 r(0, 0, 180, 180, 40, '#090b0f');
-                ctx.strokeStyle = '#38bdf8';
+                ctx.strokeStyle = '#3b82f6';
                 ctx.lineWidth = 24; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
                 ctx.beginPath(); ctx.moveTo(50, 56); ctx.lineTo(90, 132); ctx.lineTo(130, 56); ctx.stroke();
                 const link = document.createElement('link');
@@ -60,7 +60,7 @@
                 };
                 const s = 512;
                 r2(0, 0, s, s, s * 0.22, '#090b0f');
-                ctx2.strokeStyle = '#38bdf8';
+                ctx2.strokeStyle = '#3b82f6';
                 ctx2.lineWidth = 68; ctx2.lineCap = 'round'; ctx2.lineJoin = 'round';
                 ctx2.beginPath(); ctx2.moveTo(s * 0.28, s * 0.31); ctx2.lineTo(s * 0.5, s * 0.73); ctx2.lineTo(s * 0.72, s * 0.31); ctx2.stroke();
                 const iconDataUrl = c2.toDataURL('image/png');
@@ -73,8 +73,8 @@
                     scope: window.location.origin + '/',
                     display: 'standalone',
                     orientation: 'any',
-                    background_color: '#080d14',
-                    theme_color: '#080d14',
+                    background_color: '#0c111c',
+                    theme_color: '#0c111c',
                     categories: ['developer', 'utilities', 'productivity'],
                     icons: [
                         { src: iconDataUrl, sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
@@ -115,37 +115,37 @@
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <link
-        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@500;600;700;800&family=Inter:wght@300;400;500;600&display=swap"
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700;800&display=swap"
         rel="stylesheet">
 
     <style>
         :root {
             /* ── Backgrounds — deep rich slate (less monochrome) ── */
             --bg: #0c111c;
-            --surface: #111826;
-            --surface2: #1c2638;
-            --surface3: #27364d;
-            --surface4: #334763;
+            --surface: #111827;
+            --surface2: #1e293b;
+            --surface3: #334155;
+            --surface4: #475569;
             --sidebar-bg: #0c111c;
 
             /* ── Borders ── */
-            --border: rgba(148, 163, 184, 0.1);
-            --border2: rgba(148, 163, 184, 0.15);
-            --border3: rgba(148, 163, 184, 0.25);
+            --border: rgba(148, 163, 184, 0.08);
+            --border2: rgba(148, 163, 184, 0.14);
+            --border3: rgba(148, 163, 184, 0.22);
 
             /* ── Text ── */
             --text: #f1f5f9;
             --text2: #94a3b8;
             --text3: #64748b;
 
-            /* ── Accent: Professional sky-blue — clean, technical ── */
-            --accent: #38bdf8;
-            --accent-rgb: 56, 189, 248;
-            --accent-dark: #0ea5e9;
-            --accent-light: #7dd3fc;
-            --accent-glow: rgba(56, 189, 248, 0.15);
-            --accent-glow-strong: rgba(56, 189, 248, 0.28);
-            --grad-accent: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%);
+            /* ── Accent: Professional blue — clean, technical ── */
+            --accent: #3b82f6;
+            --accent-rgb: 59, 130, 246;
+            --accent-dark: #2563eb;
+            --accent-light: #60a5fa;
+            --accent-glow: rgba(59, 130, 246, 0.15);
+            --accent-glow-strong: rgba(59, 130, 246, 0.28);
+            --grad-accent: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
             --cf-orange: #f38020;
 
             /* ── Status & Utility Colors ── */
@@ -155,8 +155,8 @@
             --green-rgb: 52, 211, 153;
             --yellow: #f59e0b;
             --yellow-rgb: 245, 158, 11;
-            --blue: #93c5fd;
-            --blue-rgb: 147, 197, 253;
+            --blue: #60a5fa;
+            --blue-rgb: 96, 165, 250;
             --purple: #c084fc;
             --purple-rgb: 192, 132, 252;
 
@@ -180,9 +180,9 @@
             /* auth card, large feature panels */
 
             /* Shadows */
-            --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.03);
-            --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-            --shadow-modal: 0 32px 72px rgba(0, 0, 0, 0.88), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+            --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+            --shadow-elevated: 0 4px 6px rgba(0, 0, 0, 0.4), 0 10px 15px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            --shadow-modal: 0 10px 15px rgba(0, 0, 0, 0.5), 0 25px 50px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
             /* Transitions — standard durations */
             --transition-fast: 0.15s ease;
@@ -999,21 +999,6 @@
                 0 1px 0 rgba(255, 255, 255, 0.06) inset;
         }
 
-        .auth-logo-wrap {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto;
-        }
-
-        /* ── Sidebar premium ─────────────────────────────────────────── */
-        .sidebar-logo-icon {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-        }
-
         /* ── Control buttons ─────────────────────────────────────────── */
         .ctrl-btn {
             width: 34px;
@@ -1081,17 +1066,7 @@
                 <i data-feather="menu" class="w-5 h-5"></i>
             </button>
             <div class="flex items-center gap-0">
-                <svg class="-mt-[1px]" width="20" height="20" viewBox="0 0 100 100" fill="none" stroke="url(#grad)"
-                    stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M28 32 L46 72 C48 76 52 76 54 72 L72 32"></path>
-                    <defs>
-                        <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                            <stop offset="0%" stop-color="#38bdf8" />
-                            <stop offset="100%" stop-color="#0284c7" />
-                        </linearGradient>
-                    </defs>
-                </svg>
-                <span class="brand-text text-[17px] -ml-1" style="color:var(--text);letter-spacing:-0.05em">envy</span>
+                <span class="brand-text text-[17px]" style="letter-spacing:-0.05em"><span style="color:var(--accent)">V</span>envy</span>
             </div>
             <div class="w-9"></div>
         </div>
@@ -1135,19 +1110,7 @@
             <div class="auth-card w-full max-w-sm p-9 relative fade-up">
                 <div class="relative text-center mb-8">
                     <div class="flex items-center justify-center gap-0 mb-5">
-                        <svg class="-mt-[2px]" width="40" height="40" viewBox="0 0 100 100" fill="none"
-                            stroke="url(#auth-grad-lic)" stroke-width="14" stroke-linecap="round"
-                            stroke-linejoin="round">
-                            <path d="M28 32 L46 72 C48 76 52 76 54 72 L72 32"></path>
-                            <defs>
-                                <linearGradient id="auth-grad-lic" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" stop-color="#38bdf8" />
-                                    <stop offset="100%" stop-color="#0284c7" />
-                                </linearGradient>
-                            </defs>
-                        </svg>
-                        <h1 class="text-4xl brand-text -ml-[6px]" style="color:var(--text);letter-spacing:-0.06em">envy
-                        </h1>
+                        <h1 class="text-4xl brand-text" style="letter-spacing:-0.06em"><span style="color:var(--accent)">V</span>envy</h1>
                     </div>
                     <p class="text-sm mt-2" style="color:var(--text3)">Activate your license</p>
                 </div>
@@ -1175,21 +1138,10 @@
         <div class="min-h-full flex items-center justify-center p-4">
             <div class="auth-card w-full max-w-sm p-9 relative fade-up">
                 <div class="relative text-center mb-8">
-                    <div class="flex items-center justify-center gap-0 mb-5">
-                        <svg class="-mt-[2px]" width="40" height="40" viewBox="0 0 100 100" fill="none"
-                            stroke="url(#auth-grad)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M28 32 L46 72 C48 76 52 76 54 72 L72 32"></path>
-                            <defs>
-                                <linearGradient id="auth-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" stop-color="#38bdf8" />
-                                    <stop offset="100%" stop-color="#0284c7" />
-                                </linearGradient>
-                            </defs>
-                        </svg>
-                        <h1 class="text-4xl brand-text -ml-[6px]" style="color:var(--text);letter-spacing:-0.06em">envy
-                        </h1>
+                    <div class="flex items-center justify-center mb-5">
+                        <h1 class="text-4xl brand-text" style="letter-spacing:-0.06em"><span style="color:var(--accent)">V</span>envy</h1>
                     </div>
-                    <p class="text-sm mt-2" id="auth-msg" style="color:var(--text3)">Sign in to your dashboard</p>
+                    <p class="text-sm mt-2" id="auth-msg" style="color:var(--text3)">Sign in to manage your applications</p>
                 </div>
                 <form id="login-form" class="space-y-3">
                     <div id="login-step-password" class="space-y-3">
@@ -1217,7 +1169,7 @@
                 </form>
                 <div id="setup-hint" class="hidden mt-5 text-center text-xs rounded-xl py-3 px-4"
                     style="background:rgba(var(--accent-rgb),0.07);color:var(--text3);border:1px solid rgba(var(--accent-rgb),0.15)">
-                    First run? A default admin account will be created.
+                    Welcome — create your admin account to get started.
                 </div>
             </div>
         </div>
@@ -1235,21 +1187,8 @@
             <div class="px-5 flex items-center justify-between shrink-0 h-[60px]"
                 style="border-bottom:1px solid var(--border)">
                 <div class="flex items-center gap-0">
-                    <div class="sidebar-logo-icon">
-                        <svg class="-mt-[1px]" width="20" height="20" viewBox="0 0 100 100" fill="none"
-                            stroke="url(#sidebar-grad)" stroke-width="15" stroke-linecap="round"
-                            stroke-linejoin="round">
-                            <path d="M28 32 L46 72 C48 76 52 76 54 72 L72 32"></path>
-                            <defs>
-                                <linearGradient id="sidebar-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" stop-color="#38bdf8" />
-                                    <stop offset="100%" stop-color="#0284c7" />
-                                </linearGradient>
-                            </defs>
-                        </svg>
-                    </div>
-                    <span class="brand-text text-[17px] -ml-1"
-                        style="color:var(--text);letter-spacing:-0.05em">envy</span>
+                    <span class="brand-text text-[17px]"
+                        style="letter-spacing:-0.05em"><span style="color:var(--accent)">V</span>envy</span>
                 </div>
                 <button onclick="closeSidebar()" class="md:hidden p-1.5 rounded-lg" style="color:var(--text3)"><i
                         data-feather="x" class="w-4 h-4"></i></button>
@@ -1292,7 +1231,7 @@
                     <div class="flex flex-col flex-1 min-w-0">
                         <span class="text-sm font-semibold truncate" style="color:var(--text)"
                             id="current-user">User</span>
-                        <span class="text-xs" style="color:var(--text3)">Account settings</span>
+                        <span class="text-xs" style="color:var(--text3)">Manage account</span>
                     </div>
                     <i data-feather="chevron-up" class="w-3.5 h-3.5 shrink-0" style="color:var(--text3)"></i>
                 </button>
@@ -1308,8 +1247,8 @@
                     style="background:var(--surface2);border:1px solid var(--border2);box-shadow:0 4px 12px rgba(0,0,0,0.2);">
                     <i data-feather="package" class="w-8 h-8" style="color:var(--text3)"></i>
                 </div>
-                <h3 class="text-lg font-semibold mb-1" style="color:var(--text)">No Application Selected</h3>
-                <p class="text-sm max-w-xs" style="color:var(--text3)">Select an app from the sidebar or create a new
+                <h3 class="text-lg font-semibold mb-1" style="color:var(--text)">Select an Application</h3>
+                <p class="text-sm max-w-xs" style="color:var(--text3)">Choose an application from the sidebar, or create a new
                     one to get started.</p>
                 <button onclick="toggleSidebar()" class="mt-5 md:hidden text-sm font-medium"
                     style="color:var(--text)">Open Menu →</button>
@@ -1324,7 +1263,7 @@
                     <div>
                         <h2 class="text-xl font-bold" style="color:var(--text);font-family:'Inter',sans-serif">System
                         </h2>
-                        <p class="text-xs mt-0.5" style="color:var(--text3)">Port usage &amp; network overview</p>
+                        <p class="text-xs mt-0.5" style="color:var(--text3)">Port usage and network overview</p>
                     </div>
                     <button onclick="loadSystemView(this)"
                         class="ml-auto flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50"
@@ -1726,7 +1665,7 @@
                         <button onclick="openExternal()" id="btn-open"
                             class="h-9 px-4 rounded-xl flex items-center gap-2 font-semibold text-sm whitespace-nowrap active:scale-95 transition disabled:opacity-30 disabled:cursor-not-allowed ml-auto md:ml-0"
                             style="background:var(--surface3);color:var(--text2);border:1px solid var(--border2)">
-                            Open App <i data-feather="external-link" class="w-3 h-3"></i>
+                            Open <i data-feather="external-link" class="w-3 h-3"></i>
                         </button>
                     </div>
                 </header>
@@ -1740,7 +1679,7 @@
                         <button class="tab-btn active h-full whitespace-nowrap"
                             onclick="switchTab('terminal')">Terminal</button>
                         <button class="tab-btn h-full whitespace-nowrap" onclick="switchTab('files')">Files</button>
-                        <button class="tab-btn h-full whitespace-nowrap" onclick="switchTab('logs')">Live Logs</button>
+                        <button class="tab-btn h-full whitespace-nowrap" onclick="switchTab('logs')">Logs</button>
                         <button class="tab-btn h-full whitespace-nowrap"
                             onclick="switchTab('packages')">Packages</button>
                         <button class="tab-btn h-full whitespace-nowrap"
@@ -1826,7 +1765,7 @@
                                 </svg>
                             </button>
                             <div id="term-status-dot" title="Disconnected"
-                                class="w-2 h-2 rounded-full shrink-0 ml-1 transition" style="background:#334155">
+                                class="w-2 h-2 rounded-full shrink-0 ml-1 transition" style="background:var(--surface4)">
                             </div>
                         </div>
 
@@ -2026,7 +1965,7 @@
                                 class="btn-danger text-xs px-3 py-1.5 rounded-lg font-medium">Clear</button>
                         </div>
                         <pre id="log-viewer"
-                            class="flex-1 p-4 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed"><span class="italic" style="color:var(--text3)">No log output yet — start the app to see live logs here.</span></pre>
+                            class="flex-1 p-4 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed"><span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span></pre>
                     </div>
 
                     <!-- PACKAGES -->
@@ -2035,7 +1974,7 @@
                         <div class="max-w-3xl mx-auto">
                             <!-- Install input -->
                             <div class="flex gap-3 mb-5 flex-col md:flex-row">
-                                <input type="text" id="pkg-input" placeholder="Package name (e.g. numpy==1.26)"
+                                <input type="text" id="pkg-input" placeholder="Package name, e.g. numpy==1.26"
                                     class="inp flex-1 px-4 py-3 text-sm"
                                     onkeydown="if(event.key==='Enter') installPackage()">
                                 <button onclick="installPackage()" id="pkg-install-btn"
@@ -2095,7 +2034,7 @@
                                     <tbody id="pkg-list" class="divide-y" style="border-color:var(--border)">
                                         <tr>
                                             <td colspan="3" class="px-6 py-8 text-center text-sm"
-                                                style="color:var(--text3)">Loading environment...</td>
+                                                style="color:var(--text3)">Loading environment…</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -2925,7 +2864,7 @@
         function initAceEditor() {
             if (aceEditor) return;
             aceEditor = ace.edit("file-editor");
-            aceEditor.setTheme("ace/theme/monokai");
+            aceEditor.setTheme("ace/theme/tomorrow_night_blue");
             aceEditor.session.setMode("ace/mode/python");
             aceEditor.setFontSize(window.innerWidth < 768 ? 12 : 13);
             aceEditor.setOption("showPrintMargin", false);
@@ -3106,7 +3045,7 @@
                 delBtn.style.display = 'flex';
                 pasteBtn.style.display = 'none';
             } else {
-                header.innerText = "Folder Actions";
+                header.innerText = "Folder Options";
                 renameBtn.style.display = 'none'; cutBtn.style.display = 'none';
                 copyBtn.style.display = 'none'; delBtn.style.display = 'none';
                 pasteBtn.style.display = 'flex';
@@ -3192,7 +3131,7 @@
                 } catch (err) { console.error(`Failed to ${op} ${srcPath}`, err); }
             }
             if (successCount > 0) {
-                showToast(`Pasted ${successCount} item(s)`, 'success', 2000);
+                showToast(`Pasted ${successCount} item${successCount > 1 ? 's' : ''}`, 'success', 2000);
             }
             if (fileClipboard.op === 'rename') fileClipboard = null;
             loadFiles(currentBrowserPath);
@@ -3207,10 +3146,10 @@
             const errEl = document.getElementById('license-error');
             const btn = document.getElementById('license-activate-btn');
             errEl.classList.add('hidden');
-            if (!key) { errEl.innerText = "Please enter a key."; errEl.classList.remove('hidden'); return; }
+            if (!key) { errEl.innerText = "Please enter a license key."; errEl.classList.remove('hidden'); return; }
 
             btn.disabled = true;
-            btn.innerText = "Activating...";
+            btn.innerText = "Activating…";
             try {
                 const res = await fetch(`${API}/license/activate`, {
                     method: 'POST',
@@ -3605,7 +3544,7 @@
                 listEl.innerHTML = users.map(u => `
             <tr class="transition" style="border-color:var(--border)">
                 <td class="px-5 py-3.5 font-medium text-sm" style="color:var(--text)">${escapeHtml(u.username)}</td>
-                <td class="px-5 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${u.is_admin ? '' : 'status-stopped'}" style="${u.is_admin ? 'background:rgba(139,92,246,0.15);color:#c4b5fd;border:1px solid rgba(139,92,246,0.2)' : ''}">${u.is_admin ? 'Admin' : 'User'}</span></td>
+                <td class="px-5 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${u.is_admin ? '' : 'status-stopped'}" style="${u.is_admin ? 'background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.2)' : ''}">${u.is_admin ? 'Admin' : 'User'}</span></td>
                 <td class="px-5 py-3.5 text-right">
                     ${!u.is_admin ? `<button data-uid="${u.id}" data-uname="${escapeHtml(u.username)}" class="user-del-btn btn-danger text-xs px-3 py-1.5 rounded-lg font-bold">Delete</button>` : ''}
                 </td>
@@ -3670,8 +3609,8 @@
                 <div class="w-9 h-9 rounded-xl mx-auto flex items-center justify-center mb-3" style="background:var(--surface2);border:1px solid var(--border)">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" style="color:var(--text3)"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
                 </div>
-                <p class="text-xs font-medium" style="color:var(--text3)">No apps yet</p>
-                <p class="text-xs mt-1" style="color:var(--border2)">Tap <strong style="color:var(--text3)">New Application</strong></p>
+                <p class="text-xs font-medium" style="color:var(--text3)">No applications yet</p>
+                <p class="text-xs mt-1" style="color:var(--border2)">Use <strong style="color:var(--text3)">New Application</strong> to create one</p>
             </div>`;
                 // If no app is selected, show system view as the default dashboard
                 if (!activeAppId) openSystemView();
@@ -3682,7 +3621,7 @@
                 return `
                 <div onclick="selectApp(${app.id})"
                      class="nav-item flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition active:scale-95 ${isActive ? 'active' : ''}"
-                     style="color:${isActive ? '#93c5fd' : 'var(--text2)'}">
+                     style="color:${isActive ? 'var(--accent-light)' : 'var(--text2)'}">
                     <div class="flex items-center gap-2.5 min-w-0">
                         <div id="status-dot-${app.id}" class="w-2 h-2 rounded-full flex-shrink-0 nav-dot ${app.status === 'running' ? 'pulse-dot' : ''}" style="background:${app.status === 'running' ? 'var(--green)' : 'var(--border3)'}"></div>
                         <span class="truncate text-sm font-medium">${escapeHtml(app.name)}</span>
@@ -4264,26 +4203,26 @@
             window.term = new Terminal({
                 theme: {
                     background: '#111826',  /* matches --surface token */
-                    foreground: '#f2f2f2',
-                    cursor: '#ffffff',
+                    foreground: '#e2e8f0',
+                    cursor: '#60a5fa',
                     cursorAccent: '#111826',  /* matches --surface token */
-                    selectionBackground: 'rgba(255, 255, 255, 0.25)',
+                    selectionBackground: 'rgba(96, 165, 250, 0.3)',
                     selectionForeground: '#ffffff',
-                    black: '#1a1a1a',
+                    black: '#1e293b',
                     red: '#f87171',
                     green: '#4ade80',
                     yellow: '#fbbf24',
-                    blue: '#a1a1aa',
-                    magenta: '#d946ef',
-                    cyan: '#64d2ff',
-                    white: '#f5f5f7',
-                    brightBlack: '#48484a',
-                    brightRed: '#ff6961',
-                    brightGreen: '#34c759',
-                    brightYellow: '#ffcc00',
-                    brightBlue: 'var(--text)',
-                    brightMagenta: '#da8fff',
-                    brightCyan: '#8ee2ff',
+                    blue: '#60a5fa',
+                    magenta: '#c084fc',
+                    cyan: '#22d3ee',
+                    white: '#cbd5e1',
+                    brightBlack: '#475569',
+                    brightRed: '#fca5a5',
+                    brightGreen: '#86efac',
+                    brightYellow: '#fde68a',
+                    brightBlue: '#93c5fd',
+                    brightMagenta: '#d8b4fe',
+                    brightCyan: '#67e8f9',
                     brightWhite: '#ffffff',
                 },
                 fontFamily: '"JetBrains Mono", "Cascadia Code", Menlo, Monaco, "Courier New", monospace',
@@ -4486,7 +4425,7 @@
                         </button>
                     </div>`;
             });
-            tree.innerHTML = html || `<div class="p-8 text-center"><p class="text-xs" style="color:var(--text3)">This directory is empty</p></div>`;
+            tree.innerHTML = html || `<div class="p-8 text-center"><p class="text-xs" style="color:var(--text3)">This folder is empty</p></div>`;
             _featherReplace();
 
             // Back button — separate from .file-row rows so it never accidentally
@@ -5077,7 +5016,7 @@
                 const el = document.getElementById('log-viewer');
                 const wasBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
                 if (!data.content && !data.truncated) {
-                    el.innerHTML = '<span class="italic" style="color:var(--text3)">No log output yet — start the app to see live logs here.</span>';
+                    el.innerHTML = '<span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span>';
                 } else {
                     const raw = data.truncated
                         ? `[showing last ${data.total_lines > 0 ? data.total_lines : ''} lines (truncated) — clear logs to reset]\n\n` + data.content
@@ -5091,7 +5030,7 @@
         }
         async function deleteLogs() {
             const res = await fetch(`${API}/apps/${activeAppId}/logs`, { method: 'DELETE' });
-            if (res.ok) { document.getElementById('log-viewer').innerHTML = '<span class="italic" style="color:var(--text3)">No log output yet — start the app to see live logs here.</span>'; showToast('Logs cleared.', 'info', 1500); }
+            if (res.ok) { document.getElementById('log-viewer').innerHTML = '<span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span>'; showToast('Logs cleared.', 'info', 1500); }
         }
         async function copyLogs() {
             const el = document.getElementById('log-viewer');
