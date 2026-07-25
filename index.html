@@ -2873,16 +2873,7 @@
             // Custom theme overrides for dark look
             aceEditor.container.style.background = 'var(--surface)';
             aceEditor.on('change', () => { if (_openFilePath) _setEditorDirty(true); });
-
-            // Search command
-            aceEditor.commands.addCommand({
-                name: 'find',
-                bindKey: { win: 'Ctrl-F', mac: 'Command-F' },
-                exec: function (editor) {
-                    aceSearch();
-                },
-                readOnly: true
-            });
+            // Note: ext-searchbox registers its own Ctrl-F handler — no override needed.
         }
 
         // ── Sidebar ──────────────────────────────────────────────────────────────
@@ -3763,9 +3754,19 @@
                 _renderDashboard(knownApp);
             } else {
                 // First time: show skeleton title while fetch is in flight
+                if (!_isSystemViewActive()) {
+                    document.getElementById('empty-state').classList.add('hidden');
+                    document.getElementById('dashboard').classList.remove('hidden');
+                }
+                document.getElementById('dash-title').innerText = '\u2026';
+            }
+
+            // Close system view when user explicitly selects an app
+            if (_isSystemViewActive()) {
+                document.getElementById('system-view').classList.add('hidden');
+                document.getElementById('system-nav-btn').classList.remove('active');
                 document.getElementById('empty-state').classList.add('hidden');
                 document.getElementById('dashboard').classList.remove('hidden');
-                document.getElementById('dash-title').innerText = '…';
             }
 
             switchTab('terminal');
@@ -3808,8 +3809,10 @@
             }
         }
 
-        // Renders all dashboard fields from an app object — called on select and on poll update
+        // Renders all dashboard fields from an app object — called on select and on poll update.
+        // Guard: if system-view is currently open we must NOT forcibly un-hide the dashboard.
         function _renderDashboard(app) {
+            if (_isSystemViewActive()) return;
             document.getElementById('empty-state').classList.add('hidden');
             document.getElementById('dashboard').classList.remove('hidden');
             document.getElementById('dash-title').innerText = app.name;
@@ -4601,7 +4604,13 @@
         }
 
         function aceSearch() {
-            if (aceEditor) {
+            if (!aceEditor) return;
+            // Use the ext-searchbox API directly to avoid circular execCommand('find') loops.
+            // ext-searchbox attaches its showFind method to the editor instance.
+            if (aceEditor.searchBox && typeof aceEditor.searchBox.show === 'function') {
+                aceEditor.searchBox.show(aceEditor.getCopyText() || '');
+            } else {
+                // Fallback: trigger via the searchbox extension command
                 aceEditor.execCommand('find');
             }
         }
@@ -4644,24 +4653,34 @@
             const path = document.getElementById('current-filename').dataset.path;
             if (!path) { showToast('No file open.', 'warn'); return; }
             if (!aceEditor) { showToast('Editor not ready.', 'warn'); return; }
-            const fileContent = aceEditor.getValue() ?? "";
+            const fileContent = (typeof aceEditor.getValue === 'function' ? aceEditor.getValue() : null) ?? '';
+            const savedAppId = activeAppId; // capture in case user switches apps during the async save
             const btn = document.getElementById('editor-save-btn');
-            if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+            if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
+            let success = false;
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}/files/op`, {
+                const res = await fetch(`${API}/apps/${savedAppId}/files/op`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ operation: 'save', path, content: fileContent }),
                 });
                 if (!res.ok) { const e = await res.json().catch(() => ({ detail: 'Save failed' })); throw new Error(e.detail); }
-                _setEditorDirty(false);
+                success = true;
+                // Only mark clean if we're still looking at the same file
+                if (activeAppId === savedAppId && _openFilePath === path) _setEditorDirty(false);
                 showToast('Saved!', 'success', 1500);
                 if (btn) {
-                    btn.textContent = '✓ Saved';
+                    btn.textContent = '\u2713 Saved';
                     btn.style.background = 'var(--green)';
-                    setTimeout(() => { btn.textContent = 'Save'; btn.style.background = ''; }, 1500);
+                    setTimeout(() => { if (btn) { btn.textContent = 'Save'; btn.style.background = ''; btn.disabled = false; } }, 1500);
                 }
             } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
-            finally { if (btn) { btn.disabled = false; if (btn.textContent === 'Saving…') btn.textContent = 'Save'; } }
+            finally {
+                if (btn && !success) {
+                    btn.disabled = false;
+                    btn.textContent = 'Save';
+                    btn.style.background = '';
+                }
+            }
         }
 
         function downloadCurrentFile() {
@@ -5282,6 +5301,9 @@
         }
 
         // ── System View ───────────────────────────────────────────────────────────
+        function _isSystemViewActive() {
+            return !document.getElementById('system-view').classList.contains('hidden');
+        }
         function openSystemView(userTriggered = false) {
             document.getElementById('empty-state').classList.add('hidden');
             document.getElementById('dashboard').classList.add('hidden');
