@@ -3,14 +3,47 @@ Venvy backend — dependency check.
 If a required package is missing, we print a clear error instead of
 silently installing at runtime (which can corrupt a running venv and
 blocks the event loop on startup).
+
+-------------------------------------------------------------------------------
+Backup & restore procedure
+-------------------------------------------------------------------------------
+Venvy's persistent state lives in two places, both under the directory Venvy
+is launched from (DATA_DIR = the current working directory at startup):
+
+  1. `data.db` — SQLite database (users, sessions, app metadata, settings).
+     Do NOT `cp` this file while Venvy is running — it's in WAL mode, so a
+     raw copy can miss data still sitting in the `-wal` file. Instead, use
+     the admin-only `POST /api/system/backup` endpoint, which performs a
+     consistent snapshot via SQLite's `VACUUM INTO` and returns the path to
+     the resulting file. That snapshot is a single ordinary file and is
+     always safe to copy with `cp`.
+  2. `apps/` — every hosted app's code, venv, and logs. A plain recursive
+     copy (`cp -a apps/ backup/apps/` or `rsync -a apps/ backup/apps/`) is
+     safe to run at any time; nothing in there uses WAL semantics. For a
+     perfectly consistent snapshot, stop apps first (or accept that a
+     running app's log file may be mid-write, which is harmless).
+  3. `.venvy_key` — the local symmetric-encryption key used to decrypt
+     Cloudflare credentials and app env vars stored in `data.db`. **This
+     file must be backed up alongside `data.db`** — without it, the
+     encrypted columns in a restored database are unrecoverable. Treat it
+     with the same care as a private key (mode 0600, never logged).
+
+To restore on a new host:
+  1. Stop Venvy (if running).
+  2. Place the backed-up `data.db` (or the `VACUUM INTO` snapshot, renamed
+     to `data.db`) and `.venvy_key` into the new working directory.
+  3. Restore `apps/` into the same working directory.
+  4. Start Venvy as usual — it will pick up the restored DB and app files.
+
+There is no one-click restore command; the above is a manual but
+straightforward procedure suitable for a small self-hosted team.
+-------------------------------------------------------------------------------
 """
 import os as _os; _os.environ.setdefault("PYDEVD_DISABLE_FILE_VALIDATION", "1")
 
 import sys as _bootstrap_sys
 
-DEVELOPMENT_MODE = True
-
-_REQUIRED = ['cryptography', 'aiofiles', 'uvicorn', 'fastapi', 'sqlmodel', 'aiohttp']
+_REQUIRED = ['cryptography', 'aiofiles', 'uvicorn', 'fastapi', 'sqlmodel', 'aiohttp', 'multipart']
 if not getattr(_bootstrap_sys, 'frozen', False):
     _missing = [m for m in _REQUIRED if not __import__('importlib.util', fromlist=['']).find_spec(m)]
     if _missing:
@@ -46,6 +79,7 @@ import time
 import urllib.parse
 import argparse
 import subprocess
+import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Union
 import aiohttp
@@ -114,7 +148,7 @@ from fastapi import (
     WebSocket,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from starlette.requests import HTTPConnection
 from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, create_engine, select
@@ -150,59 +184,62 @@ SESSION_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days — keeps PWA users signed in
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0") == "1"
 
 # ---------------------------------------------------------------------------
-# License Validation (Polar.sh)
+# Secrets-at-rest encryption
 # ---------------------------------------------------------------------------
-_POLAR_ORGANIZATION_ID = "31922b29-6a70-4b6e-89ba-a3a8d41bd422"
-_LICENSE_FILE = DATA_DIR / ".license"
-_GRACE_FILE = DATA_DIR / ".license_grace"
-_LICENSE_VALID: bool = False
+from cryptography.fernet import Fernet, InvalidToken
 
-async def _polar_validate(key: str) -> bool:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(
-                "https://api.polar.sh/v1/customer-portal/license-keys/validate",
-                json={"key": key.strip(), "organization_id": _POLAR_ORGANIZATION_ID},
-                headers={"Accept": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as r:
-                return r.status == 200
-    except Exception:
-        return False
+_VENVY_KEY_FILE = DATA_DIR / ".venvy_key"
+_ENC_PREFIX = "enc:v1:"
+_fernet_instance: Optional[Fernet] = None
 
-def _load_stored_key() -> Optional[str]:
-    return _LICENSE_FILE.read_text().strip() if _LICENSE_FILE.exists() else None
 
-async def _validate_startup_license() -> None:
-    global _LICENSE_VALID
-    
-    if DEVELOPMENT_MODE:
-        _LICENSE_VALID = True
-        return
+def _get_fernet() -> Fernet:
+    """Return a process-wide Fernet instance, generating the local key on first run.
 
-    key = _load_stored_key()
-    if not key:
-        _LICENSE_VALID = False
-        return
-    
-    valid = await _polar_validate(key)
-    if valid:
-        _GRACE_FILE.write_text(str(time.time()))
-        _LICENSE_VALID = True
-        return
-    
-    # Offline grace period check (7 days)
-    if _GRACE_FILE.exists():
+    The key never leaves this host, is never logged, and is never returned in
+    any API response. Back it up alongside data.db (see module docstring).
+    """
+    global _fernet_instance
+    if _fernet_instance is not None:
+        return _fernet_instance
+    if not _VENVY_KEY_FILE.exists():
+        raw_key = base64.urlsafe_b64encode(secrets.token_bytes(32))
+        _VENVY_KEY_FILE.write_bytes(raw_key)
         try:
-            age = time.time() - float(_GRACE_FILE.read_text())
-            if age < 60 * 60 * 24 * 7:
-                logging.warning("License server unreachable — grace period active.")
-                _LICENSE_VALID = True
-                return
+            _VENVY_KEY_FILE.chmod(0o600)
         except Exception:
             pass
-            
-    _LICENSE_VALID = False
+    else:
+        try:
+            _VENVY_KEY_FILE.chmod(0o600)
+        except Exception:
+            pass
+    _fernet_instance = Fernet(_VENVY_KEY_FILE.read_bytes())
+    return _fernet_instance
+
+
+def _encrypt_secret(plaintext: str) -> str:
+    """Encrypt *plaintext* for storage. Empty string stays empty (nothing to protect)."""
+    if not plaintext:
+        return ""
+    token = _get_fernet().encrypt(plaintext.encode("utf-8")).decode("ascii")
+    return _ENC_PREFIX + token
+
+
+def _decrypt_secret(stored: str) -> str:
+    """Decrypt a value written by _encrypt_secret. Tolerates legacy plaintext values
+    (i.e. rows written before encryption was introduced) by returning them unchanged."""
+    if not stored:
+        return ""
+    if not stored.startswith(_ENC_PREFIX):
+        return stored
+    token = stored[len(_ENC_PREFIX):]
+    try:
+        return _get_fernet().decrypt(token.encode("ascii")).decode("utf-8")
+    except (InvalidToken, Exception):
+        logging.error("Failed to decrypt a stored secret — the .venvy_key file may be missing or changed.")
+        return ""
+
 
 # Tracks all PIDs launched in the current Venvy session to ensure 
 # reliable cleanup even if DB state is out of sync. {app_id: pid}
@@ -228,12 +265,19 @@ IP_ALLOWLIST: Optional[Set[str]] = (
 
 
 def _resolve_client_ip(request: Union[Request, HTTPConnection]) -> str:
-    """Helper to resolve the real client IP, considering X-Forwarded-For."""
-    ip = ""
-    # Prefer X-Forwarded-For set by trusted proxy (e.g. cloudflared)
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        ip = xff.split(",")[0].strip()
+    """Helper to resolve the real client IP.
+
+    Venvy is designed to be reached through a Cloudflare Tunnel, so we trust
+    `CF-Connecting-IP` — a header Cloudflare's edge sets itself and overwrites
+    on the way in, which a client cannot forge. We deliberately do NOT trust
+    `X-Forwarded-For`: Cloudflare's edge only *appends* to that header rather
+    than replacing it, so the first entry can still be whatever a client
+    chose to send, which would let someone bypass the IP allowlist and the
+    login lockout just by setting that header themselves. If a request has
+    no `CF-Connecting-IP` (i.e. it didn't come through the tunnel), fall back
+    to the raw TCP connection IP, which cannot be spoofed either.
+    """
+    ip = (request.headers.get("cf-connecting-ip", "") or "").strip()
     if not ip and request.client:
         ip = (request.client.host or "").strip()
     return ip or "unknown"
@@ -257,15 +301,28 @@ def check_ip_allowlist(request: HTTPConnection) -> None:
 def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
+
+def audit_log(username: str, action: str, detail: str = "") -> None:
+    """Lightweight audit trail — logs who did what. No dedicated table; these are
+    plain INFO log lines an operator can grep/ship to their own log aggregator."""
+    suffix = f" — {detail}" if detail else ""
+    logging.info(f"AUDIT: user={username!r} action={action}{suffix}")
+
 # Tracks exactly when this Venvy instance started up.
 _VENVY_BOOT_TIME = utc_now()
+
+
+VALID_ROLES = ("admin", "operator", "viewer")
 
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(unique=True, index=True)
     password_hash: str
-    is_admin: bool = Field(default=False)
+    # "admin"    — manage users, manage system settings, full app CRUD
+    # "operator" — full app CRUD, no user/system-setting management
+    # "viewer"   — read-only: status, logs, metrics
+    role: str = Field(default="operator")
     created_at: datetime.datetime = Field(default_factory=utc_now)
     totp_secret: Optional[str] = Field(default=None)   # None = TOTP disabled
     totp_enabled: bool = Field(default=False)
@@ -280,7 +337,7 @@ class UserSession(SQLModel, table=True):
 
 class App(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(index=True)
+    user_id: int = Field(index=True)  # "created_by" audit field only — not used for access control
     name: str = Field(index=True)
     slug: str
     runtime: str = Field(default="python")
@@ -314,6 +371,14 @@ class App(SQLModel, table=True):
     env_json: str = Field(default="{}")
     healthcheck_path: Optional[str] = Field(default=None)
     url_source_pref: str = Field(default="local")  # "local" or "public"
+
+    # Resource isolation — enforced via systemd-run when available (see start_app_process_logic).
+    # Nullable = unlimited; new apps default to a sane cap.
+    memory_limit_mb: Optional[int] = Field(default=512)
+    cpu_limit_percent: Optional[int] = Field(default=50)
+    # Set when the app is launched under a systemd scope, so stop/kill logic knows
+    # to use `systemctl stop` instead of (or in addition to) signal-based teardown.
+    systemd_scope: Optional[str] = Field(default=None)
 
 
 class SystemSetting(SQLModel, table=True):
@@ -356,7 +421,10 @@ def create_db_and_tables() -> None:
         "ALTER TABLE app ADD COLUMN runtime VARCHAR DEFAULT 'python'",
         "ALTER TABLE app ADD COLUMN url_source_pref VARCHAR DEFAULT 'local'",
         "ALTER TABLE cfroute ADD COLUMN local_port INTEGER",
-        "ALTER TABLE app ADD COLUMN manual_ports VARCHAR DEFAULT '[]'"
+        "ALTER TABLE app ADD COLUMN manual_ports VARCHAR DEFAULT '[]'",
+        "ALTER TABLE app ADD COLUMN memory_limit_mb INTEGER DEFAULT 512",
+        "ALTER TABLE app ADD COLUMN cpu_limit_percent INTEGER DEFAULT 50",
+        "ALTER TABLE app ADD COLUMN systemd_scope VARCHAR",
     ]
     
     with engine.begin() as conn:
@@ -364,10 +432,37 @@ def create_db_and_tables() -> None:
             try:
                 conn.exec_driver_sql(sql)
             except Exception as e:
-                # Silently ignore "duplicate column" errors (expected on subsequent runs)
+                # Silently ignore "duplicate column" errors (expected on subsequent runs).
+                # Anything else is a genuine, unexpected migration failure an operator
+                # would want to know about, so it's still logged at warning level.
                 err_msg = str(e).lower()
                 if "duplicate column" not in err_msg and "already exists" not in err_msg:
                     logging.warning(f"Migration failed: {sql} -> {e}")
+
+        # The `role` column is added separately so we can tell whether it was *just*
+        # added (i.e. this is an upgrade from a pre-role schema) and, if so, backfill
+        # it once from the legacy `is_admin` boolean. On a brand-new DB the column
+        # already exists (created by create_all() above), so this ALTER is a no-op
+        # duplicate-column error and no backfill runs.
+        role_col_is_new = False
+        try:
+            conn.exec_driver_sql("ALTER TABLE user ADD COLUMN role VARCHAR DEFAULT 'operator'")
+            role_col_is_new = True
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "duplicate column" not in err_msg and "already exists" not in err_msg:
+                logging.warning(f"Migration failed: add user.role -> {e}")
+
+        if role_col_is_new:
+            try:
+                cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(user)").fetchall()]
+                if "is_admin" in cols:
+                    conn.exec_driver_sql(
+                        "UPDATE user SET role = CASE WHEN is_admin = 1 THEN 'admin' ELSE 'operator' END"
+                    )
+                    logging.info("Migrated existing users from is_admin to the new role-based access model.")
+            except Exception as e:
+                logging.warning(f"Role backfill from legacy is_admin failed (existing users default to 'operator'): {e}")
 
     APPS_BASE_DIR.mkdir(exist_ok=True)
 
@@ -530,8 +625,16 @@ def get_current_user(request: Request, session: Session = Depends(get_session)) 
 
 
 def check_admin(user: User = Depends(get_current_user)) -> User:
-    if not user.is_admin:
+    if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin privileges required.")
+    return user
+
+
+def require_operator(user: User = Depends(get_current_user)) -> User:
+    """Dependency for any endpoint that mutates apps (start/stop/delete/edit files/
+    packages/tunnels). Admins and operators may proceed; viewers are read-only."""
+    if user.role not in ("admin", "operator"):
+        raise HTTPException(status_code=403, detail="Operator or admin privileges required.")
     return user
 
 
@@ -589,7 +692,7 @@ def _build_app_env(db_app: App) -> Dict[str, str]:
     """Build the environment dict for a managed app process."""
     env = os.environ.copy()
     try:
-        app_env = json.loads(db_app.env_json or "{}")
+        app_env = json.loads(_decrypt_secret(db_app.env_json) or "{}")
         if isinstance(app_env, dict):
             for k, v in app_env.items():
                 env[str(k)] = str(v)
@@ -699,6 +802,28 @@ async def _pid_alive_async(pid: int) -> bool:
     return await loop.run_in_executor(None, _pid_alive, pid)
 
 
+_SYSTEMD_AVAILABLE: Optional[bool] = None
+
+
+def _systemd_run_available() -> bool:
+    """Best-effort check that `systemd-run`/`systemctl` exist and systemd is PID 1's
+    init (i.e. we're actually on a systemd Linux host). Cached after first check."""
+    global _SYSTEMD_AVAILABLE
+    if _SYSTEMD_AVAILABLE is None:
+        _SYSTEMD_AVAILABLE = bool(
+            shutil.which("systemd-run")
+            and shutil.which("systemctl")
+            and Path("/run/systemd/system").exists()
+        )
+        if not _SYSTEMD_AVAILABLE:
+            logging.warning(
+                "systemd-run is not available on this host — apps will launch without "
+                "per-app CPU/memory limits (expected on non-Linux hosts or containers "
+                "without systemd; fine for local dev/testing)."
+            )
+    return _SYSTEMD_AVAILABLE
+
+
 async def start_app_process_logic(app_id: int, session: Session) -> App:
     db_app = session.get(App, app_id)
     if not db_app:
@@ -782,8 +907,21 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
                     env["APP_PORT"] = str(new_port)
                     env["PORT"] = str(new_port)
 
+        unit_name = f"venvy-app-{app_id}"
+        launch_cmd = cmd
+        used_systemd_scope = False
+        if await asyncio.to_thread(_systemd_run_available):
+            scope_cmd = ["systemd-run", "--scope", "--quiet", f"--unit={unit_name}"]
+            if db_app.memory_limit_mb:
+                scope_cmd += ["-p", f"MemoryMax={db_app.memory_limit_mb}M"]
+            if db_app.cpu_limit_percent:
+                scope_cmd += ["-p", f"CPUQuota={db_app.cpu_limit_percent}%"]
+            scope_cmd += ["--"] + cmd
+            launch_cmd = scope_cmd
+            used_systemd_scope = True
+
         process = await asyncio.create_subprocess_exec(
-            *cmd,
+            *launch_cmd,
             cwd=str(app_dir),
             stdin=asyncio.subprocess.PIPE if stdin_data else None,
             stdout=asyncio.subprocess.PIPE,
@@ -801,9 +939,13 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
         db_app.status = "running"
         db_app.last_start_time = utc_now()
         db_app.last_exit_code = None
+        db_app.systemd_scope = unit_name if used_systemd_scope else None
         session.add(db_app)
         session.commit()
-        logging.info(f"App '{db_app.name}' started (PID {process.pid})")
+        logging.info(
+            f"App '{db_app.name}' started (PID {process.pid})"
+            + (f" under systemd scope '{unit_name}.scope'" if used_systemd_scope else " (no resource isolation)")
+        )
         
         async def _reap_process(proc: asyncio.subprocess.Process, _app_id: int):
             try:
@@ -815,6 +957,7 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
                         if app_to_reap and app_to_reap.pid == proc.pid:
                             app_to_reap.status = "stopped"
                             app_to_reap.pid = None
+                            app_to_reap.systemd_scope = None
                             app_to_reap.last_exit_code = rc
                             app_to_reap.last_stop_time = utc_now()
                             s.add(app_to_reap)
@@ -932,6 +1075,25 @@ async def stop_app_process_logic(app_id: int, session: Session, manual: bool = F
     pid = db_app.pid
     logging.info(f"Stopping app '{db_app.name}' (PID {pid})")
 
+    if db_app.systemd_scope:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "systemctl", "stop", f"{db_app.systemd_scope}.scope",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, sd_stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode != 0:
+                logging.debug(
+                    f"systemctl stop {db_app.systemd_scope}.scope: "
+                    f"{sd_stderr.decode(errors='replace').strip()}"
+                )
+        except Exception as exc:
+            logging.warning(f"systemctl stop failed for {db_app.systemd_scope}.scope: {exc}")
+
+    # Always also run the signal-based teardown as a fallback/complement — the scope
+    # unit shares the same PID (systemd-run --scope execs in place), so this is a
+    # safe no-op if `systemctl stop` above already tore it down.
     try:
         await _kill_pid_tree(pid)
     except Exception as exc:
@@ -939,6 +1101,7 @@ async def stop_app_process_logic(app_id: int, session: Session, manual: bool = F
 
     db_app.status = "stopped"
     db_app.pid = None
+    db_app.systemd_scope = None
     db_app.last_stop_time = utc_now()
     db_app.last_exit_code = -15
 
@@ -1220,10 +1383,14 @@ class TerminalManager:
         app_id: int,
         session: Session,
         user_id: int,
+        user_role: str,
     ) -> None:
+        if user_role not in ("admin", "operator"):
+            await websocket.close(code=1008, reason="Operator or admin privileges required for terminal access.")
+            return
         db_app = session.get(App, app_id)
-        if not db_app or db_app.user_id != user_id:
-            await websocket.close(code=1008, reason="App not found or access denied.")
+        if not db_app:
+            await websocket.close(code=1008, reason="App not found.")
             return
 
         jail_root = Path(db_app.app_dir).resolve()
@@ -1251,7 +1418,7 @@ class TerminalManager:
         }
         env: Dict[str, str] = {k: v for k, v in _raw_env.items() if v}
         try:
-            _extra = json.loads(db_app.env_json or "{}")
+            _extra = json.loads(_decrypt_secret(db_app.env_json) or "{}")
             if isinstance(_extra, dict):
                 for k, v in _extra.items():
                     env[str(k)] = str(v)
@@ -1594,7 +1761,6 @@ async def _ensure_rust() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
-    await _validate_startup_license()
     create_db_and_tables()
 
     await _ensure_python3_venv()
@@ -1775,41 +1941,6 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(CSRFMiddleware)
 
-class LicenseMiddleware(BaseHTTPMiddleware):
-    _EXEMPT = {"/api/license/status", "/api/license/activate", "/"}
-    async def dispatch(self, request, call_next):
-        if not _LICENSE_VALID and request.url.path not in self._EXEMPT:
-            if request.url.path.startswith("/api/"):
-                from fastapi.responses import JSONResponse
-                return JSONResponse({"detail": "License required."}, status_code=402)
-        return await call_next(request)
-
-app.add_middleware(LicenseMiddleware)
-
-class LicenseActivateReq(BaseModel):
-    key: str
-
-@app.get("/api/license/status")
-def license_status():
-    return {"valid": _LICENSE_VALID}
-
-@app.post("/api/license/activate")
-async def license_activate(req: LicenseActivateReq):
-    global _LICENSE_VALID
-    key = (req.key or "").strip()
-    if not key:
-        raise HTTPException(400, "No key provided.")
-    
-    valid = await _polar_validate(key)
-    if not valid:
-        raise HTTPException(402, "Invalid or expired license key.")
-    
-    _LICENSE_FILE.write_text(key)
-    _LICENSE_FILE.chmod(0o600)
-    _GRACE_FILE.write_text(str(time.time()))
-    _LICENSE_VALID = True
-    return {"ok": True}
-
 auth_router = APIRouter(
     prefix="/api/auth", tags=["auth"], dependencies=[Depends(check_ip_allowlist)]
 )
@@ -1832,15 +1963,27 @@ class AppUpdateReq(BaseModel):
     env_vars: Optional[Dict[str, str]] = None
     entrypoint: Optional[str] = None
     url_source_pref: Optional[str] = None
+    memory_limit_mb: Optional[int] = None
+    cpu_limit_percent: Optional[int] = None
 
 
 class SystemSettingReq(BaseModel):
     value: str
 
 
-def _app_safe(app_row: App) -> dict:
-    """Return App as dict — injects local_url + access_url + live metrics."""
+def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
+    """Return App as dict — injects local_url + access_url + live metrics.
+
+    env_json is encrypted at rest and holds real secrets (DB passwords, API
+    keys, etc. for the hosted app). reveal_secrets=False redacts it instead
+    of decrypting, for callers where the requester's role shouldn't see
+    plaintext env vars (e.g. a read-only viewer browsing the app list)."""
     d = app_row.model_dump()
+    if reveal_secrets:
+        d["env_json"] = _decrypt_secret(app_row.env_json) or "{}"
+    else:
+        d["env_json"] = "{}"
+        d["env_redacted"] = bool(app_row.env_json)
     local_url = f"http://{get_server_ipv4()}:{app_row.port}" if app_row.port else None
     d["local_url"] = local_url
     d["metrics"]   = _app_metrics.get(app_row.id, {"cpu": 0.0, "memory": 0})
@@ -1876,6 +2019,7 @@ class PackageReq(BaseModel):
 class UserReq(BaseModel):
     username: str
     password: str
+    role: Optional[str] = None
 
 
 class PwdReq(BaseModel):
@@ -1929,6 +2073,36 @@ def _clear_login_rate(key: str) -> None:
         _login_attempts.pop(key, None)
 
 
+# ---------------------------------------------------------------------------
+# General per-IP rate limiting for app-mutating endpoints
+# ---------------------------------------------------------------------------
+# Same sliding-window-of-attempts pattern as the login limiter above, but scoped
+# to a generous ceiling meant to catch a compromised/buggy frontend session or
+# script hammering the host, not to throttle normal interactive use.
+_mutation_hits: dict = {}
+_mutation_lock = threading.Lock()
+_MUTATION_MAX_PER_WINDOW = 60
+_MUTATION_WINDOW_SEC = 60
+
+
+def rate_limit_mutations(request: Request) -> None:
+    """Dependency: raise 429 if this IP has made too many mutating requests recently."""
+    key = _resolve_client_ip(request)
+    now = time.time()
+    with _mutation_lock:
+        hits = _mutation_hits.setdefault(key, [])
+        cutoff = now - _MUTATION_WINDOW_SEC
+        while hits and hits[0] < cutoff:
+            hits.pop(0)
+        if len(hits) >= _MUTATION_MAX_PER_WINDOW:
+            raise HTTPException(
+                429,
+                "Too many requests. Please slow down.",
+                headers={"X-Retry-After": str(_MUTATION_WINDOW_SEC)},
+            )
+        hits.append(now)
+
+
 class UserLoginReq(BaseModel):
     username: str
     password: str
@@ -1949,7 +2123,7 @@ def auth_status(request: Request, session: Session = Depends(get_session)):
         "user_exists": user_exists,
         "authenticated": user is not None,
         "username": user.username if user else None,
-        "is_admin": user.is_admin if user else False,
+        "role": user.role if user else None,
         "totp_enabled": user.totp_enabled if user else False,
     }
 
@@ -1962,7 +2136,7 @@ def auth_setup(payload: UserReq, request: Request, response: Response, session: 
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
-        is_admin=True,
+        role="admin",
     )
     session.add(user)
     session.commit()
@@ -1978,7 +2152,8 @@ def auth_setup(payload: UserReq, request: Request, response: Response, session: 
         "session", token, httponly=True, path="/",
         max_age=SESSION_TTL_SECONDS, samesite="lax", secure=SESSION_COOKIE_SECURE,
     )
-    return {"ok": True, "username": user.username, "is_admin": user.is_admin}
+    audit_log(user.username, "user_setup", "initial admin account created")
+    return {"ok": True, "username": user.username, "role": user.role}
 
 
 @auth_router.post("/login")
@@ -2029,7 +2204,7 @@ def login(
         samesite="lax",
         secure=SESSION_COOKIE_SECURE,
     )
-    return {"ok": True, "username": user.username, "is_admin": user.is_admin}
+    return {"ok": True, "username": user.username, "role": user.role}
 
 
 @auth_router.post("/logout")
@@ -2135,7 +2310,7 @@ def list_users(
     _: User = Depends(check_admin),
 ):
     return [
-        {"id": u.id, "username": u.username, "is_admin": u.is_admin}
+        {"id": u.id, "username": u.username, "role": u.role}
         for u in session.exec(select(User)).all()
     ]
 
@@ -2144,17 +2319,21 @@ def list_users(
 def create_user(
     req: UserReq,
     session: Session = Depends(get_session),
-    _: User = Depends(check_admin),
+    admin: User = Depends(check_admin),
 ):
     if session.exec(select(User).where(User.username == req.username)).first():
         raise HTTPException(400, "Username taken.")
     _validate_password_strength(req.password)
+    role = req.role or "operator"
+    if role not in VALID_ROLES:
+        raise HTTPException(400, f"role must be one of: {', '.join(VALID_ROLES)}")
     session.add(User(
         username=req.username,
         password_hash=hash_password(req.password),
-        is_admin=False,
+        role=role,
     ))
     session.commit()
+    audit_log(admin.username, "user_create", f"created user '{req.username}' with role '{role}'")
     return {"ok": True}
 
 
@@ -2168,21 +2347,13 @@ async def delete_user(
         raise HTTPException(400, "Cannot delete yourself.")
     user = session.get(User, user_id)
     if user:
-        for app_row in session.exec(select(App).where(App.user_id == user_id)).all():
-            if app_row.pid:
-                try:
-                    await _kill_pid_tree(app_row.pid)
-                except Exception:
-                    pass
-            _cancel_log_task(app_row.id)
-            cf_route = session.exec(select(CfRoute).where(CfRoute.app_id == app_row.id)).first()
-            if cf_route:
-                session.delete(cf_route)
-            if await asyncio.to_thread(Path(app_row.app_dir).exists):
-                await asyncio.to_thread(shutil.rmtree, app_row.app_dir, ignore_errors=True)
-            session.delete(app_row)
+        # Apps belong to the instance, not to individual users — deleting a user
+        # must never delete or stop any app. Only the account and its sessions go.
+        for db_session_row in session.exec(select(UserSession).where(UserSession.user_id == user_id)).all():
+            session.delete(db_session_row)
         session.delete(user)
         session.commit()
+        audit_log(current_user.username, "user_delete", f"deleted user '{user.username}' (id={user_id})")
     return {"ok": True}
 
 
@@ -2195,7 +2366,10 @@ def list_apps(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    apps = session.exec(select(App).where(App.user_id == user.id).order_by(App.name)).all()
+    # Apps belong to the instance, not to the logged-in user — every authenticated
+    # user sees every app (viewers are read-only; enforcement happens on the
+    # mutating routes below via require_operator).
+    apps = session.exec(select(App).order_by(App.name)).all()
     changed = False
     for app_row in apps:
         if app_row.status in ("starting", "stopping"):
@@ -2213,7 +2387,8 @@ def list_apps(
             changed = True
     if changed:
         session.commit()
-    return [_app_safe(a) for a in apps]
+    can_see_secrets = user.role in ("admin", "operator")
+    return [_app_safe(a, reveal_secrets=can_see_secrets) for a in apps]
 
 
 @api_router.get("/system/metrics")
@@ -2244,6 +2419,56 @@ def get_system_metrics(user: User = Depends(check_admin)):
     }
 
 
+@api_router.post("/system/backup")
+def create_backup(admin: User = Depends(check_admin)):
+    """Create a consistent point-in-time snapshot of data.db via SQLite's
+    VACUUM INTO. Safe to call while Venvy is running (WAL mode) — VACUUM INTO
+    reads the database inside its own read transaction, so it never sees a
+    half-written state, unlike a raw `cp` of the db file.
+
+    Does not touch apps/ — see the backup & restore notes at the top of this
+    file for the full procedure (this endpoint only covers the database).
+    """
+    backup_dir = DATA_DIR / "backups"
+    backup_dir.mkdir(exist_ok=True)
+    timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
+    dest = backup_dir / f"data-{timestamp}.db"
+
+    if dest.exists():
+        raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
+
+    try:
+        conn = sqlite3.connect(str(DB_FILE))
+        try:
+            conn.execute("VACUUM INTO ?", (str(dest),))
+        finally:
+            conn.close()
+    except Exception as e:
+        logging.error(f"Database backup failed: {e}")
+        if dest.exists():
+            dest.unlink(missing_ok=True)
+        raise HTTPException(500, f"Backup failed: {e}")
+
+    audit_log(admin.username, "system_backup", f"path={dest}")
+    return {"ok": True, "path": str(dest), "size_bytes": dest.stat().st_size}
+
+
+@api_router.get("/system/backups")
+def list_backups(admin: User = Depends(check_admin)):
+    """List existing database backups created via POST /api/system/backup."""
+    backup_dir = DATA_DIR / "backups"
+    if not backup_dir.exists():
+        return []
+    return sorted(
+        (
+            {"filename": f.name, "size_bytes": f.stat().st_size, "created_at": datetime.datetime.fromtimestamp(f.stat().st_mtime, tz=datetime.timezone.utc).isoformat()}
+            for f in backup_dir.glob("data-*.db")
+        ),
+        key=lambda b: b["created_at"],
+        reverse=True,
+    )
+
+
 @api_router.post("/apps/upload")
 async def upload_app(
     name: str = Form(...),
@@ -2254,7 +2479,8 @@ async def upload_app(
     files: Optional[List[UploadFile]] = File(None),
     requirements: Optional[UploadFile] = File(None),
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     if runtime not in ("python", "rust"):
         raise HTTPException(400, "runtime must be one of: python, rust")
@@ -2366,6 +2592,7 @@ async def upload_app(
     session.add(new_app)
     session.commit()
     session.refresh(new_app)
+    audit_log(user.username, "app_create", f"created app '{new_app.name}' (id={new_app.id})")
     return _app_safe(new_app)
 
 
@@ -2374,13 +2601,15 @@ async def control_app(
     app_id: int,
     action: str = Query(...),
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     if action not in ("start", "stop", "restart"):
         raise HTTPException(400, "Invalid action. Use: start | stop | restart")
+    audit_log(user.username, f"app_{action}", f"app '{app_row.name}' (id={app_id})")
 
     async def _do_start():
         try:
@@ -2463,10 +2692,11 @@ async def update_app(
     app_id: int,
     req: AppUpdateReq,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     if req.name is not None:
         name_clean = req.name.strip()
@@ -2519,7 +2749,8 @@ async def update_app(
         app_row.port = combined[0]
 
     if req.env_vars is not None:
-        app_row.env_json = json.dumps(req.env_vars)
+        app_row.env_json = _encrypt_secret(json.dumps(req.env_vars))
+        audit_log(user.username, "app_env_change", f"app '{app_row.name}' (id={app_id})")
     if req.entrypoint is not None:
         ep_strip = req.entrypoint.strip()
         if ep_strip == "":
@@ -2539,7 +2770,15 @@ async def update_app(
         if req.runtime not in ("python", "rust"):
             raise HTTPException(400, "runtime must be one of: python, rust")
         app_row.runtime = req.runtime
-    
+    if req.memory_limit_mb is not None:
+        if req.memory_limit_mb != 0 and not (16 <= req.memory_limit_mb <= 1_048_576):
+            raise HTTPException(400, "memory_limit_mb must be between 16 and 1048576 (or 0 for unlimited).")
+        app_row.memory_limit_mb = None if req.memory_limit_mb == 0 else req.memory_limit_mb
+    if req.cpu_limit_percent is not None:
+        if req.cpu_limit_percent != 0 and not (1 <= req.cpu_limit_percent <= 10000):
+            raise HTTPException(400, "cpu_limit_percent must be between 1 and 10000 (or 0 for unlimited).")
+        app_row.cpu_limit_percent = None if req.cpu_limit_percent == 0 else req.cpu_limit_percent
+
     app_row.updated_at = utc_now()
     session.add(app_row)
     session.commit()
@@ -2551,11 +2790,13 @@ async def update_app(
 async def delete_app(
     app_id: int,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
+    app_name = app_row.name
     _cancel_log_task(app_id)
     await stop_app_process_logic(app_id, session)
 
@@ -2592,6 +2833,7 @@ async def delete_app(
         await asyncio.to_thread(shutil.rmtree, app_row.app_dir, ignore_errors=True)
     session.delete(app_row)
     session.commit()
+    audit_log(user.username, "app_delete", f"deleted app '{app_name}' (id={app_id})")
     return {"ok": True}
 
 
@@ -2602,7 +2844,7 @@ def app_stats(
     user: User = Depends(get_current_user),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     stats: Dict = {"cpu": 0.0, "memory": 0.0, "uptime": 0.0}
     if app_row.pid and psutil:
@@ -2625,7 +2867,7 @@ def file_tree(
     user: User = Depends(get_current_user),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     root = Path(app_row.app_dir)
     target = (root / path).resolve()
@@ -2655,10 +2897,11 @@ async def file_operations(
     app_id: int,
     req: FileOpReq,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     root = Path(app_row.app_dir)
     target = (root / req.path).resolve()
@@ -2725,7 +2968,7 @@ async def download_file(
     user: User = Depends(get_current_user),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     root = Path(app_row.app_dir)
     target = (root / path).resolve()
@@ -2749,10 +2992,11 @@ async def upload_file_to_path(
     path: str = Form(""),
     files: List[UploadFile] = File(...),
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     root = Path(app_row.app_dir)
     target_dir = (root / path).resolve()
@@ -2793,7 +3037,7 @@ async def list_packages(
     user: User = Depends(get_current_user),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     
     if app_row.runtime == "rust":
@@ -2851,15 +3095,21 @@ async def install_package(
     app_id: int,
     req: PackageReq,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
         
     pkg_name = req.name.strip()
     
     if app_row.runtime == "rust":
+        # Same allow-list style as the Python path below — `cargo add` has no shell,
+        # so this is defense-in-depth rather than a shell-injection fix, but it keeps
+        # the validation consistent across runtimes and rejects obviously bogus input.
+        if not re.fullmatch(r"[A-Za-z0-9_.+\-]+(@[A-Za-z0-9_.+\-]+)?", pkg_name):
+            raise HTTPException(400, "Invalid package name.")
         manifest_path = Path(app_row.app_dir) / "Cargo.toml"
         proc = await asyncio.create_subprocess_exec(
             "cargo", "add", pkg_name, "--manifest-path", str(manifest_path),
@@ -2873,6 +3123,7 @@ async def install_package(
             raise HTTPException(500, "Cargo add timed out.")
         if proc.returncode != 0:
             raise HTTPException(500, f"Cargo add failed: {stderr.decode()}")
+        audit_log(user.username, "package_install", f"app '{app_row.name}' (id={app_id}): {pkg_name}")
         return {"ok": True}
 
     if app_row.runtime != "python":
@@ -2902,6 +3153,7 @@ async def install_package(
         raise HTTPException(500, "Install timed out after 5 minutes.")
     if proc.returncode != 0:
         raise HTTPException(500, f"Install failed: {stderr.decode()}")
+    audit_log(user.username, "package_install", f"app '{app_row.name}' (id={app_id}): {pkg_name}")
     return {"ok": True}
 
 
@@ -2910,13 +3162,16 @@ async def uninstall_package(
     app_id: int,
     name: str,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
         
     if app_row.runtime == "rust":
+        if not re.fullmatch(r"[A-Za-z0-9_.+\-]+", name):
+            raise HTTPException(400, "Invalid package name.")
         manifest_path = Path(app_row.app_dir) / "Cargo.toml"
         proc = await asyncio.create_subprocess_exec(
             "cargo", "remove", name, "--manifest-path", str(manifest_path),
@@ -2928,6 +3183,7 @@ async def uninstall_package(
         except asyncio.TimeoutError:
             proc.kill()
             raise HTTPException(502, f"Cargo remove failed: {stderr.decode()}")
+        audit_log(user.username, "package_uninstall", f"app '{app_row.name}' (id={app_id}): {name}")
         return {"ok": True}
 
     if app_row.runtime != "python":
@@ -2957,6 +3213,7 @@ async def uninstall_package(
         raise HTTPException(500, "Uninstall timed out.")
     if proc.returncode != 0:
         raise HTTPException(500, f"Uninstall failed: {stderr.decode()}")
+    audit_log(user.username, "package_uninstall", f"app '{app_row.name}' (id={app_id}): {name}")
     return {"ok": True}
 
 
@@ -2969,7 +3226,7 @@ async def get_app_logs(
 ):
     """Return the last *lines* lines of the app log (default 2000, max 10000)."""
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     log_file = Path(app_row.app_dir) / "logs" / "app.log"
     if not log_file.exists():
@@ -3001,10 +3258,11 @@ async def get_app_logs(
 async def clear_app_logs(
     app_id: int,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     log_file = Path(app_row.app_dir) / "logs" / "app.log"
     if log_file.exists():
@@ -3022,7 +3280,7 @@ async def scan_imports(
     import ast as _ast
 
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
 
     root = Path(app_row.app_dir)
@@ -3167,11 +3425,16 @@ async def system_ports(
 @api_router.get("/system/settings/{key}")
 def get_system_setting(
     key: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(check_admin),
     session: Session = Depends(get_session),
 ):
     setting = session.get(SystemSetting, key)
-    return {"key": key, "value": setting.value if setting else ""}
+    if not setting:
+        return {"key": key, "value": ""}
+    value = setting.value
+    if key.startswith("cf_"):
+        value = _decrypt_secret(value)
+    return {"key": key, "value": value}
 
 
 def _sanitize_cf_value(v: str) -> str:
@@ -3186,19 +3449,23 @@ def _sanitize_cf_value(v: str) -> str:
 def set_system_setting(
     key: str,
     req: SystemSettingReq,
-    _: User = Depends(get_current_user),
+    admin: User = Depends(check_admin),
     session: Session = Depends(get_session),
 ):
     value = req.value
     if key.startswith("cf_"):
         value = _sanitize_cf_value(value)
+        stored_value = _encrypt_secret(value)
+    else:
+        stored_value = value
     setting = session.get(SystemSetting, key)
     if setting:
-        setting.value = value
+        setting.value = stored_value
     else:
-        setting = SystemSetting(key=key, value=value)
+        setting = SystemSetting(key=key, value=stored_value)
     session.add(setting)
     session.commit()
+    audit_log(admin.username, "system_setting_change", f"key={key}")
     return {"ok": True, "stored_length": len(value)}
 
 
@@ -3210,7 +3477,7 @@ class BatchSettingItem(BaseModel):
 @api_router.post("/system/settings/batch")
 def set_system_settings_batch(
     items: List[BatchSettingItem],
-    _: User = Depends(get_current_user),
+    admin: User = Depends(check_admin),
     session: Session = Depends(get_session),
 ):
     """Save multiple settings in a single DB transaction."""
@@ -3218,19 +3485,23 @@ def set_system_settings_batch(
         value = item.value
         if item.key.startswith("cf_"):
             value = _sanitize_cf_value(value)
+            stored_value = _encrypt_secret(value)
+        else:
+            stored_value = value
         setting = session.get(SystemSetting, item.key)
         if setting:
-            setting.value = value
+            setting.value = stored_value
         else:
-            setting = SystemSetting(key=item.key, value=value)
+            setting = SystemSetting(key=item.key, value=stored_value)
         session.add(setting)
     session.commit()
+    audit_log(admin.username, "system_setting_change", f"batch keys={[i.key for i in items]}")
     return {"ok": True, "saved": len(items)}
 
 
 @api_router.post("/system/cloudflare/test")
 async def test_cf_credentials(
-    _: User = Depends(get_current_user),
+    _: User = Depends(check_admin),
     session: Session = Depends(get_session),
 ):
     """Verify saved Cloudflare integration credentials and permissions."""
@@ -3341,7 +3612,7 @@ async def test_cf_credentials(
 
 @api_router.get("/system/cloudflare/zones")
 async def list_cf_zones(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_operator),
     session: Session = Depends(get_session),
 ):
     """Return all active zones (domains) on the Cloudflare account."""
@@ -3410,16 +3681,13 @@ def _get_cf_creds(session: Session) -> dict:
     for k in keys:
         row = session.get(SystemSetting, k)
         raw = row.value if row else ""
-        result[k] = _sanitize_cf_value(raw)
+        decrypted = _decrypt_secret(raw) if raw else ""
+        result[k] = _sanitize_cf_value(decrypted)
     missing = [k for k, v in result.items() if not v]
     if missing:
         raise HTTPException(400, f"Cloudflare not configured. Missing: {', '.join(missing)}")
     tok = result["cf_api_token"]
-    logging.info(
-        f"CF creds: account={result['cf_account_id']!r} "
-        f"tunnel={result['cf_tunnel_id']!r} "
-        f"token_len={len(tok)} token_prefix={tok[:8]!r} token_suffix={tok[-4:]!r}"
-    )
+    logging.info(f"CF creds loaded: token_len={len(tok)}")
     return result
 
 
@@ -3430,7 +3698,7 @@ def list_cf_routes(
     user: User = Depends(get_current_user),
 ):
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     routes = session.exec(select(CfRoute).where(CfRoute.app_id == app_id)).all()
     return {
@@ -3617,7 +3885,7 @@ async def check_cf_hostname(
 ):
     """Pre-flight check before publishing a hostname."""
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
 
     clean = hostname.strip().lower().removeprefix("https://").removeprefix("http://").rstrip("/")
@@ -3677,11 +3945,12 @@ async def publish_cf_route(
     app_id: int,
     req: CfPublishReq,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     """Publish (or republish) an app route via Cloudflare Tunnel."""
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
     if not req.local_port:
         raise HTTPException(400, "Local port must be specified for Cloudflare tunnel mapping.")
@@ -3808,6 +4077,7 @@ async def publish_cf_route(
     app_row.external_url = f"https://{new_hostname}"
     session.add(app_row)
     session.commit()
+    audit_log(user.username, "tunnel_publish", f"app '{app_row.name}' (id={app_id}) -> {new_hostname}")
 
     return {
         "ok":            True,
@@ -3822,11 +4092,12 @@ async def unpublish_cf_route(
     app_id: int,
     local_port: int,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     """Remove public hostname route mapping from Cloudflare tunnel and DNS record."""
     app_row = session.get(App, app_id)
-    if not app_row or app_row.user_id != user.id:
+    if not app_row:
         raise HTTPException(404)
 
     route = session.exec(select(CfRoute).where(
@@ -3888,6 +4159,7 @@ async def unpublish_cf_route(
         session.add(app_row)
         
     session.commit()
+    audit_log(user.username, "tunnel_unpublish", f"app '{app_row.name}' (id={app_id})")
     return {"ok": True}
 
 
@@ -3915,9 +4187,14 @@ async def terminal_ws(
         await websocket.close(code=1008, reason="Session expired.")
         return
 
+    ws_user = session.get(User, db_session.user_id)
+    if not ws_user:
+        await websocket.close(code=1008, reason="User not found.")
+        return
+
     try:
         await terminal_manager.start_terminal(
-            websocket, app_id, session, db_session.user_id
+            websocket, app_id, session, db_session.user_id, ws_user.role
         )
     except Exception as exc:
         logging.error(f"WS terminal error: {exc}")
@@ -3933,6 +4210,32 @@ async def terminal_ws(
 
 app.include_router(auth_router)
 app.include_router(api_router)
+
+
+@app.get("/api/health")
+def health_check():
+    """Unauthenticated liveness check for external monitoring (uptime checks,
+    Cloudflare active health checks, systemd watchdogs, etc). Deliberately
+    outside api_router so it isn't subject to the IP allowlist or session
+    auth — a monitor needs to be able to reach this even if it can't log in.
+    Does a trivial DB round-trip so a wedged/corrupted database still shows
+    as unhealthy rather than a false "ok"."""
+    try:
+        with Session(engine) as s:
+            s.exec(select(SystemSetting).limit(1)).first()
+        db_ok = True
+    except Exception as e:
+        logging.error(f"Health check DB probe failed: {e}")
+        db_ok = False
+    status_code = 200 if db_ok else 503
+    return JSONResponse(
+        {
+            "ok": db_ok,
+            "status": "healthy" if db_ok else "degraded",
+            "uptime_seconds": int((utc_now() - _VENVY_BOOT_TIME).total_seconds()),
+        },
+        status_code=status_code,
+    )
 
 
 @app.get("/")

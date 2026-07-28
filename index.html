@@ -1034,6 +1034,15 @@
             background: rgba(240, 100, 90, 0.13);
             border-color: rgba(240, 100, 90, 0.28);
         }
+
+        /* Viewer role is read-only. This is a UX courtesy only — the backend
+           independently rejects these actions with 403, this just avoids
+           showing a control that would immediately error. */
+        body.role-viewer [data-requires-operator] {
+            opacity: 0.4;
+            pointer-events: none;
+            cursor: not-allowed;
+        }
     </style>
 
     <script>
@@ -1104,35 +1113,6 @@
         </button>
     </div>
 
-    <!-- License Screen -->
-    <div id="license-screen" class="fixed inset-0 z-[75] overflow-y-auto hidden">
-        <div class="min-h-full flex items-center justify-center p-4">
-            <div class="auth-card w-full max-w-sm p-9 relative fade-up">
-                <div class="relative text-center mb-8">
-                    <div class="flex items-center justify-center gap-0 mb-5">
-                        <h1 class="text-4xl brand-text" style="letter-spacing:-0.06em"><span style="color:var(--accent)">V</span>envy</h1>
-                    </div>
-                    <p class="text-sm mt-2" style="color:var(--text3)">Activate your license</p>
-                </div>
-                <div class="space-y-3">
-                    <input type="text" id="license-key" placeholder="VENVY-XXXX-XXXX-XXXX"
-                        class="inp w-full px-4 py-3.5 text-sm font-medium mono text-center">
-                    <button type="button" onclick="activateLicense()" id="license-activate-btn"
-                        class="btn-primary w-full py-4 text-sm font-semibold mt-1" style="border-radius:12px">
-                        Activate
-                    </button>
-                    <div id="license-error" class="hidden text-xs text-center px-3 py-2 rounded-lg"
-                        style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)">
-                    </div>
-                </div>
-                <div class="mt-5 text-center text-xs rounded-xl py-3 px-4"
-                    style="background:rgba(var(--accent-rgb),0.07);color:var(--text3);border:1px solid rgba(var(--accent-rgb),0.15)">
-                    Purchase a license at <a href="https://venvy.dev" target="_blank" class="underline">venvy.dev</a>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <!-- Auth / Login Screen -->
     <div id="auth-screen" class="fixed inset-0 z-[70] overflow-y-auto hidden">
         <div class="min-h-full flex items-center justify-center p-4">
@@ -1196,7 +1176,7 @@
 
             <!-- Actions -->
             <div class="px-3 py-3 shrink-0 space-y-1.5">
-                <button onclick="openModal('create-app-modal')"
+                <button onclick="openModal('create-app-modal')" data-requires-operator
                     class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition active:scale-95"
                     style="background:rgba(var(--accent-rgb),0.09);color:var(--accent-light);border:1px dashed rgba(var(--accent-rgb),0.3);letter-spacing:-0.01em">
                     <i data-feather="plus" class="w-4 h-4"></i> New Application
@@ -1648,15 +1628,15 @@
                     <div
                         class="flex items-center justify-between md:justify-end gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 scrollbar-hide">
                         <div class="flex gap-1.5">
-                            <button onclick="controlApp('start')" id="btn-start"
+                            <button onclick="controlApp('start')" id="btn-start" data-requires-operator
                                 class="p-2 rounded-lg transition disabled:opacity-40 active:scale-95"
                                 style="background:var(--green-dim);color:var(--green);border:1px solid var(--green-border)"
                                 title="Start"><i data-feather="play" class="w-4 h-4"></i></button>
-                            <button onclick="controlApp('restart')" id="btn-restart"
+                            <button onclick="controlApp('restart')" id="btn-restart" data-requires-operator
                                 class="p-2 rounded-lg transition disabled:opacity-40 active:scale-95"
                                 style="background:var(--amber-dim);color:var(--amber);border:1px solid var(--amber-border)"
                                 title="Restart"><i data-feather="refresh-cw" class="w-4 h-4"></i></button>
-                            <button onclick="controlApp('stop')" id="btn-stop"
+                            <button onclick="controlApp('stop')" id="btn-stop" data-requires-operator
                                 class="p-2 rounded-lg transition disabled:opacity-40 active:scale-95"
                                 style="background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)"
                                 title="Stop"><i data-feather="square" class="w-4 h-4"></i></button>
@@ -1676,7 +1656,7 @@
                     <!-- Scrollable tab buttons -->
                     <div
                         class="flex-1 min-w-0 px-4 md:px-6 flex gap-5 text-sm font-medium overflow-x-auto scrollbar-hide h-[44px]">
-                        <button class="tab-btn active h-full whitespace-nowrap"
+                        <button class="tab-btn active h-full whitespace-nowrap" data-requires-operator
                             onclick="switchTab('terminal')">Terminal</button>
                         <button class="tab-btn h-full whitespace-nowrap" onclick="switchTab('files')">Files</button>
                         <button class="tab-btn h-full whitespace-nowrap" onclick="switchTab('logs')">Logs</button>
@@ -1688,7 +1668,7 @@
 
                     <!-- Save Settings Button (Visible only on Settings tab) — outside scroll so always reachable -->
                     <div id="settings-save-container" class="hidden items-center px-3 shrink-0 h-[44px]">
-                        <button id="settings-save-btn" onclick="saveSettings()"
+                        <button id="settings-save-btn" onclick="saveSettings()" data-requires-operator
                             class="btn-primary px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-2 active:scale-95 disabled:opacity-50">
                             <span id="save-status-dot"
                                 class="w-1.5 h-1.5 rounded-full bg-orange-500 hidden animate-pulse"></span>
@@ -2433,7 +2413,7 @@
         </div>
     </div>
 
-    <!-- Users Modal -->
+<!-- Users Modal -->
     <div id="users-modal"
         class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0">
         <div class="modal-panel p-5 w-full max-w-2xl shadow-lg h-[80vh] md:h-[580px] flex flex-col">
@@ -2442,11 +2422,16 @@
                 <button onclick="closeModal('users-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
                         data-feather="x" class="w-4 h-4"></i></button>
             </div>
-            <div class="flex flex-col md:flex-row gap-3 mb-5 shrink-0">
-                <input type="text" id="new-user-name" placeholder="Username" class="inp flex-1 px-4 py-3 text-sm">
-                <input type="password" id="new-user-pwd" placeholder="Password" class="inp flex-1 px-4 py-3 text-sm">
-                <button onclick="createUser()" class="btn-primary px-6 py-3 md:py-0 text-sm rounded-xl">Add
-                    User</button>
+            <div class="flex flex-col md:flex-row gap-2.5 mb-5 shrink-0">
+                <input type="text" id="new-user-name" placeholder="Username" class="inp min-w-0 flex-1 px-3.5 py-3 text-sm">
+                <input type="password" id="new-user-pwd" placeholder="Password" class="inp min-w-0 flex-1 px-3.5 py-3 text-sm">
+                <select id="new-user-role" class="inp min-w-0 px-3 py-3 text-sm md:w-28 shrink-0">
+                    <option value="operator" selected>Operator</option>
+                    <option value="admin">Admin</option>
+                    <option value="viewer">Viewer</option>
+                </select>
+                <button onclick="createUser()"
+                    class="btn-primary shrink-0 whitespace-nowrap px-4 py-3 text-sm rounded-xl">Add User</button>
             </div>
             <div class="flex-1 overflow-y-auto rounded-xl" style="border:1px solid var(--border)">
                 <table class="w-full text-left text-sm">
@@ -2507,8 +2492,7 @@
                     style="color:var(--text)"></strong>?</p>
             <p class="text-xs mb-6 px-3 py-2.5 rounded-xl"
                 style="color:var(--red);background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.15)">
-                ⚠️ All of this user's applications, files, packages, and logs will be <strong>permanently
-                    deleted</strong>.
+                ⚠️ Deletion is <strong>permanent</strong>.
             </p>
             <div class="flex gap-3">
                 <button onclick="closeModal('delete-user-modal')"
@@ -3132,53 +3116,8 @@
         // ── Auth ─────────────────────────────────────────────────────────────────
         let _appInitialized = false;
 
-        async function activateLicense() {
-            const key = document.getElementById('license-key').value.trim();
-            const errEl = document.getElementById('license-error');
-            const btn = document.getElementById('license-activate-btn');
-            errEl.classList.add('hidden');
-            if (!key) { errEl.innerText = "Please enter a license key."; errEl.classList.remove('hidden'); return; }
-
-            btn.disabled = true;
-            btn.innerText = "Activating…";
-            try {
-                const res = await fetch(`${API}/license/activate`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key })
-                });
-                if (res.ok) {
-                    showToast('License activated!', 'success');
-                    checkAuth();
-                } else {
-                    const err = await res.json();
-                    errEl.innerText = err.detail || 'Activation failed.';
-                    errEl.classList.remove('hidden');
-                }
-            } catch (e) {
-                errEl.innerText = 'Network error during activation.';
-                errEl.classList.remove('hidden');
-            } finally {
-                btn.disabled = false;
-                btn.innerText = "Activate";
-            }
-        }
-
         async function checkAuth() {
             try {
-                // Pre-check License
-                const licRes = await fetch(`${API}/license/status`);
-                if (licRes.ok) {
-                    const licData = await licRes.json();
-                    if (!licData.valid) {
-                        document.getElementById('app-shell').classList.add('hidden');
-                        document.getElementById('auth-screen').classList.add('hidden');
-                        document.getElementById('license-screen').classList.remove('hidden');
-                        return;
-                    }
-                }
-                document.getElementById('license-screen').classList.add('hidden');
-
                 const res = await fetch(`${API}/auth/status`);
                 if (!res.ok) return;
                 const data = await res.json();
@@ -3189,7 +3128,8 @@
                     document.getElementById('current-user').innerText = data.username;
                     document.getElementById('user-avatar').innerText = (data.username || 'U')[0].toUpperCase();
                     currentUser = data;
-                    if (data.is_admin) document.getElementById('admin-users-btn').classList.remove('hidden');
+                    if (data.role === 'admin') document.getElementById('admin-users-btn').classList.remove('hidden');
+                    applyRoleUiGating(data.role);
                     if (!_appInitialized) {
                         _appInitialized = true;
                         initAceEditor();
@@ -3210,6 +3150,14 @@
             } catch (e) {
                 // Network error — don't log out, just leave current state
             }
+        }
+
+        // Viewers are read-only: the backend already rejects mutating requests from
+        // a viewer role (403), this just hides the controls so they don't hit that
+        // error in the first place. Not a security boundary — the API checks are.
+        function applyRoleUiGating(role) {
+            const isViewer = role === 'viewer';
+            document.body.classList.toggle('role-viewer', isViewer);
         }
 
         // Called when polling detects session has expired (3 consecutive 401s).
@@ -3525,6 +3473,11 @@
         }
 
         // ── Users ─────────────────────────────────────────────────────────────────
+        const _ROLE_BADGE = {
+            admin:    'background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.2)',
+            operator: '',
+            viewer:   'background:rgba(148,163,184,0.15);color:#94a3b8;border:1px solid rgba(148,163,184,0.2)',
+        };
         async function openUsersModal() { openModal('users-modal'); loadUsers(); }
         async function loadUsers() {
             try {
@@ -3532,22 +3485,28 @@
                 if (!res.ok) return;
                 const users = await res.json();
                 const listEl = document.getElementById('users-list');
-                listEl.innerHTML = users.map(u => `
+                listEl.innerHTML = users.map(u => {
+                    const isSelf = currentUser && u.username === currentUser.username;
+                    const badgeStyle = _ROLE_BADGE[u.role] ?? '';
+                    const roleLabel = u.role ? u.role.charAt(0).toUpperCase() + u.role.slice(1) : 'Operator';
+                    return `
             <tr class="transition" style="border-color:var(--border)">
                 <td class="px-5 py-3.5 font-medium text-sm" style="color:var(--text)">${escapeHtml(u.username)}</td>
-                <td class="px-5 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${u.is_admin ? '' : 'status-stopped'}" style="${u.is_admin ? 'background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.2)' : ''}">${u.is_admin ? 'Admin' : 'User'}</span></td>
+                <td class="px-5 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${u.role === 'operator' ? 'status-stopped' : ''}" style="${badgeStyle}">${roleLabel}</span></td>
                 <td class="px-5 py-3.5 text-right">
-                    ${!u.is_admin ? `<button data-uid="${u.id}" data-uname="${escapeHtml(u.username)}" class="user-del-btn btn-danger text-xs px-3 py-1.5 rounded-lg font-bold">Delete</button>` : ''}
+                    ${!isSelf ? `<button data-uid="${u.id}" data-uname="${escapeHtml(u.username)}" class="user-del-btn btn-danger text-xs px-3 py-1.5 rounded-lg font-bold">Delete</button>` : ''}
                 </td>
-            </tr>`).join('');
+            </tr>`;
+                }).join('');
                 listEl.querySelectorAll('.user-del-btn').forEach(btn => btn.addEventListener('click', () => deleteUser(Number(btn.dataset.uid), btn.dataset.uname)));
             } catch (e) { showToast('Failed to load users.', 'error'); }
         }
         async function createUser() {
             const u = document.getElementById('new-user-name').value.trim();
             const p = document.getElementById('new-user-pwd').value.trim();
+            const role = document.getElementById('new-user-role').value;
             if (!u || !p) { showToast('Fill in both username and password.', 'warn'); return; }
-            const res = await fetch(`${API}/users`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
+            const res = await fetch(`${API}/users`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p, role }) });
             if (res.ok) { document.getElementById('new-user-name').value = ''; document.getElementById('new-user-pwd').value = ''; showToast('User created.', 'success'); loadUsers(); }
             else { const e = await res.json().catch(() => ({ detail: 'Failed' })); showToast('Error: ' + (e.detail || 'Failed'), 'error'); }
         }
@@ -3831,10 +3790,13 @@
                 document.getElementById('setting-policy').value = app.restart_policy || 'never';
                 document.getElementById('setting-boot').checked = app.start_on_boot;
                 document.getElementById('setting-port').value = app.port || '';
-                document.getElementById('setting-env').value = (() => {
-                    try { return JSON.stringify(JSON.parse(app.env_json || '{}'), null, 2); }
-                    catch (e) { return app.env_json || '{}'; }
-                })();
+                document.getElementById('setting-env').value = app.env_redacted
+                    ? '// Hidden — operator or admin access is required to view or edit environment variables.'
+                    : (() => {
+                        try { return JSON.stringify(JSON.parse(app.env_json || '{}'), null, 2); }
+                        catch (e) { return app.env_json || '{}'; }
+                    })();
+                document.getElementById('setting-env').readOnly = !!app.env_redacted;
                 document.getElementById('setting-name').value = app.name || '';
                 if (document.getElementById('setting-runtime')) {
                     document.getElementById('setting-runtime').value = app.runtime || 'python';
