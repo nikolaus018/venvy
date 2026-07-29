@@ -1007,13 +1007,13 @@ async def _kill_pid_tree(pid: int) -> None:
                 pass
         return list(set(res))
 
-    async def _wait_dead(p: int, timeout_s: float) -> bool:
+    async def _wait_all_dead(pids: List[int], timeout_s: float) -> bool:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if not _pid_alive(p):
+            if not any(_pid_alive(p) for p in pids):
                 return True
             await asyncio.sleep(0.05)
-        return not _pid_alive(p)
+        return not any(_pid_alive(p) for p in pids)
 
     async def _sig_pgid(pgid: int, sig: int) -> None:
         try:
@@ -1030,31 +1030,36 @@ async def _kill_pid_tree(pid: int) -> None:
     _SIGTERM_GRACE = 1.0
     _SIGKILL_WAIT  = 0.5
 
+    # Snapshot the full descendant tree up front. A wrapper process (npm, a shell
+    # script, a dev-server launcher) can die from SIGTERM before its own child
+    # does — if we only waited on the leader pid, we'd declare victory and skip
+    # SIGKILL while a descendant is still alive and holding the port.
+    pids = await asyncio.to_thread(_get_pids_to_kill, pid)
+
     try:
         pgid = os.getpgid(pid)
         # CRITICAL BUGFIX: Ensure we never call killpg on Venvy's own PGID
         if pgid > 0 and pgid != os.getpgid(0):
             await _sig_pgid(pgid, signal.SIGTERM)
-            if await _wait_dead(pid, _SIGTERM_GRACE):
+            if await _wait_all_dead(pids, _SIGTERM_GRACE):
                 return
             await _sig_pgid(pgid, signal.SIGKILL)
-            await _wait_dead(pid, _SIGKILL_WAIT)
+            await _wait_all_dead(pids, _SIGKILL_WAIT)
             return
     except Exception:
         pass
 
     # Fallback to individual process teardown if session/PGID check failed
-    pids = await asyncio.to_thread(_get_pids_to_kill, pid)
-    for p in pids: 
+    for p in pids:
         await _sig_pid(p, signal.SIGTERM)
-        
-    if await _wait_dead(pid, _SIGTERM_GRACE):
+
+    if await _wait_all_dead(pids, _SIGTERM_GRACE):
         return
 
     for p in pids:
         if _pid_alive(p):
             await _sig_pid(p, signal.SIGKILL)
-    await _wait_dead(pid, _SIGKILL_WAIT)
+    await _wait_all_dead(pids, _SIGKILL_WAIT)
 
 
 async def stop_app_process_logic(app_id: int, session: Session, manual: bool = False) -> None:
