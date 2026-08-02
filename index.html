@@ -20,6 +20,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Venvy">
+    <meta name="apple-mobile-web-app-orientations" content="portrait">
 
     <!-- Prevent phone number detection -->
     <meta name="format-detection" content="telephone=no">
@@ -48,6 +49,56 @@
                 link.rel = 'apple-touch-icon';
                 link.href = c.toDataURL('image/png');
                 document.currentScript.parentNode.appendChild(link);
+            } catch (e) { }
+
+            // Generate iOS startup images for the installed PWA splash screen.
+            try {
+                const splashSpecs = [
+                    [320, 568, '(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2)'],
+                    [320, 480, '(device-width: 320px) and (device-height: 480px) and (-webkit-device-pixel-ratio: 1)'],
+                    [375, 667, '(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2)'],
+                    [375, 812, '(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3)'],
+                    [390, 844, '(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)'],
+                    [393, 852, '(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3)'],
+                    [414, 736, '(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3)'],
+                    [414, 896, '(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2)'],
+                    [414, 896, '(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3)'],
+                    [402, 874, '(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3)'],
+                    [428, 926, '(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3)'],
+                    [430, 932, '(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3)'],
+                    [440, 956, '(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3)'],
+                    [768, 1024, '(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 1)'],
+                    [834, 1112, '(device-width: 834px) and (device-height: 1112px) and (-webkit-device-pixel-ratio: 2)'],
+                    [1024, 1366, '(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2)'],
+                ];
+                const drawSplashCanvas = (w, h) => {
+                    const c = document.createElement('canvas');
+                    c.width = w;
+                    c.height = h;
+                    const ctx = c.getContext('2d');
+                    const bg = ctx.createLinearGradient(0, 0, w, h);
+                    bg.addColorStop(0, '#090b0f');
+                    bg.addColorStop(1, '#0c111c');
+                    ctx.fillStyle = bg;
+                    ctx.fillRect(0, 0, w, h);
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = Math.max(18, Math.round(w * 0.072));
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.beginPath();
+                    ctx.moveTo(w * 0.24, h * 0.34);
+                    ctx.lineTo(w * 0.5, h * 0.62);
+                    ctx.lineTo(w * 0.76, h * 0.34);
+                    ctx.stroke();
+                    return c.toDataURL('image/png');
+                };
+                splashSpecs.forEach(([w, h, media]) => {
+                    const link = document.createElement('link');
+                    link.rel = 'apple-touch-startup-image';
+                    link.href = drawSplashCanvas(w, h);
+                    link.media = media;
+                    document.currentScript.parentNode.appendChild(link);
+                });
             } catch (e) { }
 
             // Inject manifest as blob — richer than before, proper PNG icon via canvas
@@ -1940,7 +1991,7 @@
                         class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
                         <div class="max-w-3xl mx-auto">
                             <!-- Install input -->
-                            <div class="flex gap-3 mb-5 flex-col md:flex-row">
+                            <div id="pkg-install-controls" class="flex gap-3 mb-5 flex-col md:flex-row">
                                 <input type="text" id="pkg-input" placeholder="Package name, e.g. numpy==1.26"
                                     class="inp flex-1 px-4 py-3 text-sm"
                                     onkeydown="if(event.key==='Enter') installPackage()">
@@ -1949,7 +2000,7 @@
                             </div>
 
                             <!-- Auto-scan -->
-                            <div class="card overflow-hidden mb-5">
+                            <div id="pkg-auto-scan-card" class="card overflow-hidden mb-5">
                                 <div class="flex items-center justify-between px-5 py-4"
                                     style="border-bottom:1px solid var(--border)">
                                     <div>
@@ -1995,7 +2046,7 @@
                                         <tr>
                                             <th class="px-4 md:px-6 py-3.5 font-bold">Library</th>
                                             <th class="px-2 md:px-6 py-3.5 font-bold hidden sm:table-cell">Version</th>
-                                            <th class="px-3 md:px-6 py-3.5 text-right font-bold">Action</th>
+                                            <th id="pkg-action-header" class="px-3 md:px-6 py-3.5 text-right font-bold">Action</th>
                                         </tr>
                                     </thead>
                                     <tbody id="pkg-list" class="divide-y" style="border-color:var(--border)">
@@ -5105,27 +5156,59 @@
             };
         })();
 
+        function _isPythonPackageRuntime() {
+            return (activeApp?.runtime || 'python') === 'python';
+        }
+
+        function _syncPackagesTabRuntimeUi() {
+            const isPythonRuntime = _isPythonPackageRuntime();
+            const installControls = document.getElementById('pkg-install-controls');
+            const autoScanCard = document.getElementById('pkg-auto-scan-card');
+            const actionHeader = document.getElementById('pkg-action-header');
+            const scanResults = document.getElementById('scan-results');
+            const scanMissingSection = document.getElementById('scan-missing-section');
+            const scanOkSection = document.getElementById('scan-ok-section');
+
+            if (installControls) installControls.classList.toggle('hidden', !isPythonRuntime);
+            if (autoScanCard) autoScanCard.classList.toggle('hidden', !isPythonRuntime);
+            if (actionHeader) actionHeader.classList.toggle('hidden', !isPythonRuntime);
+            if (scanResults) scanResults.classList.add('hidden');
+            if (scanMissingSection) scanMissingSection.classList.add('hidden');
+            if (scanOkSection) scanOkSection.classList.add('hidden');
+        }
+
         async function loadPackages() {
             const tbody = document.getElementById('pkg-list');
-            tbody.innerHTML = `<tr><td colspan="3" class="text-center py-8 text-sm" style="color:var(--text3)">Fetching environment...</td></tr>`;
+            const isPythonRuntime = _isPythonPackageRuntime();
+            _syncPackagesTabRuntimeUi();
+            tbody.innerHTML = `<tr><td colspan="${isPythonRuntime ? 3 : 2}" class="text-center py-8 text-sm" style="color:var(--text3)">Fetching environment...</td></tr>`;
             try {
                 const res = await fetch(`${API}/apps/${activeAppId}/packages`);
-                if (!res.ok) { tbody.innerHTML = `<tr><td colspan="3" class="text-center py-8 text-sm" style="color:var(--red)">Failed to load packages.</td></tr>`; return; }
+                if (!res.ok) {
+                    tbody.innerHTML = `<tr><td colspan="${isPythonRuntime ? 3 : 2}" class="text-center py-8 text-sm" style="color:var(--red)">Failed to load packages.</td></tr>`;
+                    return;
+                }
                 const pkgs = await res.json();
-                tbody.innerHTML = pkgs.map(p => `
+                tbody.innerHTML = pkgs.map(p => {
+                    const rowHtml = `
             <tr class="transition" style="border-color:var(--border)">
                 <td class="px-4 md:px-5 py-3 mono font-medium text-xs md:text-sm" style="color:var(--blue)">${escapeHtml(p.name)}</td>
                 <td class="px-2 md:px-5 py-3 text-xs mono hidden sm:table-cell" style="color:var(--text3)">${escapeHtml(p.version)}</td>
-                <td class="px-3 md:px-5 py-3 text-right">
-                    ${p.name.toLowerCase() === 'pip' ? `<span class="text-xs italic hidden sm:inline" style="color:var(--text3)">System</span>` :
-                        `<button data-pkg="${escapeHtml(p.name)}" class="pkg-rm-btn remove-btn btn-danger inline-flex items-center justify-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg transition">
-                        <svg class="w-3 h-3 remove-btn-icon shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                        <span class="hidden md:inline">Remove</span>
-                    </button>`}
-                </td>
-            </tr>`).join('');
-                tbody.querySelectorAll('.pkg-rm-btn').forEach(btn => btn.addEventListener('click', () => uninstallPackage(btn.dataset.pkg)));
-            } catch (e) { tbody.innerHTML = `<tr><td colspan="3" class="text-center py-8 text-sm" style="color:var(--red)">Network error loading packages.</td></tr>`; }
+                ${isPythonRuntime ? `
+                    <td class="px-3 md:px-5 py-3 text-right">
+                        ${p.name.toLowerCase() === 'pip' ? `<span class="text-xs italic hidden sm:inline" style="color:var(--text3)">System</span>` :
+                            `<button data-pkg="${escapeHtml(p.name)}" class="pkg-rm-btn remove-btn btn-danger inline-flex items-center justify-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg transition">
+                            <svg class="w-3 h-3 remove-btn-icon shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            <span class="hidden md:inline">Remove</span>
+                        </button>`}
+                    </td>` : ''}
+            </tr>`;
+                    return rowHtml;
+                }).join('');
+                if (isPythonRuntime) {
+                    tbody.querySelectorAll('.pkg-rm-btn').forEach(btn => btn.addEventListener('click', () => uninstallPackage(btn.dataset.pkg)));
+                }
+            } catch (e) { tbody.innerHTML = `<tr><td colspan="${isPythonRuntime ? 3 : 2}" class="text-center py-8 text-sm" style="color:var(--red)">Network error loading packages.</td></tr>`; }
         }
         async function installPackage() {
             const input = document.getElementById('pkg-input');
