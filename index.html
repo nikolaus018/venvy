@@ -1684,19 +1684,6 @@
                     <div id="tab-terminal" class="tab-content absolute inset-0 overflow-hidden flex flex-col"
                         style="background:var(--surface);">
 
-                        <!-- Entrypoint warning banner -->
-                        <div id="entrypoint-warning"
-                            class="hidden shrink-0 px-4 py-2 text-xs font-semibold flex items-center gap-2"
-                            style="background:var(--surface3);border-bottom:1px solid var(--border3);color:var(--text)">
-                            <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                                stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round"
-                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                            </svg>
-                            No entrypoint set — <button onclick="switchTab('settings')"
-                                class="underline ml-0.5 font-bold">configure one in Settings</button> before starting.
-                        </div>
-
                         <!-- Toolbar: always one slim row -->
                         <div id="term-toolbar" class="shrink-0 flex items-center gap-1.5 px-2"
                             style="height:40px;background:var(--surface2);border-bottom:1px solid var(--border2);">
@@ -3812,8 +3799,6 @@
             }
 
             _updateNetworkCard(app);
-            const epWarn = document.getElementById('entrypoint-warning');
-            if (epWarn) epWarn.classList.toggle('hidden', !!(app.entrypoint));
 
             _wireSettingsDirtyCheck();
             checkSettingsDirty();
@@ -6119,9 +6104,6 @@
                 _updateNetworkCard(activeApp);
                 checkSettingsDirty();
 
-                const epWarn = document.getElementById('entrypoint-warning');
-                if (epWarn) epWarn.classList.toggle('hidden', !!(activeApp.entrypoint));
-
                 _showAutosave('saved');
                 checkSettingsDirty();
                 loadCfRouteStatus();
@@ -6144,25 +6126,39 @@
             const manualPorts = portsStr.split(/[\s,]+/).map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
             const entrypoint = document.getElementById('setting-entrypoint').value.trim();
 
-            const currentManualPorts = JSON.parse(activeApp.manual_ports || '[]');
+            let currentManualPorts = [];
+            try {
+                const parsed = JSON.parse(activeApp.manual_ports || '[]');
+                if (Array.isArray(parsed) && parsed.length > 0) currentManualPorts = parsed;
+            } catch { }
+            if (currentManualPorts.length === 0 && activeApp.port) {
+                currentManualPorts = [activeApp.port];
+            }
             const portsMatch = JSON.stringify(manualPorts) === JSON.stringify(currentManualPorts);
 
             let envMatch = true;
             try {
                 const raw = (document.getElementById('setting-env').value || '{}').trim();
-                const activeEnv = JSON.parse(activeApp.env_json || '{}');
-                const inputEnv = JSON.parse(raw);
-                if (JSON.stringify(activeEnv) !== JSON.stringify(inputEnv)) {
-                    envMatch = false;
+                if (raw && raw.startsWith('// Hidden')) {
+                    envMatch = true;
+                } else {
+                    const activeEnv = JSON.parse(activeApp.env_json || '{}');
+                    const inputEnv = JSON.parse(raw || '{}');
+                    if (JSON.stringify(activeEnv) !== JSON.stringify(inputEnv)) {
+                        envMatch = false;
+                    }
                 }
             } catch { envMatch = false; }
+
+            const currentEntryPoint = (activeApp.runtime === 'rust' || runtime === 'rust') ? 'main.rs' : (activeApp.entrypoint || '');
+            const normalizedEntry = runtime === 'rust' ? 'main.rs' : entrypoint;
 
             const isDirty = (
                 runtime !== (activeApp.runtime || 'python') ||
                 policy !== activeApp.restart_policy ||
                 boot !== activeApp.start_on_boot ||
                 !portsMatch ||
-                entrypoint !== (activeApp.entrypoint || '') ||
+                normalizedEntry !== currentEntryPoint ||
                 _getOpenUrlPref() !== (activeApp.url_source_pref || 'local') ||
                 !envMatch
             );
@@ -6173,7 +6169,7 @@
                 dot.classList.remove('hidden');
                 btn.classList.add('pulse-active');
                 btn.classList.remove('btn-primary');
-                btn.classList.add('btn-orange'); // We'll add this CSS to make it pop
+                btn.classList.add('btn-orange');
             } else {
                 dot.classList.add('hidden');
                 btn.classList.remove('pulse-active');

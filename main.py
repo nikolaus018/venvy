@@ -2493,7 +2493,9 @@ async def upload_app(
         raise HTTPException(400, "restart_policy must be one of: never, on-failure, always")
 
     entrypoint_clean = ""
-    if entrypoint.strip():
+    if runtime == "rust":
+        entrypoint_clean = "main.rs"
+    elif entrypoint.strip():
         entrypoint_strip = entrypoint.strip()
         entrypoint_clean = Path(entrypoint_strip).name
         if not entrypoint_clean or entrypoint_clean != entrypoint_strip:
@@ -2757,16 +2759,19 @@ async def update_app(
         app_row.env_json = _encrypt_secret(json.dumps(req.env_vars))
         audit_log(user.username, "app_env_change", f"app '{app_row.name}' (id={app_id})")
     if req.entrypoint is not None:
-        ep_strip = req.entrypoint.strip()
-        if ep_strip == "":
-            app_row.entrypoint = ""
+        if app_row.runtime == "rust":
+            app_row.entrypoint = "main.rs"
         else:
-            ep_clean = Path(ep_strip).name
-            if not ep_clean or ep_clean != ep_strip:
-                raise HTTPException(400, "Entrypoint must be a plain filename (e.g. main.py).")
-            if not re.fullmatch(r"[A-Za-z0-9_.\-]+", ep_clean):
-                raise HTTPException(400, "Entrypoint filename contains invalid characters.")
-            app_row.entrypoint = ep_clean
+            ep_strip = req.entrypoint.strip()
+            if ep_strip == "":
+                app_row.entrypoint = ""
+            else:
+                ep_clean = Path(ep_strip).name
+                if not ep_clean or ep_clean != ep_strip:
+                    raise HTTPException(400, "Entrypoint must be a plain filename (e.g. main.py).")
+                if not re.fullmatch(r"[A-Za-z0-9_.\-]+", ep_clean):
+                    raise HTTPException(400, "Entrypoint filename contains invalid characters.")
+                app_row.entrypoint = ep_clean
     if req.url_source_pref is not None:
         if req.url_source_pref not in ("local", "public"):
             raise HTTPException(400, "url_source_pref must be 'local' or 'public'")
@@ -2775,6 +2780,8 @@ async def update_app(
         if req.runtime not in ("python", "rust"):
             raise HTTPException(400, "runtime must be one of: python, rust")
         app_row.runtime = req.runtime
+        if app_row.runtime == "rust":
+            app_row.entrypoint = "main.rs"
     if req.memory_limit_mb is not None:
         if req.memory_limit_mb != 0 and not (16 <= req.memory_limit_mb <= 1_048_576):
             raise HTTPException(400, "memory_limit_mb must be between 16 and 1048576 (or 0 for unlimited).")
