@@ -1,2 +1,20 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalise line endings on the way in; check out per platform.
+* text=auto eol=lf
+
+# Venvy runs on Linux — these must be LF in a checkout on any platform, or the
+# shell and the container will not run them.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.service   text eol=lf
+
+# Binary, never touched.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.db binary
+
+# Keep generated and vendored files out of diffs and language statistics.
+package-lock.json  linguist-generated=true -diff

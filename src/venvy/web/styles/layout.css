@@ -1,0 +1,156 @@
+/**
+ * Venvy — Toasts, transitions, the auth screen and per-view tweaks.
+ */
+
+/* ── Toasts ────────────────────────────────────────────────────── */
+#toast-container {
+    position: fixed;
+    bottom: max(1.75rem, env(safe-area-inset-bottom, 1.75rem));
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    pointer-events: none;
+}
+
+.toast {
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(12px) scale(0.94);
+    transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: rgba(10, 10, 16, 0.97);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border3);
+    box-shadow: 0 10px 36px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    font-family: 'Inter', sans-serif;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+.toast.success {
+    border-left: 3px solid var(--green);
+}
+
+.toast.error {
+    border-left: 3px solid var(--red);
+}
+
+.toast.info {
+    border-left: 3px solid var(--accent);
+}
+
+.toast.warn {
+    border-left: 3px solid var(--amber);
+}
+
+/* ── Transitions ───────────────────────────────────────────────── */
+.file-panel-transition {
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.slide-out-left {
+    transform: translateX(-100%);
+}
+
+/* ── App tweaks ─────────────────────────────────────────────────── */
+#log-viewer {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: var(--text2);
+}
+
+#term-mobile-keys {
+    -webkit-overflow-scrolling: touch;
+}
+
+/* ── Auth screen premium background ──────────────────────────── */
+#auth-screen {
+    background:
+        radial-gradient(ellipse 80% 50% at 20% 10%, rgba(var(--accent-rgb), 0.07) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 40% at 85% 85%, rgba(var(--accent-rgb), 0.04) 0%, transparent 60%),
+        var(--bg);
+}
+
+#auth-screen::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image: radial-gradient(rgba(var(--accent-rgb), 0.12) 1px, transparent 1px);
+    background-size: 40px 40px;
+    -webkit-mask-image: radial-gradient(ellipse 55% 45% at 50% 50%, #000 50%, transparent 100%);
+    mask-image: radial-gradient(ellipse 55% 45% at 50% 50%, #000 50%, transparent 100%);
+}
+
+/* Auth card glassmorphism */
+.auth-card {
+    background: rgba(11, 11, 16, 0.88);
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    border: 1px solid rgba(var(--accent-rgb), 0.13);
+    border-radius: var(--radius-lg);
+    box-shadow:
+        0 40px 90px rgba(0, 0, 0, 0.75),
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+        0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+/* ── Control buttons ─────────────────────────────────────────── */
+.ctrl-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: 1px solid var(--border2);
+    background: var(--surface2);
+    color: var(--text2);
+}
+
+.ctrl-btn:hover {
+    background: var(--surface3);
+    border-color: var(--border3);
+    color: var(--text);
+}
+
+.ctrl-btn:active {
+    transform: scale(0.91);
+}
+
+.ctrl-btn.stop-btn {
+    background: rgba(240, 100, 90, 0.07);
+    border-color: rgba(240, 100, 90, 0.15);
+    color: var(--red);
+}
+
+.ctrl-btn.stop-btn:hover {
+    background: rgba(240, 100, 90, 0.13);
+    border-color: rgba(240, 100, 90, 0.28);
+}
+
+/* Viewer role is read-only. This is a UX courtesy only — the backend
+   independently rejects these actions with 403, this just avoids
+   showing a control that would immediately error. */
+body.role-viewer [data-requires-operator] {
+    opacity: 0.4;
+    pointer-events: none;
+    cursor: not-allowed;
+}
