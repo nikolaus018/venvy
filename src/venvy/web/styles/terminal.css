@@ -1,0 +1,129 @@
+/**
+ * Venvy — The embedded terminal and its mobile key bar.
+ */
+
+/* ── Terminal ──────────────────────────────────────────────────── */
+.term-key {
+    font-size: 11px;
+    background: var(--surface2);
+    color: var(--text2);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    transition: all 0.12s ease;
+}
+
+.term-key:active {
+    background: var(--surface3);
+    border-color: var(--border3);
+    transform: scale(0.93);
+}
+
+.term-mob-key {
+    font-size: 13px;
+    background: var(--surface2);
+    color: var(--text2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-sm);
+    padding: 6px 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Inter', sans-serif;
+    transition: all var(--transition-fast);
+}
+
+.term-mob-key:active {
+    background: var(--surface3);
+    border-color: var(--border3);
+    transform: scale(0.93);
+}
+
+.term-mob-key:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.mod-active {
+    background: var(--surface3) !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 8px var(--accent-glow) !important;
+}
+
+.more-open {
+    background: var(--surface3);
+    color: var(--text);
+}
+
+.mod-accent-blue {
+    color: var(--blue) !important;
+}
+
+.mod-accent-purple {
+    color: var(--purple) !important;
+}
+
+.account-footer-btn-hover:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.term-action-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text3);
+    background: transparent;
+    border: 1px solid transparent;
+    transition: all 0.12s ease;
+}
+
+.term-action-btn:hover {
+    color: var(--text2);
+    background: var(--surface2);
+    border-color: var(--border);
+}
+
+.term-action-btn:active {
+    transform: scale(0.88);
+}
+
+/* ── Tab Bar ───────────────────────────────────────────────────── */
+.tab-btn {
+    position: relative;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text3);
+    padding: 0 4px;
+    transition: color 0.18s ease;
+    white-space: nowrap;
+}
+
+.tab-btn.active {
+    color: var(--text) !important;
+    font-weight: 600;
+}
+
+.tab-btn.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-light));
+    border-radius: 2px 2px 0 0;
+}
+
+.tab-btn:not(.active):hover {
+    color: var(--text2) !important;
+}

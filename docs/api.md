@@ -1,6 +1,6 @@
 # Venvy API Documentation
 
-**Version:** 0.1.0 (server build v4.0.0)
+**Version:** 1.0 (server build v4.0.0)
 **Base URL:** `http://<host>:<port>/api` (default `http://127.0.0.1:54783`)
 **Protocol:** REST over HTTP/1.1, JSON request/response bodies unless noted
 **Auth:** Session cookie (server-issued), CSRF double-submit token
@@ -21,6 +21,18 @@ Venvy is a self-hosted "premium application manager" — a control plane for run
 - Open an interactive terminal into an app's environment (WebSocket)
 
 All endpoints except `GET /api/health` and `GET /` live under `/api` and are subject to an optional IP allowlist, session authentication, and CSRF protection (see §2–3).
+
+**Interactive documentation.** A running instance serves generated OpenAPI docs:
+
+| Path | |
+|---|---|
+| `/api/docs` | Swagger UI |
+| `/api/redoc` | ReDoc |
+| `/api/openapi.json` | the raw schema |
+
+These are generated from the code, so they are authoritative on request and
+response shapes; this document is the prose companion that explains behaviour
+the schema cannot express.
 
 ---
 
@@ -50,7 +62,7 @@ The server has no users on first boot. `GET /api/auth/status` reports `user_exis
 4. Server sets the "session" cookie and returns { ok, username, role }
 ```
 
-Failed logins are rate-limited **per client IP** (not per account): 5 failures locks that IP out for 5 minutes (`429` with an `X-Retry-After` header). A successful login clears the counter.
+Failed logins are rate-limited **per client IP** (not per account): 5 failures locks that IP out for 5 minutes (`429` with an `Retry-After` header (and the legacy `X-Retry-After`)). A successful login clears the counter.
 
 ### 2.4 CSRF protection
 
@@ -133,7 +145,7 @@ Two independent limiters, both keyed by client IP:
 | Login | `POST /api/auth/login` | 5 failed attempts → 5-minute lockout |
 | Mutations | Every app/file/package/log/tunnel-mutating route | 60 requests / 60-second sliding window |
 
-Both return `429` with an `X-Retry-After` header (seconds).
+Both return `429` with an `Retry-After` header (and the legacy `X-Retry-After`) (seconds).
 
 ### 4.5 Path safety
 
@@ -158,7 +170,8 @@ Unauthenticated. Reports instance/session state.
 ```
 
 #### `POST /api/auth/setup`
-One-time only — creates the first (admin) account and logs it in. `400` if any user already exists.
+One-time only — creates the first (admin) account and logs it in. Returns `201`;
+`400` if any user already exists.
 
 **Body:** `{ "username": "string", "password": "string", "role"?: "string" }` (role is ignored — always `admin`)
 **Password policy:** ≥ 8 characters, must contain at least one letter and one digit.
@@ -194,14 +207,15 @@ Disables TOTP after re-verifying the current password.
 ### 5.2 User Management — `/api/users` (admin only)
 
 #### `GET /api/users`
-Returns `[{ "id", "username", "role" }, ...]`.
+Returns `[{ "id", "username", "role", "totp_enabled" }, ...]`, ordered by username.
+Password hashes and TOTP secrets are never included.
 
 #### `POST /api/users`
 **Body:** `{ "username", "password", "role"? }` — role defaults to `operator`; must be one of `admin | operator | viewer`.
-**Errors:** `400` username taken, invalid role, or weak password.
+**Responses:** `201` created · `400` username taken or weak password · `422` invalid role.
 
 #### `DELETE /api/users/{user_id}`
-Deletes the account and its active sessions. **Does not** touch or reassign any apps (apps belong to the instance). `400` if attempting to delete yourself.
+Deletes the account and its active sessions. **Does not** touch or reassign any apps (apps belong to the instance). `400` if attempting to delete yourself. Idempotent: deleting an id that does not exist returns `200`.
 
 ---
 
@@ -357,11 +371,14 @@ Any role. Returns the server's LAN IPv4 address: `{ "ipv4": "192.168.1.20" }`.
 Any role. Lists currently listening TCP ports plus recommended free ports for new apps.
 
 #### `GET /api/system/settings/{key}` / `PUT /api/system/settings/{key}` — admin only
-Generic key-value store for instance settings. Keys prefixed `cf_` (Cloudflare credentials) are transparently encrypted at rest with a local Fernet key (`.venvy_key`) and decrypted on read.
+Generic key-value store for instance settings. Keys prefixed `cf_` (Cloudflare credentials) are transparently encrypted at rest with a local Fernet key (`.venvy_key`) and decrypted on read. Pasted `cf_` values are also stripped of whitespace and zero-width characters, which routinely come along when copying a token out of the Cloudflare dashboard.
+
 **PUT body:** `{ "value": "string" }`
 
+Keys prefixed `totp_pending_` are internal — they hold a TOTP secret mid-enrolment — and are rejected with `403` on both read and write.
+
 #### `POST /api/system/settings/batch` — admin only
-**Body:** `[{ "key", "value" }, ...]` — saves multiple settings in one DB transaction. Same `cf_` encryption rule applies per item.
+**Body:** `[{ "key", "value" }, ...]` — saves multiple settings in one DB transaction, so a partial save cannot leave the Cloudflare integration half-configured. The same `cf_` encryption and `totp_pending_` rejection rules apply per item.
 
 ---
 

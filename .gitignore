@@ -1,23 +1,16 @@
-# Byte-compiled / optimized / DLL files
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
+dist/
 develop-eggs/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
-parts/
 sdist/
-var/
 wheels/
 share/python-wheels/
 *.egg-info/
@@ -25,7 +18,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Virtual Environments
+# ── Virtual environments ─────────────────────────────────────────────────────
 venv/
 .venv/
 env/
@@ -34,33 +27,50 @@ ENV/
 env.bak/
 venv.bak/
 
-# Environment Variables
+# ── Environment ──────────────────────────────────────────────────────────────
 .env
 .env.local
 .env.*.local
 
-# Databases
+# ── Venvy runtime state ──────────────────────────────────────────────────────
+# Created in the directory Venvy is launched from (or VENVY_DATA_DIR).
+#
+# `.venvy_key` decrypts the secrets held in data.db. Keep it out of git, and
+# back it up *alongside* the database — either one alone is useless.
+data.db
+data.db-shm
+data.db-wal
+data.db.bak.*
+.venvy_key
+apps/
+backups/
+.runtime/
 *.db
 *.sqlite3
-data.db
-data.db.bak.*
 
-# Logs
+# ── Logs ─────────────────────────────────────────────────────────────────────
 logs/
 *.log
 
-# IDEs and Editors
+# ── Tooling caches ───────────────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# ── Node (frontend linting only — the app itself needs no build) ─────────────
+node_modules/
+npm-debug.log*
+
+# ── Editors and OS ───────────────────────────────────────────────────────────
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 .DS_Store
-
-# Pytest / Coverage
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Apps Directory (if dynamically created by Venvy)
-apps/
+Thumbs.db

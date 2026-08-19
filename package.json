@@ -1,0 +1,18 @@
+{
+  "name": "venvy-frontend",
+  "version": "4.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tooling for the Venvy frontend. The app itself needs no build step — this is only for linting and verifying the module graph.",
+  "scripts": {
+    "lint": "eslint src/venvy/web/js",
+    "lint:fix": "eslint --fix src/venvy/web/js",
+    "check:modules": "node tools/check-modules.mjs"
+  },
+  "devDependencies": {
+    "acorn": "^8.11.3",
+    "acorn-walk": "^8.3.2",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0"
+  }
+}

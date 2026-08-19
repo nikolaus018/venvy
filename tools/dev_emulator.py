@@ -1,7 +1,8 @@
 """
 Venvy Emulator — Windows-compatible fake backend for UI development.
 
-Serves index.html and responds to every API endpoint with realistic fake data.
+Serves the real frontend from src/venvy/web/ and answers every API endpoint
+with realistic fake data.
 No database, no processes, no Linux-only deps (no pty/fcntl/psutil required).
 
 Usage:
@@ -9,22 +10,22 @@ Usage:
     python emulator.py
 
 Then open http://localhost:54783 in your browser.
-Put index.html in the same folder as this script.
+No Linux host, no database and no real apps required — good enough for any
+visual or interaction work on the UI.
 """
 
-import json
-import random
-import secrets
-import time
 import datetime
+import json
 import os
+import random
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-from fastapi import FastAPI, Request, Response, Cookie, HTTPException, Query, Form, UploadFile, File
-from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+
 import uvicorn
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Config
@@ -32,7 +33,8 @@ import uvicorn
 
 PORT = 54783
 HOST = "127.0.0.1"
-ASSETS_DIR = Path(__file__).parent.resolve()
+#: The real frontend, served straight from the package source.
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "src" / "venvy" / "web"
 
 app = FastAPI(title="Venvy Emulator")
 
@@ -49,7 +51,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 FAKE_SESSION_TOKEN = "emulator-session-token-abc123"
-FAKE_CSRF_TOKEN    = "emulator-csrf-token-xyz789"
+FAKE_CSRF_TOKEN = "emulator-csrf-token-xyz789"
 
 # Fake user
 FAKE_USER = {
@@ -61,7 +63,7 @@ FAKE_USER = {
 }
 
 # Fake apps — mutable so start/stop/update work in the session
-FAKE_APPS: Dict[int, dict] = {
+FAKE_APPS: dict[int, dict] = {
     1: {
         "id": 1,
         "user_id": 1,
@@ -139,7 +141,9 @@ FAKE_APPS: Dict[int, dict] = {
         "start_on_boot": True,
         "restart_policy": "always",
         "last_exit_code": None,
-        "last_start_time": (datetime.datetime.utcnow() - datetime.timedelta(minutes=30)).isoformat(),
+        "last_start_time": (
+            datetime.datetime.utcnow() - datetime.timedelta(minutes=30)
+        ).isoformat(),
         "last_stop_time": None,
         "last_manually_stopped_at": None,
         "venv_path": "",
@@ -159,7 +163,7 @@ FAKE_APPS: Dict[int, dict] = {
 
 NEXT_APP_ID = 4  # auto-increment counter
 
-FAKE_SETTINGS: Dict[str, str] = {
+FAKE_SETTINGS: dict[str, str] = {
     "cf_api_token": "",
     "cf_account_id": "",
     "cf_tunnel_id": "",
@@ -223,11 +227,12 @@ SAMPLE_LOG = """\
 2024-06-01 12:01:00 INFO  Scheduled job completed in 0.83s
 """
 
-TOTP_PENDING_SECRET: Optional[str] = None
+TOTP_PENDING_SECRET: str | None = None
 
 # ---------------------------------------------------------------------------
 # Middleware — auto-set cookies
 # ---------------------------------------------------------------------------
+
 
 @app.middleware("http")
 async def cookie_middleware(request: Request, call_next):
@@ -237,9 +242,11 @@ async def cookie_middleware(request: Request, call_next):
         response.set_cookie("csrf_token", FAKE_CSRF_TOKEN, httponly=False, samesite="lax", path="/")
     return response
 
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
 
 def _check_auth(request: Request):
     """Minimal auth check — pass if the session cookie is present."""
@@ -247,40 +254,58 @@ def _check_auth(request: Request):
     if not token:
         raise HTTPException(401, "Not authenticated.")
 
+
 def _app_or_404(app_id: int) -> dict:
     if app_id not in FAKE_APPS:
         raise HTTPException(404, "App not found.")
     return FAKE_APPS[app_id]
 
+
 def _now_iso():
     return datetime.datetime.utcnow().isoformat()
+
+
+# The real app mounts these too; without them the module graph 404s.
+for _sub in ("js", "styles"):
+    _dir = ASSETS_DIR / _sub
+    if _dir.is_dir():
+        app.mount(f"/{_sub}", StaticFiles(directory=str(_dir)), name=_sub)
 
 # ---------------------------------------------------------------------------
 # Static — serve index.html
 # ---------------------------------------------------------------------------
+
 
 @app.get("/")
 async def serve_spa():
     html = ASSETS_DIR / "index.html"
     if html.exists():
         return FileResponse(html)
-    return PlainTextResponse("index.html not found. Put it next to emulator.py.", status_code=404)
+    return PlainTextResponse(
+        f"index.html not found under {ASSETS_DIR}. Run this from a source checkout.",
+        status_code=404,
+    )
+
 
 # ---------------------------------------------------------------------------
 # License
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/license/status")
 def license_status():
     return {"valid": True}
+
 
 @app.post("/api/license/activate")
 async def license_activate(request: Request):
     return {"ok": True}
 
+
 # ---------------------------------------------------------------------------
 # Auth — /api/auth/*
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/auth/status")
 def auth_status(request: Request):
@@ -294,10 +319,12 @@ def auth_status(request: Request):
         "totp_enabled": FAKE_USER["totp_enabled"] if authenticated else False,
     }
 
+
 class LoginReq(BaseModel):
     username: str
     password: str
-    totp_code: Optional[str] = None
+    totp_code: str | None = None
+
 
 @app.post("/api/auth/login")
 def login(payload: LoginReq, response: Response):
@@ -306,24 +333,29 @@ def login(payload: LoginReq, response: Response):
     response.set_cookie("session", FAKE_SESSION_TOKEN, httponly=True, path="/", samesite="lax")
     return {"ok": True, "username": FAKE_USER["username"], "is_admin": FAKE_USER["is_admin"]}
 
+
 class SetupReq(BaseModel):
     username: str
     password: str
+
 
 @app.post("/api/auth/setup")
 def auth_setup(payload: SetupReq, response: Response):
     response.set_cookie("session", FAKE_SESSION_TOKEN, httponly=True, path="/", samesite="lax")
     return {"ok": True, "username": payload.username, "is_admin": True}
 
+
 @app.post("/api/auth/logout")
 def logout(response: Response):
     response.delete_cookie("session", path="/")
     return {"ok": True}
 
+
 class PwdReq(BaseModel):
     current_password: str
     password: str
     password_confirm: str
+
 
 @app.put("/api/auth/password")
 def change_password(req: PwdReq, request: Request):
@@ -332,6 +364,7 @@ def change_password(req: PwdReq, request: Request):
         raise HTTPException(401, "Current password is incorrect.")
     FAKE_USER["password"] = req.password
     return {"ok": True}
+
 
 # TOTP
 @app.get("/api/auth/totp/setup")
@@ -342,8 +375,10 @@ def totp_setup_begin(request: Request):
     uri = f"otpauth://totp/Venvy:admin?secret={TOTP_PENDING_SECRET}&issuer=Venvy"
     return {"ok": True, "secret": TOTP_PENDING_SECRET, "uri": uri}
 
+
 class TotpSetupConfirmReq(BaseModel):
     totp_code: str
+
 
 @app.post("/api/auth/totp/setup/confirm")
 def totp_setup_confirm(req: TotpSetupConfirmReq, request: Request):
@@ -351,8 +386,10 @@ def totp_setup_confirm(req: TotpSetupConfirmReq, request: Request):
     FAKE_USER["totp_enabled"] = True
     return {"ok": True}
 
+
 class TotpDisableReq(BaseModel):
     password: str
+
 
 @app.post("/api/auth/totp/disable")
 def totp_disable(req: TotpDisableReq, request: Request):
@@ -360,23 +397,28 @@ def totp_disable(req: TotpDisableReq, request: Request):
     FAKE_USER["totp_enabled"] = False
     return {"ok": True}
 
+
 # ---------------------------------------------------------------------------
 # Users — /api/users
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/users")
 def list_users(request: Request):
     _check_auth(request)
     return [{"id": 1, "username": "admin", "is_admin": True}]
 
+
 class UserReq(BaseModel):
     username: str
     password: str
+
 
 @app.post("/api/users")
 def create_user(req: UserReq, request: Request):
     _check_auth(request)
     return {"ok": True}
+
 
 @app.delete("/api/users/{user_id}")
 def delete_user(user_id: int, request: Request):
@@ -385,9 +427,11 @@ def delete_user(user_id: int, request: Request):
         raise HTTPException(400, "Cannot delete yourself.")
     return {"ok": True}
 
+
 # ---------------------------------------------------------------------------
 # Apps — /api/apps
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/apps")
 def list_apps(request: Request):
@@ -402,6 +446,7 @@ def list_apps(request: Request):
             }
     return apps
 
+
 @app.post("/api/apps/upload")
 async def upload_app(
     request: Request,
@@ -410,8 +455,8 @@ async def upload_app(
     entrypoint: str = Form(""),
     start_on_boot: bool = Form(False),
     restart_policy: str = Form("never"),
-    files: Optional[List[UploadFile]] = File(None),
-    requirements: Optional[UploadFile] = File(None),
+    files: list[UploadFile] | None = File(None),
+    requirements: UploadFile | None = File(None),
 ):
     global NEXT_APP_ID
     _check_auth(request)
@@ -452,10 +497,16 @@ async def upload_app(
     FAKE_APPS[app_id] = new_app
     FAKE_PACKAGES[app_id] = []
     FAKE_FILE_TREE[app_id] = [
-        {"name": entrypoint or "main.py", "path": entrypoint or "main.py", "is_dir": False, "size": 0},
+        {
+            "name": entrypoint or "main.py",
+            "path": entrypoint or "main.py",
+            "is_dir": False,
+            "size": 0,
+        },
         {"name": "requirements.txt", "path": "requirements.txt", "is_dir": False, "size": 0},
     ]
     return new_app
+
 
 @app.post("/api/apps/{app_id}/control")
 async def control_app(app_id: int, action: str = Query(...), request: Request = None):
@@ -489,16 +540,18 @@ async def control_app(app_id: int, action: str = Query(...), request: Request = 
 
     return {"status": a["status"], "queued": True}
 
+
 class AppUpdateReq(BaseModel):
-    name: Optional[str] = None
-    start_on_boot: Optional[bool] = None
-    restart_policy: Optional[str] = None
-    runtime: Optional[str] = None
-    port: Optional[int] = None
-    manual_ports: Optional[List[int]] = None
-    env_vars: Optional[Dict[str, str]] = None
-    entrypoint: Optional[str] = None
-    url_source_pref: Optional[str] = None
+    name: str | None = None
+    start_on_boot: bool | None = None
+    restart_policy: str | None = None
+    runtime: str | None = None
+    port: int | None = None
+    manual_ports: list[int] | None = None
+    env_vars: dict[str, str] | None = None
+    entrypoint: str | None = None
+    url_source_pref: str | None = None
+
 
 @app.put("/api/apps/{app_id}")
 async def update_app(app_id: int, req: AppUpdateReq, request: Request):
@@ -526,6 +579,7 @@ async def update_app(app_id: int, req: AppUpdateReq, request: Request):
     a["updated_at"] = _now_iso()
     return a
 
+
 @app.delete("/api/apps/{app_id}")
 async def delete_app(app_id: int, request: Request):
     _check_auth(request)
@@ -534,6 +588,7 @@ async def delete_app(app_id: int, request: Request):
     FAKE_PACKAGES.pop(app_id, None)
     FAKE_FILE_TREE.pop(app_id, None)
     return {"ok": True}
+
 
 @app.get("/api/apps/{app_id}/stats")
 def app_stats(app_id: int, request: Request):
@@ -547,22 +602,29 @@ def app_stats(app_id: int, request: Request):
         }
     return {"cpu": 0.0, "memory": 0.0, "uptime": 0.0}
 
+
 # ---------------------------------------------------------------------------
 # Logs
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/apps/{app_id}/logs")
-async def get_app_logs(app_id: int, lines: int = Query(default=2000, ge=1, le=10000), request: Request = None):
+async def get_app_logs(
+    app_id: int, lines: int = Query(default=2000, ge=1, le=10000), request: Request = None
+):
     _check_auth(request)
     _app_or_404(app_id)
     # Generate some fake log lines
     log_lines = SAMPLE_LOG.strip().splitlines()
     # Append a few timestamped live lines
     for i in range(8):
-        ts = (datetime.datetime.utcnow() - datetime.timedelta(seconds=i * 10)).strftime("%Y-%m-%d %H:%M:%S")
+        ts = (datetime.datetime.utcnow() - datetime.timedelta(seconds=i * 10)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
         log_lines.append(f"{ts} INFO  [emulator] heartbeat ping #{random.randint(100, 9999)}")
     content = "\n".join(log_lines[-lines:])
     return {"content": content, "truncated": False, "total_lines": len(log_lines)}
+
 
 @app.delete("/api/apps/{app_id}/logs")
 async def clear_app_logs(app_id: int, request: Request):
@@ -570,9 +632,11 @@ async def clear_app_logs(app_id: int, request: Request):
     _app_or_404(app_id)
     return {"ok": True}
 
+
 # ---------------------------------------------------------------------------
 # Files
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/apps/{app_id}/files/tree")
 def file_tree(app_id: int, path: str = "", request: Request = None):
@@ -587,13 +651,15 @@ def file_tree(app_id: int, path: str = "", request: Request = None):
         ]
     return tree
 
-FAKE_FILE_CONTENTS: Dict[str, str] = {
+
+FAKE_FILE_CONTENTS: dict[str, str] = {
     "main.py": '# FastAPI Demo App\nfrom fastapi import FastAPI\n\napp = FastAPI()\n\n@app.get("/")\ndef root():\n    return {"hello": "world"}\n\n@app.get("/health")\ndef health():\n    return {"status": "ok"}\n',
     "requirements.txt": "fastapi==0.111.0\nuvicorn==0.29.0\npydantic==2.7.1\n",
     "config.json": '{\n  "debug": true,\n  "host": "0.0.0.0",\n  "port": 8000\n}\n',
     "Cargo.toml": '[package]\nname = "rust-service"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\ntokio = { version = "1", features = ["full"] }\naxum = "0.7"\nserde = { version = "1", features = ["derive"] }\n',
     "pipeline.py": "# Data Pipeline\nimport pandas as pd\n\ndef run():\n    df = pd.read_csv('data.csv')\n    print(f'Loaded {len(df)} rows')\n    # ... processing ...\n    return df\n\nif __name__ == '__main__':\n    run()\n",
 }
+
 
 @app.get("/api/apps/{app_id}/files/download")
 async def download_file(app_id: int, path: str, request: Request):
@@ -602,17 +668,20 @@ async def download_file(app_id: int, path: str, request: Request):
     filename = Path(path).name
     content = FAKE_FILE_CONTENTS.get(filename, f"# {filename}\n# (emulated file content)\n")
     from fastapi.responses import Response as R
+
     return R(
         content=content.encode(),
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
 class FileOpReq(BaseModel):
     operation: str
     path: str
-    new_path: Optional[str] = None
-    content: Optional[str] = None
+    new_path: str | None = None
+    content: str | None = None
+
 
 @app.post("/api/apps/{app_id}/files/op")
 async def file_operations(app_id: int, req: FileOpReq, request: Request):
@@ -622,20 +691,23 @@ async def file_operations(app_id: int, req: FileOpReq, request: Request):
         FAKE_FILE_CONTENTS[Path(req.path).name] = req.content
     return {"ok": True}
 
+
 @app.post("/api/apps/{app_id}/files/upload")
 async def upload_file_to_path(
     app_id: int,
     request: Request,
     path: str = Form(""),
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
 ):
     _check_auth(request)
     _app_or_404(app_id)
     return {"ok": True}
 
+
 # ---------------------------------------------------------------------------
 # Packages
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/apps/{app_id}/packages")
 async def list_packages(app_id: int, request: Request):
@@ -643,8 +715,10 @@ async def list_packages(app_id: int, request: Request):
     _app_or_404(app_id)
     return FAKE_PACKAGES.get(app_id, [])
 
+
 class PackageReq(BaseModel):
     name: str
+
 
 @app.post("/api/apps/{app_id}/packages")
 async def install_package(app_id: int, req: PackageReq, request: Request):
@@ -652,11 +726,13 @@ async def install_package(app_id: int, req: PackageReq, request: Request):
     _app_or_404(app_id)
     # Simulate a 1.5s install delay (non-blocking)
     import asyncio
+
     await asyncio.sleep(1.5)
     pkgs = FAKE_PACKAGES.setdefault(app_id, [])
     if not any(p["name"] == req.name for p in pkgs):
         pkgs.append({"name": req.name, "version": "latest"})
     return {"ok": True}
+
 
 @app.delete("/api/apps/{app_id}/packages/{name}")
 async def uninstall_package(app_id: int, name: str, request: Request):
@@ -665,15 +741,18 @@ async def uninstall_package(app_id: int, name: str, request: Request):
     FAKE_PACKAGES[app_id] = [p for p in FAKE_PACKAGES.get(app_id, []) if p["name"] != name]
     return {"ok": True}
 
+
 @app.get("/api/apps/{app_id}/scan-imports")
 async def scan_imports(app_id: int, request: Request):
     _check_auth(request)
     _app_or_404(app_id)
     return {"missing": ["httpx", "aiofiles"], "installed_count": len(FAKE_PACKAGES.get(app_id, []))}
 
+
 # ---------------------------------------------------------------------------
 # Tunnel (Cloudflare)
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/apps/{app_id}/tunnel")
 def list_cf_routes(app_id: int, request: Request):
@@ -682,24 +761,34 @@ def list_cf_routes(app_id: int, request: Request):
     routes = []
     if a.get("external_url"):
         hostname = a["external_url"].replace("https://", "")
-        routes.append({
-            "hostname": hostname,
-            "local_port": a.get("port") or 8000,
-            "published": True,
-            "cf_route_id": hostname,
-        })
+        routes.append(
+            {
+                "hostname": hostname,
+                "local_port": a.get("port") or 8000,
+                "published": True,
+                "cf_route_id": hostname,
+            }
+        )
     return {"routes": routes}
+
 
 class CfPublishReq(BaseModel):
     hostname: str
     local_port: int
+
 
 @app.put("/api/apps/{app_id}/tunnel/publish")
 async def publish_cf_route(app_id: int, req: CfPublishReq, request: Request):
     _check_auth(request)
     a = _app_or_404(app_id)
     a["external_url"] = f"https://{req.hostname}"
-    return {"ok": True, "hostname": req.hostname, "url": a["external_url"], "dns_record_id": "fake-dns-id"}
+    return {
+        "ok": True,
+        "hostname": req.hostname,
+        "url": a["external_url"],
+        "dns_record_id": "fake-dns-id",
+    }
+
 
 @app.delete("/api/apps/{app_id}/tunnel/publish")
 async def unpublish_cf_route(app_id: int, local_port: int, request: Request):
@@ -708,14 +797,17 @@ async def unpublish_cf_route(app_id: int, local_port: int, request: Request):
     a["external_url"] = None
     return {"ok": True}
 
+
 # ---------------------------------------------------------------------------
 # System
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/system/info")
 async def system_info(request: Request):
     _check_auth(request)
     return {"ipv4": "192.168.1.100"}
+
 
 @app.get("/api/system/metrics")
 def get_system_metrics(request: Request):
@@ -742,6 +834,7 @@ def get_system_metrics(request: Request):
         "uptime": random.randint(86400, 864000),
     }
 
+
 @app.get("/api/system/ports")
 async def system_ports(request: Request):
     _check_auth(request)
@@ -754,13 +847,16 @@ async def system_ports(request: Request):
     free = [3000, 3001, 4000, 5000, 8001, 8080, 8081, 8888, 9001, 9090, 9091, 9092]
     return {"listening": listening, "free": free}
 
+
 @app.get("/api/system/settings/{key}")
 def get_system_setting(key: str, request: Request):
     _check_auth(request)
     return {"key": key, "value": FAKE_SETTINGS.get(key, "")}
 
+
 class SystemSettingReq(BaseModel):
     value: str
+
 
 @app.put("/api/system/settings/{key}")
 def set_system_setting(key: str, req: SystemSettingReq, request: Request):
@@ -768,16 +864,19 @@ def set_system_setting(key: str, req: SystemSettingReq, request: Request):
     FAKE_SETTINGS[key] = req.value
     return {"ok": True, "stored_length": len(req.value)}
 
+
 class BatchSettingItem(BaseModel):
     key: str
     value: str
 
+
 @app.post("/api/system/settings/batch")
-def set_system_settings_batch(items: List[BatchSettingItem], request: Request):
+def set_system_settings_batch(items: list[BatchSettingItem], request: Request):
     _check_auth(request)
     for item in items:
         FAKE_SETTINGS[item.key] = item.value
     return {"ok": True, "saved": len(items)}
+
 
 @app.post("/api/system/cloudflare/test")
 async def test_cf_credentials(request: Request):
@@ -786,7 +885,7 @@ async def test_cf_credentials(request: Request):
         "ok": True,
         "checks": {
             "account": {"ok": True, "name": "My Cloudflare Account"},
-            "tunnel":  {
+            "tunnel": {
                 "ok": True,
                 "name": "venvy-tunnel",
                 "id": "fake-tunnel-id-0000",
@@ -794,9 +893,13 @@ async def test_cf_credentials(request: Request):
                 "active_connections": 1,
                 "message": "venvy-tunnel (healthy) — 1 active connection(s)",
             },
-            "dns_zones": {"ok": True, "message": "Found 2 zone(s) — DNS CNAME records will be managed automatically."},
+            "dns_zones": {
+                "ok": True,
+                "message": "Found 2 zone(s) — DNS CNAME records will be managed automatically.",
+            },
         },
     }
+
 
 @app.get("/api/system/cloudflare/zones")
 async def list_cf_zones(request: Request):
@@ -809,18 +912,23 @@ async def list_cf_zones(request: Request):
         ],
     }
 
+
 # ---------------------------------------------------------------------------
 # WebSocket terminal — send fake shell output
 # ---------------------------------------------------------------------------
 
 from fastapi import WebSocket
 
+
 @app.websocket("/api/apps/{app_id}/terminal")
 async def terminal_ws(websocket: WebSocket, app_id: int):
     import asyncio
+
     await websocket.accept()
     # Send a fake shell prompt
-    await websocket.send_text("\r\n\033[1;32mvenvy@emulator\033[0m:\033[1;34m~/apps/" + str(app_id) + "\033[0m$ ")
+    await websocket.send_text(
+        "\r\n\033[1;32mvenvy@emulator\033[0m:\033[1;34m~/apps/" + str(app_id) + "\033[0m$ "
+    )
     try:
         while True:
             data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
@@ -830,25 +938,28 @@ async def terminal_ws(websocket: WebSocket, app_id: int):
     except Exception:
         pass
 
+
 # ---------------------------------------------------------------------------
 # Banner + run
 # ---------------------------------------------------------------------------
 
+
 def _banner():
     indigo = "\033[38;5;63m"
-    gray   = "\033[90m"
-    bold   = "\033[1m"
-    reset  = "\033[0m"
+    gray = "\033[90m"
+    bold = "\033[1m"
+    reset = "\033[0m"
     print(f"""
 {indigo}{bold}  Venvy Emulator — Windows Dev Mode{reset}
   {gray}All API endpoints return fake data.{reset}
-  {gray}Put index.html next to this script.{reset}
+  {gray}Serving the real frontend from src/venvy/web/{reset}
 
   {indigo}➜{reset}  {bold}Open:{reset}  http://127.0.0.1:{PORT}
 
   {gray}Login with:  admin / admin{reset}
   {gray}──────────────────────────────────{reset}
 """)
+
 
 if __name__ == "__main__":
     _banner()

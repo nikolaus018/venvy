@@ -1,0 +1,188 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "venvy"
+version = "4.0.0"
+description = "Self-hosted application manager for Python and Rust services, with isolated environments, process supervision and Cloudflare Tunnel publishing."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "nikolaus018" }]
+keywords = ["paas", "self-hosted", "process-manager", "deployment", "cloudflare-tunnel", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Internet :: WWW/HTTP :: WSGI :: Application",
+]
+
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "sqlmodel>=0.0.16",
+    "pydantic>=2.6",
+    "aiofiles>=23.2",
+    "aiohttp>=3.9",
+    "cryptography>=42.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+# Richer process introspection. Without it, per-app CPU/memory graphs are
+# unavailable but everything else works via /proc.
+metrics = ["psutil>=5.9"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+    "httpx>=0.27",
+    "ruff>=0.4",
+    "mypy>=1.9",
+    "types-aiofiles",
+    "pre-commit>=3.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/nikolaus018/venvy"
+Repository = "https://github.com/nikolaus018/venvy"
+Issues = "https://github.com/nikolaus018/venvy/issues"
+Changelog = "https://github.com/nikolaus018/venvy/blob/main/CHANGELOG.md"
+
+[project.scripts]
+venvy = "venvy.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/venvy"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/docs", "/README.md", "/LICENSE", "/CHANGELOG.md"]
+
+
+# ── Linting ──────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "B",         # flake8-bugbear
+    "C4",        # comprehensions
+    "UP",        # pyupgrade
+    "SIM",       # simplify
+    "RUF",       # ruff-specific
+    "S",         # bandit
+    "ASYNC",     # async correctness
+    "PTH",       # prefer pathlib
+    "RET",       # return simplification
+    "TID",       # tidy imports
+]
+ignore = [
+    # Venvy's whole purpose is launching user-specified processes, so the
+    # subprocess rules fire on every legitimate call site.
+    "S603", "S607", "S606",
+    # `Depends(...)` in a parameter default is the FastAPI idiom; the rule
+    # cannot tell it apart from an accidental mutable default.
+    "B008",
+    # Broad excepts are deliberate at supervisor and background-task
+    # boundaries: one misbehaving app must not take the loop down.
+    "BLE001",
+    # try/except/pass reads more plainly than contextlib.suppress in the
+    # signal-and-teardown paths where these appear.
+    "S110", "SIM105",
+    # A ternary is not always clearer than the if/else it replaces.
+    "SIM108",
+    # `timeout` is a deliberate part of these helpers' signatures.
+    "ASYNC109",
+    # open() is fine for binary reads and for tomllib, which wants a file object.
+    "PTH123",
+    # Long messages read better inline than hoisted into a variable.
+    "TRY003", "EM101", "EM102",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert on internals, use fixtures that shadow names, and hardcode
+# credentials on purpose.
+"tests/**" = ["S101", "S105", "S106", "S108", "ARG001", "SLF001"]
+# The dev emulator fabricates plausible-looking fake data, and its fixture
+# strings (log lines, package lists) read better unwrapped.
+"tools/dev_emulator.py" = ["S311", "S105", "S106", "E501", "E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["venvy"]
+
+
+# ── Type checking ────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+# Venvy runs on Linux. Checking against the host platform would flag every
+# POSIX-only call (os.fork, signal.SIGKILL, pty, termios) as missing on a
+# developer's macOS or Windows machine.
+platform = "linux"
+files = ["src/venvy"]
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+no_implicit_optional = true
+check_untyped_defs = true
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+# Optional or untyped third-party packages.
+module = ["psutil.*", "aiofiles.*", "uvicorn.*"]
+ignore_missing_imports = true
+
+
+# ── Tests ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+]
+markers = [
+    "posix: requires a POSIX host (PTY, process groups, /proc)",
+    "slow: takes more than a second",
+]
+# Warnings from Venvy's own code are errors; third-party deprecations that we
+# cannot fix from here are allowed through so they do not mask real problems.
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:sqlalchemy.*",
+    "ignore::DeprecationWarning:sqlmodel.*",
+    # pytest-asyncio still calls asyncio.iscoroutinefunction on Python 3.14.
+    "ignore:.*asyncio.iscoroutinefunction.*:DeprecationWarning",
+    "ignore::pytest.PytestDeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["src/venvy"]
+branch = true
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
