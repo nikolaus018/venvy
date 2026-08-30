@@ -141,6 +141,23 @@
         })();
     </script>
 
+    <!-- Apply the stored theme/motion preference before first paint so the app
+         never flashes the wrong colours on load. -->
+    <script>
+        (function () {
+            try {
+                var p = localStorage.getItem('venvy-theme') || 'system';
+                var t = p === 'system'
+                    ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+                    : p;
+                document.documentElement.setAttribute('data-theme', t);
+                if (localStorage.getItem('venvy-motion') === 'reduce') {
+                    document.documentElement.setAttribute('data-motion', 'reduce');
+                }
+            } catch (e) { }
+        })();
+    </script>
+
     <!-- Tailwind CSS — using the CDN play version for single-file deployments.
          For production builds consider switching to a compiled CSS file. -->
     <script>
@@ -1094,6 +1111,685 @@
             pointer-events: none;
             cursor: not-allowed;
         }
+
+        /* ══════════════════════════════════════════════════════════════════
+           OVERLAY TOKENS — theme-aware translucent fills used inline in markup
+           ══════════════════════════════════════════════════════════════════ */
+        :root {
+            --ov-soft: rgba(255, 255, 255, 0.06);
+            --ov: rgba(255, 255, 255, 0.10);
+            --ov-strong: rgba(255, 255, 255, 0.15);
+            --ov-border-soft: rgba(255, 255, 255, 0.12);
+            --ov-border: rgba(255, 255, 255, 0.20);
+            --scrollbar-thumb: rgba(255, 255, 255, 0.08);
+            --scrollbar-thumb-hover: rgba(255, 255, 255, 0.14);
+            --ctx-bg: rgba(10, 10, 14, 0.96);
+            --modal-bg: linear-gradient(145deg, rgba(14, 14, 20, 0.98) 0%, rgba(10, 10, 15, 1) 100%);
+            --modal-sheet-bg: linear-gradient(to top, rgba(14, 14, 20, 1) 0%, rgba(10, 10, 15, 1) 100%);
+            --toast-bg: rgba(10, 10, 16, 0.97);
+            --auth-card-bg: rgba(11, 11, 16, 0.88);
+            --overlay-scrim: rgba(0, 0, 0, 0.78);
+            --btn-sheen: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, transparent 60%);
+            color-scheme: dark;
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           LIGHT THEME
+           ══════════════════════════════════════════════════════════════════ */
+        html[data-theme="light"] {
+            --bg: #f3f5f9;
+            --surface: #ffffff;
+            --surface2: #f1f5f9;
+            --surface3: #e2e8f0;
+            --surface4: #cbd5e1;
+            --sidebar-bg: #fbfcfe;
+
+            --border: rgba(15, 23, 42, 0.07);
+            --border2: rgba(15, 23, 42, 0.11);
+            --border3: rgba(15, 23, 42, 0.18);
+
+            --text: #0f172a;
+            --text2: #475569;
+            --text3: #7b8899;
+
+            --accent: #2563eb;
+            --accent-rgb: 37, 99, 235;
+            --accent-dark: #1d4ed8;
+            --accent-light: #1d4ed8;
+            --accent-glow: rgba(37, 99, 235, 0.14);
+            --accent-glow-strong: rgba(37, 99, 235, 0.24);
+
+            --red: #dc2626;
+            --red-rgb: 220, 38, 38;
+            --green: #059669;
+            --green-rgb: 5, 150, 105;
+            --yellow: #b45309;
+            --yellow-rgb: 180, 83, 9;
+            --blue: #2563eb;
+            --blue-rgb: 37, 99, 235;
+            --purple: #7e22ce;
+            --purple-rgb: 126, 34, 206;
+            --orange: #ea580c;
+
+            --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.07);
+            --shadow-elevated: 0 2px 4px rgba(15, 23, 42, 0.05), 0 8px 20px rgba(15, 23, 42, 0.09);
+            --shadow-modal: 0 8px 16px rgba(15, 23, 42, 0.10), 0 24px 56px rgba(15, 23, 42, 0.18);
+
+            --ov-soft: rgba(15, 23, 42, 0.035);
+            --ov: rgba(15, 23, 42, 0.055);
+            --ov-strong: rgba(15, 23, 42, 0.075);
+            --ov-border-soft: rgba(15, 23, 42, 0.09);
+            --ov-border: rgba(15, 23, 42, 0.13);
+            --scrollbar-thumb: rgba(15, 23, 42, 0.16);
+            --scrollbar-thumb-hover: rgba(15, 23, 42, 0.28);
+            --ctx-bg: rgba(255, 255, 255, 0.97);
+            --modal-bg: #ffffff;
+            --modal-sheet-bg: #ffffff;
+            --toast-bg: rgba(255, 255, 255, 0.98);
+            --auth-card-bg: rgba(255, 255, 255, 0.92);
+            --overlay-scrim: rgba(15, 23, 42, 0.32);
+            --btn-sheen: linear-gradient(135deg, rgba(255, 255, 255, 0.20) 0%, transparent 60%);
+            color-scheme: light;
+        }
+
+        html[data-theme="light"] .status-running {
+            background: rgba(5, 150, 105, 0.10);
+            color: var(--green);
+            border-color: rgba(5, 150, 105, 0.24);
+            box-shadow: none;
+        }
+
+        html[data-theme="light"] .badge-mem {
+            background: rgba(5, 150, 105, 0.10);
+            color: var(--green);
+            border-color: rgba(5, 150, 105, 0.20);
+        }
+
+        html[data-theme="light"] .badge-cpu {
+            background: rgba(15, 23, 42, 0.04);
+        }
+
+        html[data-theme="light"] .toggle-knob {
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.3);
+        }
+
+        html[data-theme="light"] .btn-warning {
+            color: #fff;
+        }
+
+        /* The dark-mode auth shadow reads as a grey blob on a light page. */
+        html[data-theme="light"] .auth-card {
+            border-color: var(--border2);
+            box-shadow:
+                0 12px 24px rgba(15, 23, 42, 0.07),
+                0 32px 64px rgba(15, 23, 42, 0.09);
+        }
+
+        html[data-theme="light"] #auth-screen::before {
+            background-image: radial-gradient(rgba(37, 99, 235, 0.16) 1px, transparent 1px);
+        }
+
+        /* Route the previously hard-coded component colors through the tokens */
+        ::-webkit-scrollbar-thumb {
+            background: var(--scrollbar-thumb);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--scrollbar-thumb-hover);
+        }
+
+        #ctx-menu {
+            background: var(--ctx-bg);
+        }
+
+        .modal-panel {
+            background: var(--modal-bg);
+        }
+
+        .modal-panel-sheet {
+            background: var(--modal-sheet-bg);
+        }
+
+        .modal-overlay {
+            background: var(--overlay-scrim);
+        }
+
+        .toast {
+            background: var(--toast-bg);
+        }
+
+        .auth-card {
+            background: var(--auth-card-bg);
+        }
+
+        .btn-primary::before {
+            background: var(--btn-sheen);
+        }
+
+        .account-footer-btn-hover:hover {
+            background: var(--ov-soft);
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           MOTION PREFERENCES
+           ══════════════════════════════════════════════════════════════════ */
+        @media (prefers-reduced-motion: reduce) {
+
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
+
+            .btn-primary:hover,
+            .btn-ghost:hover,
+            .btn-secondary:hover,
+            .btn-danger-solid:hover,
+            .btn-warning:hover,
+            .btn-orange:hover {
+                transform: none !important;
+            }
+        }
+
+        html[data-motion="reduce"] *,
+        html[data-motion="reduce"] *::before,
+        html[data-motion="reduce"] *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+            scroll-behavior: auto !important;
+        }
+
+        html[data-motion="reduce"] .btn-primary:hover,
+        html[data-motion="reduce"] .btn-ghost:hover,
+        html[data-motion="reduce"] .btn-secondary:hover,
+        html[data-motion="reduce"] .btn-danger-solid:hover,
+        html[data-motion="reduce"] .btn-warning:hover,
+        html[data-motion="reduce"] .btn-orange:hover {
+            transform: none !important;
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           FOCUS VISIBILITY — every interactive surface gets a ring
+           ══════════════════════════════════════════════════════════════════ */
+        :focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        .tab-btn:focus-visible {
+            outline-offset: -2px;
+        }
+
+        /* Skip link — first tab stop, hidden until focused */
+        .skip-link {
+            position: fixed;
+            top: 0;
+            left: 50%;
+            transform: translate(-50%, -140%);
+            z-index: 200;
+            background: var(--accent);
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 10px 18px;
+            border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+            transition: transform var(--transition-fast);
+        }
+
+        .skip-link:focus {
+            transform: translate(-50%, 0);
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           STATUS — crashed / error is visually distinct from stopped
+           ══════════════════════════════════════════════════════════════════ */
+        .status-error {
+            background: rgba(var(--red-rgb), 0.12);
+            color: var(--red);
+            border: 1px solid rgba(var(--red-rgb), 0.32);
+            letter-spacing: 0.05em;
+        }
+
+        .status-starting {
+            background: rgba(var(--yellow-rgb), 0.12);
+            color: var(--amber);
+            border: 1px solid rgba(var(--yellow-rgb), 0.28);
+            letter-spacing: 0.05em;
+        }
+
+        @keyframes crash-pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.35;
+            }
+        }
+
+        .crash-dot {
+            animation: crash-pulse 1.1s ease-in-out infinite;
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           TOASTS — wrap, dismissible, actionable
+           ══════════════════════════════════════════════════════════════════ */
+        #toast-container {
+            pointer-events: none;
+            width: min(420px, calc(100vw - 2rem));
+        }
+
+        .toast {
+            /* override the single-line clamp from the base rule */
+            white-space: normal;
+            overflow: visible;
+            text-overflow: clip;
+            max-width: 100%;
+            width: 100%;
+            pointer-events: auto;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.625rem;
+            line-height: 1.45;
+            text-align: left;
+        }
+
+        .toast-icon {
+            flex-shrink: 0;
+            width: 15px;
+            height: 15px;
+            margin-top: 2px;
+        }
+
+        .toast-msg {
+            flex: 1;
+            min-width: 0;
+            overflow-wrap: anywhere;
+            max-height: 9em;
+            overflow-y: auto;
+            user-select: text;
+            -webkit-user-select: text;
+        }
+
+        .toast-close {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text3);
+            cursor: pointer;
+            transition: background var(--transition-fast), color var(--transition-fast);
+            margin: -1px -4px 0 0;
+        }
+
+        .toast-close:hover {
+            background: var(--surface3);
+            color: var(--text);
+        }
+
+        .toast-action {
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--accent-light);
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 0 2px;
+            white-space: nowrap;
+            align-self: center;
+        }
+
+        .toast-action:hover {
+            text-decoration: underline;
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           KEYBOARD CHIPS
+           ══════════════════════════════════════════════════════════════════ */
+        .kbd {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 20px;
+            height: 20px;
+            padding: 0 6px;
+            border-radius: 5px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-bottom-width: 2px;
+            color: var(--text2);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10.5px;
+            font-weight: 600;
+            line-height: 1;
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           COMMAND PALETTE
+           ══════════════════════════════════════════════════════════════════ */
+        #command-palette {
+            align-items: flex-start;
+        }
+
+        .palette-panel {
+            width: 100%;
+            max-width: 560px;
+            margin-top: max(8vh, env(safe-area-inset-top, 0px));
+            background: var(--modal-bg);
+            border: 1px solid var(--border3);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-modal);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            max-height: min(70vh, 560px);
+        }
+
+        .palette-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            padding: 10px 16px;
+            text-align: left;
+            color: var(--text2);
+            cursor: pointer;
+            border-left: 2px solid transparent;
+            transition: background var(--transition-fast), color var(--transition-fast);
+        }
+
+        .palette-item[data-active="1"] {
+            background: rgba(var(--accent-rgb), 0.10);
+            color: var(--text);
+            border-left-color: var(--accent);
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           SKELETON LOADING
+           ══════════════════════════════════════════════════════════════════ */
+        @keyframes skeleton-shimmer {
+            0% {
+                background-position: 200% 0;
+            }
+
+            100% {
+                background-position: -200% 0;
+            }
+        }
+
+        .skeleton {
+            background: linear-gradient(90deg, var(--surface2) 25%, var(--surface3) 50%, var(--surface2) 75%);
+            background-size: 200% 100%;
+            animation: skeleton-shimmer 1.4s ease-in-out infinite;
+            border-radius: 6px;
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           SIDEBAR SEARCH
+           ══════════════════════════════════════════════════════════════════ */
+        #app-search-wrap {
+            position: relative;
+        }
+
+        #app-search-clear {
+            position: absolute;
+            right: 6px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 22px;
+            height: 22px;
+            border-radius: 5px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            color: var(--text3);
+            cursor: pointer;
+        }
+
+        #app-search-clear:hover {
+            background: var(--surface3);
+            color: var(--text);
+        }
+
+        #app-search-wrap.has-value #app-search-clear {
+            display: flex;
+        }
+
+        .app-count-pill {
+            font-size: 10px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            padding: 1px 6px;
+            border-radius: 99px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            color: var(--text3);
+        }
+
+        mark.search-hit {
+            background: rgba(var(--accent-rgb), 0.30);
+            color: var(--text);
+            border-radius: 3px;
+            padding: 0 1px;
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           LOG VIEWER CONTROLS
+           ══════════════════════════════════════════════════════════════════ */
+        #log-viewer mark {
+            background: var(--yellow);
+            color: #000;
+            border-radius: 2px;
+        }
+
+        #log-viewer mark.log-hit-active {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 0 0 2px var(--accent-glow-strong);
+        }
+
+        #log-viewer.wrap-off {
+            white-space: pre;
+            overflow-x: auto;
+        }
+
+        .log-tool-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            height: 26px;
+            padding: 0 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text3);
+            background: transparent;
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            white-space: nowrap;
+        }
+
+        .log-tool-btn:hover {
+            color: var(--text);
+            background: var(--surface3);
+            border-color: var(--border2);
+        }
+
+        .log-tool-btn[aria-pressed="true"] {
+            color: var(--accent-light);
+            background: rgba(var(--accent-rgb), 0.12);
+            border-color: rgba(var(--accent-rgb), 0.25);
+        }
+
+        /* Jump-to-latest pill that appears when you scroll away from the tail */
+        #log-jump-btn {
+            position: absolute;
+            bottom: 14px;
+            left: 50%;
+            transform: translateX(-50%) translateY(8px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity var(--transition-fast), transform var(--transition-fast);
+            z-index: 5;
+        }
+
+        #log-jump-btn.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+            pointer-events: auto;
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           SEGMENTED CONTROL (theme picker, etc.)
+           ══════════════════════════════════════════════════════════════════ */
+        .segmented {
+            display: inline-flex;
+            padding: 2px;
+            gap: 2px;
+            border-radius: var(--radius-sm);
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+        }
+
+        .segmented button {
+            flex: 1;
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 11.5px;
+            font-weight: 600;
+            color: var(--text3);
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            white-space: nowrap;
+        }
+
+        .segmented button:hover {
+            color: var(--text2);
+        }
+
+        .segmented button[aria-checked="true"] {
+            background: var(--surface4);
+            color: var(--text);
+            box-shadow: var(--shadow-card);
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           MODAL ENTRANCE
+           ══════════════════════════════════════════════════════════════════ */
+        @keyframes modalIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px) scale(0.985);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .modal-overlay:not(.hidden)>.modal-panel,
+        .modal-overlay:not(.hidden)>.palette-panel {
+            animation: modalIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           CONNECTION BANNER — surfaces a dropped backend before actions fail
+           ══════════════════════════════════════════════════════════════════ */
+        #conn-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 120;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: calc(6px + env(safe-area-inset-top, 0px)) 12px 6px;
+            font-size: 12px;
+            font-weight: 700;
+            background: var(--amber);
+            color: #000;
+            transform: translateY(-100%);
+            transition: transform var(--transition-med);
+        }
+
+        #conn-banner.show {
+            transform: translateY(0);
+        }
+
+        body {
+            transition: padding-top var(--transition-med);
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+           MISC POLISH
+           ══════════════════════════════════════════════════════════════════ */
+        button:disabled,
+        [disabled] {
+            cursor: not-allowed;
+        }
+
+        /* Tap highlight is a grey box on iOS — we have our own :active states */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Inputs must be >=16px on iOS or Safari zooms the viewport on focus */
+        @media (max-width: 767px) {
+
+            input.inp,
+            select.inp,
+            textarea.inp,
+            #app-search,
+            #log-search,
+            #palette-input {
+                font-size: 16px !important;
+            }
+        }
+
+        /* Folder row highlighted as a drop target during a drag */
+        .drop-target {
+            background: rgba(var(--accent-rgb), 0.14) !important;
+            box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.45);
+        }
+
+        .hover-ov {
+            transition: background var(--transition-fast);
+        }
+
+        .hover-ov:hover {
+            background: var(--ov-soft);
+        }
+
+        /* Screen-reader-only utility */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
     </style>
 
     <script>
@@ -1113,8 +1809,22 @@
 
 <body class="flex flex-col select-none" onclick="closeCtxMenu()">
 
+    <!-- Skip link — first tab stop for keyboard users -->
+    <a href="#main-content" class="skip-link" id="skip-link">Skip to content</a>
+
+    <!-- Connection banner — shown when the backend stops responding -->
+    <div id="conn-banner" role="status" aria-live="polite">
+        <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        </svg>
+        <span id="conn-banner-text">Reconnecting to server…</span>
+    </div>
+
     <!-- Toast -->
-    <div id="toast-container"></div>
+    <div id="toast-container" role="region" aria-label="Notifications"></div>
+
+    <!-- Polite live region for screen-reader status announcements -->
+    <div id="sr-live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
 
 
@@ -1138,7 +1848,7 @@
         style="background:rgba(0,0,0,0.6)"></div>
 
     <!-- Context Menu -->
-    <div id="ctx-menu"
+    <div id="ctx-menu" role="menu" aria-label="File options"
         class="fixed py-1.5 w-48 hidden z-[60] text-sm font-medium transform origin-top-left scale-95 opacity-0 transition duration-100">
         <div class="px-3 py-2 section-label border-b truncate" id="ctx-header" style="border-color:var(--border)">File
             Options</div>
@@ -1239,8 +1949,24 @@
             </div>
 
             <!-- App list -->
-            <div class="px-4 pb-1.5 section-label">Applications</div>
-            <nav class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5 min-h-0" id="app-list"></nav>
+            <div class="px-4 pb-1.5 flex items-center gap-2">
+                <span class="section-label" id="app-list-label">Applications</span>
+                <span class="app-count-pill ml-auto" id="app-count" aria-hidden="true">0</span>
+            </div>
+            <div class="px-3 pb-2" id="app-search-wrap">
+                <label for="app-search" class="sr-only">Filter applications</label>
+                <input type="text" id="app-search" placeholder="Filter…" autocomplete="off" spellcheck="false"
+                    class="inp w-full pl-3 pr-8 py-2 text-xs font-medium"
+                    oninput="onAppSearchInput()" onkeydown="onAppSearchKey(event)">
+                <button type="button" id="app-search-clear" onclick="clearAppSearch()" aria-label="Clear filter"
+                    title="Clear filter">
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path d="M18 6L6 18M6 6l12 12" stroke-linecap="round" />
+                    </svg>
+                </button>
+            </div>
+            <nav class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5 min-h-0" id="app-list"
+                aria-labelledby="app-list-label"></nav>
 
             <!-- System nav -->
             <div class="px-3 py-2 shrink-0" style="border-top:1px solid var(--border)">
@@ -1257,7 +1983,7 @@
                     class="account-footer-btn-hover w-full flex items-center gap-3 px-2 py-2 rounded-xl transition active:scale-95 text-left"
                     style="transition: background 0.15s" id="account-footer-btn">
                     <div class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0"
-                        style="background:rgba(255, 255, 255,0.1);color:var(--text);border:1px solid rgba(255, 255, 255,0.2)"
+                        style="background:var(--ov);color:var(--text);border:1px solid var(--ov-border)"
                         id="user-avatar">U</div>
                     <div class="flex flex-col flex-1 min-w-0">
                         <span class="text-sm font-semibold truncate" style="color:var(--text)"
@@ -1270,7 +1996,8 @@
         </aside>
 
         <!-- Main Content -->
-        <main class="flex-1 flex flex-col relative overflow-hidden w-full" style="background:var(--bg)">
+        <main id="main-content" tabindex="-1" class="flex-1 flex flex-col relative overflow-hidden w-full"
+            style="background:var(--bg)">
 
             <!-- Empty State -->
             <div id="empty-state" class="absolute inset-0 flex flex-col items-center justify-center px-4 text-center">
@@ -1339,7 +2066,7 @@
                         <div class="card px-5 py-4 flex items-center justify-between">
                             <div class="flex items-center gap-3">
                                 <div class="w-8 h-8 rounded-lg flex items-center justify-center"
-                                    style="background:rgba(255, 255, 255,0.1);border:1px solid rgba(255, 255, 255,0.2)">
+                                    style="background:var(--ov);border:1px solid var(--ov-border)">
                                     <i data-feather="hard-drive" class="w-4 h-4" style="color:var(--text)"></i>
                                 </div>
                                 <div>
@@ -1413,10 +2140,10 @@
                             <div class="p-5 space-y-5">
                                 <!-- Setup guide -->
                                 <div class="rounded-xl overflow-hidden"
-                                    style="border:1px solid rgba(255, 255, 255,0.2)">
+                                    style="border:1px solid var(--ov-border)">
                                     <button onclick="toggleCfGuide()" id="cf-guide-toggle"
                                         class="w-full flex items-center gap-2.5 px-4 py-3 transition text-left"
-                                        style="background:rgba(255, 255, 255,0.08)">
+                                        style="background:var(--ov-soft)">
                                         <svg class="w-4 h-4 shrink-0" fill="none" stroke="var(--text)"
                                             viewBox="0 0 24 24" stroke-width="2">
                                             <circle cx="12" cy="12" r="10" />
@@ -1432,7 +2159,7 @@
                                         </svg>
                                     </button>
                                     <div id="cf-guide-body" class="hidden p-4 space-y-4 text-xs"
-                                        style="background:var(--surface2);border-top:1px solid rgba(255, 255, 255,0.15);color:var(--text2)">
+                                        style="background:var(--surface2);border-top:1px solid var(--ov-strong);color:var(--text2)">
                                         <div class="space-y-2">
                                             <p class="font-bold flex items-center gap-2" style="color:var(--text)">
                                                 <span
@@ -1492,7 +2219,7 @@
                                                         → All
                                                         zones</strong>.</p>
                                                 <p class="mt-1.5 text-[11px] px-3 py-2 rounded-lg"
-                                                    style="background:rgba(255, 255, 255,0.06);border:1px solid rgba(255, 255, 255,0.12);color:var(--text)">
+                                                    style="background:var(--ov-soft);border:1px solid var(--ov-border-soft);color:var(--text)">
                                                     <strong>Why DNS:Edit?</strong> When you publish a hostname here,
                                                     Venvy
                                                     automatically creates a proxied CNAME record
@@ -1597,9 +2324,9 @@
                                         <span id="cf-test-dns-zones-text" class="leading-relaxed"></span>
                                     </div>
                                     <div id="cf-test-permission-hint" class="hidden rounded-xl overflow-hidden"
-                                        style="border:1px solid rgba(255, 255, 255,0.2)">
+                                        style="border:1px solid var(--ov-border)">
                                         <div class="px-4 py-2.5 flex items-center gap-2"
-                                            style="background:rgba(255, 255, 255,0.1);border-bottom:1px solid rgba(255, 255, 255,0.2)">
+                                            style="background:var(--ov);border-bottom:1px solid var(--ov-border)">
                                             <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="var(--yellow)"
                                                 viewBox="0 0 24 24" stroke-width="2">
                                                 <path stroke-linecap="round" stroke-linejoin="round"
@@ -1705,16 +2432,23 @@
                 <div class="flex items-stretch shrink-0"
                     style="background:var(--surface);border-bottom:1px solid var(--border)">
                     <!-- Scrollable tab buttons -->
-                    <div
+                    <div role="tablist" aria-label="Application sections" onkeydown="onTabListKey(event)"
                         class="flex-1 min-w-0 px-4 md:px-6 flex gap-5 text-sm font-medium overflow-x-auto scrollbar-hide h-[44px]">
-                        <button class="tab-btn active h-full whitespace-nowrap" data-requires-operator
-                            onclick="switchTab('terminal')">Terminal</button>
-                        <button class="tab-btn h-full whitespace-nowrap" onclick="switchTab('files')">Files</button>
-                        <button class="tab-btn h-full whitespace-nowrap" onclick="switchTab('logs')">Logs</button>
-                        <button class="tab-btn h-full whitespace-nowrap"
-                            onclick="switchTab('packages')">Packages</button>
-                        <button class="tab-btn h-full whitespace-nowrap"
-                            onclick="switchTab('settings')">Settings</button>
+                        <button class="tab-btn active h-full whitespace-nowrap" data-requires-operator role="tab"
+                            id="tabbtn-terminal" aria-controls="tab-terminal" aria-selected="true" data-tab="terminal"
+                            title="Terminal (1)" onclick="switchTab('terminal')">Terminal</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-files"
+                            aria-controls="tab-files" aria-selected="false" data-tab="files" tabindex="-1"
+                            title="Files (2)" onclick="switchTab('files')">Files</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-logs"
+                            aria-controls="tab-logs" aria-selected="false" data-tab="logs" tabindex="-1"
+                            title="Logs (3)" onclick="switchTab('logs')">Logs</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-packages"
+                            aria-controls="tab-packages" aria-selected="false" data-tab="packages" tabindex="-1"
+                            title="Packages (4)" onclick="switchTab('packages')">Packages</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-settings"
+                            aria-controls="tab-settings" aria-selected="false" data-tab="settings" tabindex="-1"
+                            title="Settings (5)" onclick="switchTab('settings')">Settings</button>
                     </div>
 
                     <!-- Save Settings Button (Visible only on Settings tab) — outside scroll so always reachable -->
@@ -1741,6 +2475,7 @@
 
                             <!-- Jail badge -->
                             <div class="flex items-center gap-1 px-1.5 py-0.5 rounded shrink-0"
+                                title="This shell is confined to the application directory — it cannot reach the rest of the host filesystem."
                                 style="background:rgba(48,209,88,0.08);border:1px solid rgba(48,209,88,0.2)">
                                 <svg class="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="var(--green)"
                                     stroke-width="2.5">
@@ -1970,20 +2705,91 @@
                     <div id="tab-logs"
                         class="tab-content absolute inset-0 md:inset-4 hidden flex flex-col rounded-none md:rounded-xl overflow-hidden pb-safe-content md:pb-0"
                         style="background:var(--surface);border:1px solid var(--border)">
-                        <div class="h-11 flex items-center justify-end px-4 gap-2.5 shrink-0"
+                        <div class="min-h-[44px] flex items-center px-3 gap-1.5 shrink-0 overflow-x-auto scrollbar-hide"
                             style="border-bottom:1px solid var(--border);background:var(--surface2)">
-                            <span class="mr-auto text-xs flex items-center gap-2 font-medium"
-                                style="color:var(--text3)">
-                                <div class="w-2 h-2 rounded-full pulse-dot" style="background:var(--green)"></div>
-                                Live Stream
+                            <span class="text-xs flex items-center gap-2 font-medium shrink-0 pr-1"
+                                style="color:var(--text3)" id="log-live-label">
+                                <span class="w-2 h-2 rounded-full pulse-dot" id="log-live-dot"
+                                    style="background:var(--green)"></span>
+                                <span id="log-live-text" class="hidden sm:inline">Live</span>
                             </span>
-                            <button onclick="copyLogs()"
-                                class="btn-ghost text-xs px-3 py-1.5 rounded-lg font-medium">Copy</button>
-                            <button onclick="deleteLogs()"
-                                class="btn-danger text-xs px-3 py-1.5 rounded-lg font-medium">Clear</button>
+
+                            <div class="w-px h-5 shrink-0 mx-0.5" style="background:var(--border2)"></div>
+
+                            <!-- Filter -->
+                            <div class="relative flex-1" style="min-width:88px;max-width:300px">
+                                <label for="log-search" class="sr-only">Filter log lines</label>
+                                <input type="text" id="log-search" placeholder="Filter…" autocomplete="off"
+                                    spellcheck="false" class="inp w-full pl-2.5 pr-14 py-1 text-xs mono"
+                                    style="height:26px" oninput="onLogSearchInput()" onkeydown="onLogSearchKey(event)">
+                                <span id="log-search-count"
+                                    class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] mono pointer-events-none"
+                                    style="color:var(--text3)"></span>
+                            </div>
+
+                            <button class="log-tool-btn shrink-0" id="log-follow-btn" aria-pressed="true"
+                                onclick="toggleLogFollow()" title="Follow new output (F)">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M12 5v14m0 0l-6-6m6 6l6-6" stroke-linecap="round"
+                                        stroke-linejoin="round" />
+                                </svg>
+                                <span class="hidden md:inline">Follow</span>
+                            </button>
+
+                            <button class="log-tool-btn shrink-0" id="log-wrap-btn" aria-pressed="true"
+                                onclick="toggleLogWrap()" title="Toggle line wrapping (W)">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M3 6h18M3 12h13a4 4 0 010 8h-3m0 0l2-2m-2 2l2 2M3 18h5"
+                                        stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                                <span class="hidden md:inline">Wrap</span>
+                            </button>
+
+                            <div class="w-px h-5 shrink-0 mx-0.5" style="background:var(--border2)"></div>
+
+                            <button class="log-tool-btn shrink-0" onclick="copyLogs()" title="Copy all logs">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                                </svg>
+                                <span class="hidden md:inline">Copy</span>
+                            </button>
+
+                            <button class="log-tool-btn shrink-0" onclick="downloadLogs()" title="Download as .log">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
+                                        stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                                <span class="hidden md:inline">Save</span>
+                            </button>
+
+                            <button class="log-tool-btn shrink-0" onclick="deleteLogs()" title="Clear the log file"
+                                style="color:var(--red)" data-requires-operator>
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m2 0l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"
+                                        stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                                <span class="hidden md:inline">Clear</span>
+                            </button>
                         </div>
-                        <pre id="log-viewer"
-                            class="flex-1 p-4 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed"><span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span></pre>
+                        <div class="flex-1 relative min-h-0 flex flex-col">
+                            <pre id="log-viewer" tabindex="0" role="log" aria-label="Application logs"
+                                class="flex-1 p-4 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed"><span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span></pre>
+                            <button id="log-jump-btn" onclick="logJumpToLatest()"
+                                class="btn-primary px-3 py-1.5 text-xs font-semibold rounded-full flex items-center gap-1.5">
+                                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="3">
+                                    <path d="M12 5v14m0 0l-6-6m6 6l6-6" stroke-linecap="round"
+                                        stroke-linejoin="round" />
+                                </svg>
+                                Jump to latest
+                            </button>
+                        </div>
                     </div>
 
                     <!-- PACKAGES -->
@@ -2396,11 +3202,11 @@
     <!-- ══════════ MODALS ══════════ -->
 
     <!-- Create App Modal -->
-    <div id="create-app-modal"
+    <div role="dialog" aria-modal="true" aria-labelledby="create-app-modal-title" id="create-app-modal"
         class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-0 md:p-4">
         <div class="modal-panel-sheet md:modal-panel p-5 w-full max-w-lg shadow-lg max-h-[92vh] flex flex-col">
             <div class="flex justify-between items-center mb-5 shrink-0">
-                <h2 class="text-lg font-bold" style="color:var(--text)">New Application</h2>
+                <h2 class="text-lg font-bold" id="create-app-modal-title" style="color:var(--text)">New Application</h2>
                 <button onclick="closeModal('create-app-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
                         data-feather="x" class="w-4 h-4"></i></button>
             </div>
@@ -2452,11 +3258,11 @@
     </div>
 
 <!-- Users Modal -->
-    <div id="users-modal"
+    <div role="dialog" aria-modal="true" aria-labelledby="users-modal-title" id="users-modal"
         class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0">
         <div class="modal-panel p-5 w-full max-w-2xl shadow-lg h-[80vh] md:h-[580px] flex flex-col">
             <div class="flex justify-between items-center mb-5 shrink-0">
-                <h2 class="text-lg font-bold" style="color:var(--text)">Manage Users</h2>
+                <h2 class="text-lg font-bold" id="users-modal-title" style="color:var(--text)">Manage Users</h2>
                 <button onclick="closeModal('users-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
                         data-feather="x" class="w-4 h-4"></i></button>
             </div>
@@ -2491,7 +3297,7 @@
 
 
     <!-- Delete App Modal -->
-    <div id="delete-app-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+    <div role="dialog" aria-modal="true" aria-labelledby="delete-app-modal-title" id="delete-app-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
         <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
             <div class="flex items-center gap-3 mb-4">
                 <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
@@ -2499,22 +3305,30 @@
                     <i data-feather="trash-2" class="w-5 h-5" style="color:var(--red)"></i>
                 </div>
                 <div>
-                    <h2 class="text-base font-bold" style="color:var(--text)">Delete Application</h2>
+                    <h2 class="text-base font-bold" id="delete-app-modal-title" style="color:var(--text)">Delete
+                        Application</h2>
                     <p class="text-xs" style="color:var(--text3)">This action cannot be undone</p>
                 </div>
             </div>
-            <p class="text-sm mb-6" style="color:var(--text2)">All files, packages, and logs for <strong
+            <p class="text-sm mb-4" style="color:var(--text2)">All files, packages, and logs for <strong
                     id="delete-app-name" style="color:var(--text)"></strong> will be permanently deleted.</p>
+            <label for="delete-app-confirm-input" class="block text-xs mb-2" style="color:var(--text3)">
+                Type <strong class="mono" id="delete-app-confirm-hint" style="color:var(--text2)"></strong> to confirm
+            </label>
+            <input type="text" id="delete-app-confirm-input" autocomplete="off" spellcheck="false"
+                class="inp w-full px-3.5 py-2.5 text-sm mono mb-5" placeholder="Application name"
+                oninput="onDeleteAppConfirmInput()" onkeydown="if(event.key==='Enter')confirmDeleteApp()">
             <div class="flex gap-3">
                 <button onclick="closeModal('delete-app-modal')"
                     class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
-                <button onclick="confirmDeleteApp()" class="btn-danger-solid flex-1 py-2.5 text-sm">Delete</button>
+                <button onclick="confirmDeleteApp()" id="delete-app-confirm-btn" disabled
+                    class="btn-danger-solid flex-1 py-2.5 text-sm disabled:opacity-40">Delete</button>
             </div>
         </div>
     </div>
 
     <!-- Delete User Modal -->
-    <div id="delete-user-modal" class="fixed inset-0 z-[96] modal-overlay hidden flex items-center justify-center p-4">
+    <div role="dialog" aria-modal="true" aria-labelledby="delete-user-modal-title" id="delete-user-modal" class="fixed inset-0 z-[96] modal-overlay hidden flex items-center justify-center p-4">
         <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
             <div class="flex items-center gap-3 mb-4">
                 <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
@@ -2522,7 +3336,8 @@
                     <i data-feather="user-x" class="w-5 h-5" style="color:var(--red)"></i>
                 </div>
                 <div>
-                    <h2 class="text-base font-bold" style="color:var(--text)">Delete User</h2>
+                    <h2 class="text-base font-bold" id="delete-user-modal-title" style="color:var(--text)">Delete
+                        User</h2>
                     <p class="text-xs" style="color:var(--text3)">This action cannot be undone</p>
                 </div>
             </div>
@@ -2544,7 +3359,7 @@
     </div>
 
     <!-- Tunnel Hostname Conflict Modal -->
-    <div id="tunnel-conflict-modal"
+    <div role="dialog" aria-modal="true" aria-labelledby="tunnel-conflict-modal-title" id="tunnel-conflict-modal"
         class="fixed inset-0 z-[97] modal-overlay hidden flex items-center justify-center p-4">
         <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
             <div class="flex items-center gap-3 mb-4">
@@ -2556,7 +3371,7 @@
                     </svg>
                 </div>
                 <div>
-                    <h2 class="text-base font-bold" style="color:var(--text)">Hostname Already In Use</h2>
+                    <h2 class="text-base font-bold" id="tunnel-conflict-modal-title" style="color:var(--text)">Hostname Already In Use</h2>
                     <p class="text-xs" style="color:var(--text3)">Publishing will overwrite the existing route</p>
                 </div>
             </div>
@@ -2570,7 +3385,7 @@
     </div>
 
     <!-- Remove Package Modal -->
-    <div id="remove-pkg-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+    <div role="dialog" aria-modal="true" aria-labelledby="remove-pkg-modal-title" id="remove-pkg-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
         <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
             <div class="flex items-center gap-3 mb-4">
                 <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
@@ -2578,7 +3393,7 @@
                     <i data-feather="package" class="w-5 h-5" style="color:var(--red)"></i>
                 </div>
                 <div>
-                    <h2 class="text-base font-bold" style="color:var(--text)">Remove Package</h2>
+                    <h2 class="text-base font-bold" id="remove-pkg-modal-title" style="color:var(--text)">Remove Package</h2>
                     <p class="text-xs" style="color:var(--text3)">Will be uninstalled from the app's venv</p>
                 </div>
             </div>
@@ -2593,7 +3408,7 @@
     </div>
 
     <!-- File Name Modal -->
-    <div id="file-name-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+    <div role="dialog" aria-modal="true" aria-labelledby="file-name-modal-title" id="file-name-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
         <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
             <h2 class="text-base font-bold mb-4" id="file-name-modal-title" style="color:var(--text)">New File</h2>
             <input type="text" id="file-name-input" class="inp w-full px-4 py-3 text-sm mb-5" placeholder="filename.py">
@@ -2607,10 +3422,10 @@
     </div>
 
     <!-- Change Password Modal -->
-    <div id="change-pwd-modal" class="fixed inset-0 z-[90] modal-overlay hidden flex items-center justify-center p-4">
+    <div role="dialog" aria-modal="true" aria-labelledby="change-pwd-modal-title" id="change-pwd-modal" class="fixed inset-0 z-[90] modal-overlay hidden flex items-center justify-center p-4">
         <div class="modal-panel p-5 w-full max-w-sm shadow-lg space-y-4">
             <div>
-                <h2 class="text-base font-bold" style="color:var(--text)">Change Password</h2>
+                <h2 class="text-base font-bold" id="change-pwd-modal-title" style="color:var(--text)">Change Password</h2>
                 <p class="text-xs mt-1" style="color:var(--text3)">Enter your current password, then choose a new one.
                 </p>
             </div>
@@ -2648,14 +3463,14 @@
     </div>
 
     <!-- Account Menu Modal -->
-    <div id="account-menu-modal"
+    <div role="dialog" aria-modal="true" aria-label="Account menu" id="account-menu-modal"
         class="fixed inset-0 z-[90] modal-overlay hidden flex items-end md:items-end justify-start p-0 md:p-0">
         <div class="modal-panel-sheet md:modal-panel p-0 w-full md:w-72 md:mb-4 md:ml-4 shadow-lg overflow-hidden rounded-t-xl md:rounded-xl"
             style="max-height:90vh">
             <!-- Header -->
             <div class="px-5 py-4 flex items-center gap-3" style="border-bottom:1px solid var(--border)">
                 <div class="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0"
-                    style="background:rgba(255, 255, 255,0.15);color:var(--text);border:1px solid rgba(255, 255, 255,0.2)"
+                    style="background:var(--ov-strong);color:var(--text);border:1px solid var(--ov-border)"
                     id="acct-menu-avatar">U</div>
                 <div class="flex-1 min-w-0">
                     <div class="text-sm font-semibold truncate" style="color:var(--text)" id="acct-menu-username">User
@@ -2668,13 +3483,13 @@
             <!-- Menu items -->
             <div class="py-2">
                 <button onclick="closeModal('account-menu-modal');openChangePwdModal()"
-                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover:bg-white/5 text-left"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
                     style="color:var(--text2)">
                     <i data-feather="lock" class="w-4 h-4 shrink-0"></i>
                     Change Password
                 </button>
                 <button onclick="closeModal('account-menu-modal');openTotpSetup()" id="acct-totp-btn"
-                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover:bg-white/5 text-left"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
                     style="color:var(--text2)">
                     <i data-feather="shield" class="w-4 h-4 shrink-0"></i>
                     <span id="acct-totp-label">Set up Authenticator (2FA)</span>
@@ -2682,11 +3497,50 @@
                         style="background:rgba(16,185,129,0.15);color:var(--green);border:1px solid rgba(16,185,129,0.2)">ON</span>
                 </button>
 
+                <button onclick="closeModal('account-menu-modal');openShortcutsModal()"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
+                    style="color:var(--text2)">
+                    <i data-feather="command" class="w-4 h-4 shrink-0"></i>
+                    Keyboard Shortcuts
+                    <span class="kbd ml-auto">?</span>
+                </button>
+            </div>
+
+            <!-- Appearance -->
+            <div style="border-top:1px solid var(--border)" class="px-5 py-3.5 space-y-3">
+                <div class="section-label">Appearance</div>
+                <div>
+                    <div class="text-xs mb-1.5" style="color:var(--text3)">Theme</div>
+                    <div class="segmented w-full" role="radiogroup" aria-label="Theme">
+                        <button type="button" role="radio" aria-checked="false" data-theme-opt="light"
+                            onclick="setTheme('light')">
+                            <i data-feather="sun" class="w-3.5 h-3.5"></i> Light
+                        </button>
+                        <button type="button" role="radio" aria-checked="false" data-theme-opt="dark"
+                            onclick="setTheme('dark')">
+                            <i data-feather="moon" class="w-3.5 h-3.5"></i> Dark
+                        </button>
+                        <button type="button" role="radio" aria-checked="true" data-theme-opt="system"
+                            onclick="setTheme('system')">
+                            <i data-feather="monitor" class="w-3.5 h-3.5"></i> Auto
+                        </button>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-xs font-medium" style="color:var(--text2)">Reduce motion</div>
+                        <div class="text-[11px]" style="color:var(--text3)">Disable animations</div>
+                    </div>
+                    <button type="button" id="motion-toggle" role="switch" aria-checked="false"
+                        aria-label="Reduce motion" onclick="toggleReduceMotion()" class="toggle-track shrink-0">
+                        <span class="toggle-knob"></span>
+                    </button>
+                </div>
             </div>
             <!-- Logout -->
             <div style="border-top:1px solid var(--border)" class="py-2">
                 <button onclick="logout()"
-                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover:bg-white/5 text-left"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
                     style="color:var(--red)">
                     <i data-feather="log-out" class="w-4 h-4 shrink-0"></i>
                     Sign Out
@@ -2696,12 +3550,12 @@
     </div>
 
     <!-- TOTP Setup Modal -->
-    <div id="totp-setup-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+    <div role="dialog" aria-modal="true" aria-labelledby="totp-modal-title" id="totp-setup-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
         <div class="modal-panel p-5 w-full max-w-sm shadow-lg space-y-5">
             <!-- Header -->
             <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                    style="background:rgba(255, 255, 255,0.15);border:1px solid rgba(255, 255, 255,0.2)">
+                    style="background:var(--ov-strong);border:1px solid var(--ov-border)">
                     <i data-feather="shield" class="w-5 h-5" style="color:var(--text)"></i>
                 </div>
                 <div>
@@ -2780,7 +3634,7 @@
         style="background:var(--surface);border:1px solid var(--border2);display:none">
         <div class="px-4 py-3.5 flex items-center gap-3">
             <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-                style="background:rgba(255, 255, 255,0.15);border:1px solid rgba(255, 255, 255,0.2)">
+                style="background:var(--ov-strong);border:1px solid var(--ov-border)">
                 <svg class="w-4 h-4" fill="none" stroke="var(--text)" viewBox="0 0 24 24" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round"
                         d="M12 18.5a6.5 6.5 0 100-13 6.5 6.5 0 000 13z" />
@@ -2825,6 +3679,76 @@
     </div>
 
     <!-- ══════════ JAVASCRIPT (all original logic preserved) ══════════ -->
+    <!-- ── Generic Confirm Modal (replaces native confirm()) ───────────────── -->
+    <div id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title"
+        class="fixed inset-0 z-[98] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" id="confirm-modal-icon">
+                </div>
+                <div class="min-w-0">
+                    <h2 class="text-base font-bold" id="confirm-modal-title" style="color:var(--text)">Are you sure?
+                    </h2>
+                    <p class="text-xs" id="confirm-modal-sub" style="color:var(--text3)"></p>
+                </div>
+            </div>
+            <p class="text-sm mb-6" id="confirm-modal-body" style="color:var(--text2)"></p>
+            <div class="flex gap-3">
+                <button onclick="_confirmResolve(false)" id="confirm-modal-cancel"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="_confirmResolve(true)" id="confirm-modal-ok"
+                    class="flex-1 py-2.5 text-sm rounded-lg">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Command Palette ──────────────────────────────────────────────────── -->
+    <div id="command-palette" role="dialog" aria-modal="true" aria-label="Command palette"
+        class="fixed inset-0 z-[99] modal-overlay hidden flex justify-center p-4">
+        <div class="palette-panel">
+            <div class="flex items-center gap-2.5 px-4 shrink-0" style="border-bottom:1px solid var(--border2)">
+                <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2">
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="M21 21l-4.35-4.35" stroke-linecap="round" />
+                </svg>
+                <input type="text" id="palette-input" placeholder="Search apps and commands…" autocomplete="off"
+                    spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-results"
+                    aria-autocomplete="list"
+                    class="flex-1 bg-transparent border-none outline-none py-3.5 text-sm font-medium"
+                    style="color:var(--text)">
+                <span class="kbd shrink-0">Esc</span>
+            </div>
+            <div id="palette-results" role="listbox" aria-label="Results" class="flex-1 overflow-y-auto py-1.5"></div>
+            <div class="px-4 py-2 flex items-center gap-3 text-[10.5px] shrink-0"
+                style="border-top:1px solid var(--border2);color:var(--text3)">
+                <span class="flex items-center gap-1"><span class="kbd">↑</span><span class="kbd">↓</span> navigate</span>
+                <span class="flex items-center gap-1"><span class="kbd">↵</span> open</span>
+                <span class="ml-auto flex items-center gap-1"><span class="kbd">?</span> shortcuts</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Keyboard Shortcuts ───────────────────────────────────────────────── -->
+    <div id="shortcuts-modal" role="dialog" aria-modal="true" aria-labelledby="shortcuts-modal-title"
+        class="fixed inset-0 z-[97] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel w-full max-w-lg shadow-lg overflow-hidden flex flex-col" style="max-height:85vh">
+            <div class="px-5 py-4 flex items-center gap-3 shrink-0" style="border-bottom:1px solid var(--border)">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(var(--accent-rgb),0.12);border:1px solid rgba(var(--accent-rgb),0.22)">
+                    <i data-feather="command" class="w-4 h-4" style="color:var(--accent-light)"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <h2 class="text-base font-bold" id="shortcuts-modal-title" style="color:var(--text)">Keyboard
+                        Shortcuts</h2>
+                    <p class="text-xs" style="color:var(--text3)">Shortcuts are ignored while typing in a field</p>
+                </div>
+                <button onclick="closeModal('shortcuts-modal')" class="p-1.5 rounded-lg" aria-label="Close"
+                    style="color:var(--text3)"><i data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <div class="overflow-y-auto p-5" id="shortcuts-body"></div>
+        </div>
+    </div>
+
     <script>
         const API = window.location.origin + "/api";
 
@@ -2868,25 +3792,188 @@
                 .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
+        // ── Screen-reader announcements ──────────────────────────────────────────
+        function announce(msg) {
+            const el = document.getElementById('sr-live');
+            if (!el) return;
+            // Clearing first forces AT to re-read even if the text is identical
+            el.textContent = '';
+            setTimeout(() => { el.textContent = msg; }, 30);
+        }
+
         // ── Toast ────────────────────────────────────────────────────────────────
-        function showToast(msg, type = 'info', duration = 3000) {
+        // Errors and warnings never auto-dismiss (you need time to read a traceback),
+        // wrap onto multiple lines, and their text is selectable so it can be copied.
+        const _TOAST_ICONS = {
+            success: '<path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/>',
+            error: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5m0 3h.01" stroke-linecap="round"/>',
+            warn: '<path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4m0 4h.01" stroke-linecap="round"/>',
+            info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-5m0-3h.01" stroke-linecap="round"/>',
+        };
+        const _TOAST_COLORS = { success: 'var(--green)', error: 'var(--red)', warn: 'var(--amber)', info: 'var(--accent)' };
+        const _MAX_TOASTS = 4;
+        let _lastToast = { msg: '', at: 0, el: null };
+
+        function _dismissToast(toast) {
+            if (!toast || toast.dataset.dismissed === '1') return;
+            toast.dataset.dismissed = '1';
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 250);
+        }
+
+        function showToast(msg, type = 'info', duration = null, opts = {}) {
             const container = document.getElementById('toast-container');
+            if (!container) return null;
+            msg = String(msg ?? '');
+
+            // Sticky by default for anything the user must actually read.
+            const sticky = duration === 0 || (duration == null && (type === 'error' || type === 'warn'));
+            if (duration == null) duration = 3000;
+
+            // Collapse a repeat of the same message fired within 1.5s into a counter.
+            const now = Date.now();
+            if (_lastToast.el && _lastToast.el.isConnected && _lastToast.msg === msg && now - _lastToast.at < 1500) {
+                _lastToast.at = now;
+                const badge = _lastToast.el.querySelector('.toast-repeat');
+                const n = parseInt(badge?.dataset.n || '1', 10) + 1;
+                if (badge) { badge.dataset.n = String(n); badge.textContent = '\u00d7' + n; badge.classList.remove('hidden'); }
+                return _lastToast.el;
+            }
+
+            // Cap the stack so a burst of errors can't cover the whole screen.
+            while (container.children.length >= _MAX_TOASTS) _dismissToast(container.firstElementChild);
+
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
-            toast.textContent = msg;
+            toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+
+            const icon = document.createElement('span');
+            icon.className = 'toast-icon';
+            icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="${_TOAST_COLORS[type] || _TOAST_COLORS.info}" stroke-width="2.2" width="15" height="15">${_TOAST_ICONS[type] || _TOAST_ICONS.info}</svg>`;
+
+            const body = document.createElement('span');
+            body.className = 'toast-msg';
+            body.textContent = msg;
+            const repeat = document.createElement('span');
+            repeat.className = 'toast-repeat hidden ml-1 text-[11px] font-bold opacity-60';
+            repeat.dataset.n = '1';
+            body.appendChild(repeat);
+
+            toast.appendChild(icon);
+            toast.appendChild(body);
+
+            if (opts.actionLabel && typeof opts.onAction === 'function') {
+                const act = document.createElement('button');
+                act.type = 'button';
+                act.className = 'toast-action';
+                act.textContent = opts.actionLabel;
+                act.onclick = (e) => { e.stopPropagation(); _dismissToast(toast); opts.onAction(); };
+                toast.appendChild(act);
+            }
+
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'toast-close';
+            close.setAttribute('aria-label', 'Dismiss notification');
+            close.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round"/></svg>';
+            close.onclick = (e) => { e.stopPropagation(); _dismissToast(toast); };
+            toast.appendChild(close);
+
             container.appendChild(toast);
             requestAnimationFrame(() => requestAnimationFrame(() => toast.classList.add('show')));
-            setTimeout(() => {
-                toast.classList.remove('show');
-                setTimeout(() => toast.remove(), 250);
-            }, duration);
+            announce(msg);
+
+            _lastToast = { msg, at: now, el: toast };
+
+            if (!sticky) {
+                let timer = setTimeout(() => _dismissToast(toast), duration);
+                // Hovering pauses the countdown so a toast can't vanish mid-read.
+                toast.addEventListener('mouseenter', () => clearTimeout(timer));
+                toast.addEventListener('mouseleave', () => { timer = setTimeout(() => _dismissToast(toast), 1200); });
+            }
+            return toast;
+        }
+
+        function dismissAllToasts() {
+            document.querySelectorAll('#toast-container .toast').forEach(_dismissToast);
+        }
+
+        // ── Confirm dialog (themed replacement for window.confirm) ───────────────
+        let _confirmPending = null;
+
+        function _confirmResolve(value) {
+            const fn = _confirmPending;
+            _confirmPending = null;
+            closeModal('confirm-modal');
+            if (fn) fn(value);
+        }
+
+        // Returns a promise resolving true/false. Escape / backdrop resolve false.
+        function confirmDialog({ title, body, sub = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false, icon = null }) {
+            // Resolve any dialog already open so we never orphan a promise.
+            if (_confirmPending) _confirmResolve(false);
+            return new Promise(resolve => {
+                _confirmPending = resolve;
+                document.getElementById('confirm-modal-title').textContent = title;
+                document.getElementById('confirm-modal-sub').textContent = sub;
+                document.getElementById('confirm-modal-body').textContent = body || '';
+                document.getElementById('confirm-modal-body').classList.toggle('hidden', !body);
+
+                const iconWrap = document.getElementById('confirm-modal-icon');
+                const tone = danger ? 'var(--red-rgb)' : 'var(--accent-rgb)';
+                iconWrap.style.cssText = `background:rgba(${danger ? '239,68,68' : 'var(--accent-rgb)'},0.1);border:1px solid rgba(${danger ? '239,68,68' : 'var(--accent-rgb)'},0.22)`;
+                iconWrap.innerHTML = `<i data-feather="${icon || (danger ? 'trash-2' : 'help-circle')}" class="w-5 h-5" style="color:${danger ? 'var(--red)' : 'var(--accent-light)'}"></i>`;
+
+                const ok = document.getElementById('confirm-modal-ok');
+                ok.textContent = confirmLabel;
+                ok.className = (danger ? 'btn-danger-solid' : 'btn-primary') + ' flex-1 py-2.5 text-sm font-semibold';
+                document.getElementById('confirm-modal-cancel').textContent = cancelLabel;
+
+                openModal('confirm-modal');
+                _featherReplace();
+                // Focus the safe choice on destructive prompts so a stray Enter
+                // cancels rather than deletes.
+                const initial = danger ? document.getElementById('confirm-modal-cancel') : ok;
+                setTimeout(() => initial.focus(), 60);
+            });
+        }
+
+        // ── App status presentation ──────────────────────────────────────────────
+        // The backend reports running / stopped / error. A crashed app must never
+        // look like one the user deliberately stopped.
+        function statusMeta(status) {
+            switch (status) {
+                case 'running':
+                    return { label: 'Running', cls: 'status-running', dot: 'var(--green)', dotCls: 'pulse-dot', crashed: false };
+                case 'error':
+                case 'crashed':
+                case 'failed':
+                    return { label: 'Crashed', cls: 'status-error', dot: 'var(--red)', dotCls: 'crash-dot', crashed: true };
+                case 'starting':
+                case 'restarting':
+                    return { label: 'Starting', cls: 'status-starting', dot: 'var(--amber)', dotCls: 'pulse-dot', crashed: false };
+                case 'stale':
+                    return { label: 'Stale', cls: 'status-stale', dot: 'var(--red)', dotCls: '', crashed: false };
+                default:
+                    return { label: 'Stopped', cls: 'status-stopped', dot: 'var(--border3)', dotCls: '', crashed: false };
+            }
+        }
+
+        const _BADGE_BASE = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ';
+
+        function applyStatusBadge(el, status) {
+            if (!el) return;
+            const m = statusMeta(status);
+            el.innerText = m.label;
+            el.className = _BADGE_BASE + m.cls;
+            el.title = m.crashed ? 'The process exited unexpectedly — check the Logs tab.' : '';
         }
 
         // ── Ace Editor ───────────────────────────────────────────────────────────
         function initAceEditor() {
             if (aceEditor) return;
             aceEditor = ace.edit("file-editor");
-            aceEditor.setTheme("ace/theme/one_dark");
+            aceEditor.setTheme(resolvedTheme() === 'light' ? 'ace/theme/chrome' : 'ace/theme/one_dark');
             aceEditor.session.setMode("ace/mode/python");
             aceEditor.setFontSize(window.innerWidth < 768 ? 12 : 13);
             aceEditor.setOption("showPrintMargin", false);
@@ -2954,12 +4041,16 @@
                     }
                     _pollFailures = 0;  // reset on success
                     const apps = await res.json();
+                    setConnected(true);
                     apps.forEach(app => {
+                        const m = statusMeta(app.status);
                         const dot = document.getElementById(`status-dot-${app.id}`);
                         if (dot) {
-                            dot.className = `w-2 h-2 rounded-full flex-shrink-0 nav-dot ${app.status === 'running' ? 'pulse-dot' : ''}`;
-                            dot.style.background = app.status === 'running' ? 'var(--green)' : 'var(--border3)';
+                            dot.className = `w-2 h-2 rounded-full flex-shrink-0 nav-dot ${m.dotCls}`;
+                            dot.style.background = m.dot;
                         }
+                        // A crash is worth telling the user about once, unprompted.
+                        _noticeCrash(app);
                         if (activeAppId === app.id) {
                             const prev = activeApp;
                             activeApp = app;
@@ -2968,13 +4059,9 @@
                             if (titleEl && titleEl.innerText !== app.name) titleEl.innerText = app.name;
                             // Status badge
                             if (!prev || prev.status !== app.status) {
-                                const badge = document.getElementById('dash-status');
-                                if (badge) {
-                                    badge.innerText = app.status;
-                                    badge.className = app.status === 'running'
-                                        ? 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-running'
-                                        : 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-stopped';
-                                }
+                                applyStatusBadge(document.getElementById('dash-status'), app.status);
+                                updateLogLiveIndicator();
+                                updateControlButtons(app);
                             }
                             // Network card — update on port or url change
                             if (!prev || prev.port !== app.port || prev.external_url !== app.external_url) {
@@ -2986,8 +4073,8 @@
                             }
                         }
                     });
-                    const currentCount = document.querySelectorAll('#app-list > div').length;
-                    if (apps.length !== currentCount) { _lastAppListHash = ''; }
+                    // renderAppList already fingerprints ids/names/statuses, so it
+                    // re-renders on its own when the list actually changes.
                     renderAppList(apps);
 
                     // If settings tab is active, keep dirty indicator in sync with server data
@@ -2996,9 +4083,12 @@
                         checkSettingsDirty();
                     }
 
-                    // If we were in a stale state, clear it
+                    // If we were showing STALE, repaint from the real status —
+                    // just dropping the class would leave the old label behind.
                     const badge = document.getElementById('dash-status');
-                    if (badge) badge.classList.remove('status-stale');
+                    if (badge && badge.classList.contains('status-stale')) {
+                        applyStatusBadge(badge, activeApp?.status);
+                    }
 
                     // If system view is active, update system metrics
                     if (!document.getElementById('system-view').classList.contains('hidden')) {
@@ -3009,11 +4099,9 @@
                     _pollFailures++;
                     // NEVER stop the loop on generic network errors.
                     // Just keep trying and show the STALE indicator.
-                    const badge = document.getElementById('dash-status');
-                    if (badge) {
-                        badge.innerText = 'STALE';
-                        badge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-stale';
-                    }
+                    applyStatusBadge(document.getElementById('dash-status'), 'stale');
+                    // Two misses in a row is a real outage, not a hiccup.
+                    if (_pollFailures >= 2) setConnected(false);
                 } finally {
                     _pollInflight = false;
                 }
@@ -3577,46 +4665,177 @@
 
         // ── Apps ──────────────────────────────────────────────────────────────────
         let _cachedApps = [];
+        let _appsEverLoaded = false;
+
+        function renderAppListSkeleton() {
+            const el = document.getElementById('app-list');
+            if (!el || _appsEverLoaded) return;
+            el.innerHTML = Array.from({ length: 4 }, (_, i) => `
+                <div class="flex items-center gap-2.5 px-3 py-2.5" aria-hidden="true">
+                    <div class="skeleton w-2 h-2 rounded-full shrink-0"></div>
+                    <div class="skeleton h-3 rounded" style="width:${70 - i * 9}%"></div>
+                </div>`).join('');
+        }
+
         async function loadApps() {
+            renderAppListSkeleton();
             try {
                 const res = await fetch(`${API}/apps`);
-                if (!res.ok) return;
+                if (!res.ok) {
+                    if (!_appsEverLoaded) renderAppListError('Could not load applications.');
+                    return;
+                }
                 const apps = await res.json();
+                _appsEverLoaded = true;
                 _cachedApps = apps;
+                _lastAppListHash = '';
                 renderAppList(apps);
-            } catch (e) { /* loadApps error suppressed */ }
+                // Seed crash tracking so we don't alert on apps that were already
+                // down before this session started.
+                apps.forEach(a => { if (!(a.id in _lastKnownStatus)) _lastKnownStatus[a.id] = a.status; });
+                if (!_routeApplied) { _routeApplied = true; applyRoute(); }
+            } catch (e) {
+                if (!_appsEverLoaded) renderAppListError('Network error — is the server running?');
+            }
+        }
+
+        function renderAppListError(msg) {
+            const el = document.getElementById('app-list');
+            if (!el) return;
+            _lastAppListHash = '';
+            el.innerHTML = `<div class="text-center py-8 px-4">
+                <p class="text-xs font-medium mb-3" style="color:var(--red)">${escapeHtml(msg)}</p>
+                <button onclick="loadApps()" class="btn-ghost text-xs px-3 py-1.5 rounded-lg font-medium">Retry</button>
+            </div>`;
         }
 
         let _lastAppListHash = '';
+        let _appFilter = '';
+        let _emptyFallbackDone = false;
+        // Highlights the matched substring so it's obvious why a row survived the filter.
+        function _highlight(name, needle) {
+            const safe = escapeHtml(name);
+            if (!needle) return safe;
+            const i = name.toLowerCase().indexOf(needle);
+            if (i === -1) return safe;
+            return escapeHtml(name.slice(0, i))
+                + '<mark class="search-hit">' + escapeHtml(name.slice(i, i + needle.length)) + '</mark>'
+                + escapeHtml(name.slice(i + needle.length));
+        }
+
         function renderAppList(apps) {
-            const hash = apps.map(a => `${a.id}:${a.name}:${a.status}`).join('|') + '|active:' + activeAppId;
+            const needle = _appFilter.trim().toLowerCase();
+            const shown = needle ? apps.filter(a => (a.name || '').toLowerCase().includes(needle)) : apps;
+
+            const hash = shown.map(a => `${a.id}:${a.name}:${a.status}`).join('|')
+                + '|active:' + activeAppId + '|q:' + needle;
             if (hash === _lastAppListHash) return;
             _lastAppListHash = hash;
+
+            // Counter reflects filtered/total so the filter's effect is legible.
+            const countEl = document.getElementById('app-count');
+            if (countEl) {
+                countEl.textContent = needle ? `${shown.length}/${apps.length}` : String(apps.length);
+                const crashed = apps.filter(a => statusMeta(a.status).crashed).length;
+                countEl.title = crashed ? `${crashed} application(s) crashed` : '';
+                countEl.style.color = crashed ? 'var(--red)' : '';
+                countEl.style.borderColor = crashed ? 'rgba(var(--red-rgb),0.35)' : '';
+            }
+
+            // Search box only earns its space once there's something to search.
+            const searchWrap = document.getElementById('app-search-wrap');
+            if (searchWrap) searchWrap.classList.toggle('hidden', apps.length < 5 && !needle);
+
+            const listEl = document.getElementById('app-list');
+
             if (!apps.length) {
-                document.getElementById('app-list').innerHTML = `<div class="text-center py-10 px-4">
+                listEl.innerHTML = `<div class="text-center py-10 px-4">
                 <div class="w-9 h-9 rounded-xl mx-auto flex items-center justify-center mb-3" style="background:var(--surface2);border:1px solid var(--border)">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" style="color:var(--text3)"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
                 </div>
                 <p class="text-xs font-medium" style="color:var(--text3)">No applications yet</p>
-                <p class="text-xs mt-1" style="color:var(--border2)">Use <strong style="color:var(--text3)">New Application</strong> to create one</p>
+                <p class="text-xs mt-1" style="color:var(--text3);opacity:.7">Use <strong style="color:var(--text3)">New Application</strong> to create one</p>
             </div>`;
-                // If no app is selected, show system view as the default dashboard
-                if (!activeAppId) openSystemView();
+                // With nothing to show, System is the only useful landing view —
+                // but only offer it once, and never over a selected app.
+                if (!activeAppId && !_emptyFallbackDone) {
+                    _emptyFallbackDone = true;
+                    openSystemView();
+                }
                 return;
             }
-            document.getElementById('app-list').innerHTML = apps.map(app => {
+
+            if (!shown.length) {
+                listEl.innerHTML = `<div class="text-center py-8 px-4">
+                <p class="text-xs font-medium" style="color:var(--text3)">No match for &ldquo;${escapeHtml(_appFilter)}&rdquo;</p>
+                <button onclick="clearAppSearch()" class="btn-ghost text-xs px-3 py-1.5 rounded-lg font-medium mt-3">Clear filter</button>
+            </div>`;
+                return;
+            }
+
+            listEl.innerHTML = shown.map(app => {
                 const isActive = app.id === activeAppId;
+                const m = statusMeta(app.status);
                 return `
-                <div onclick="selectApp(${app.id})"
-                     class="nav-item flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition active:scale-95 ${isActive ? 'active' : ''}"
+                <button type="button" onclick="selectApp(${app.id})" data-app-id="${app.id}"
+                     aria-current="${isActive ? 'true' : 'false'}"
+                     title="${escapeHtml(app.name)} — ${m.label}"
+                     class="nav-item app-row w-full text-left flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition active:scale-95 ${isActive ? 'active' : ''}"
                      style="color:${isActive ? 'var(--accent-light)' : 'var(--text2)'}">
                     <div class="flex items-center gap-2.5 min-w-0">
-                        <div id="status-dot-${app.id}" class="w-2 h-2 rounded-full flex-shrink-0 nav-dot ${app.status === 'running' ? 'pulse-dot' : ''}" style="background:${app.status === 'running' ? 'var(--green)' : 'var(--border3)'}"></div>
-                        <span class="truncate text-sm font-medium">${escapeHtml(app.name)}</span>
+                        <span id="status-dot-${app.id}" class="w-2 h-2 rounded-full flex-shrink-0 nav-dot ${m.dotCls}" style="background:${m.dot}"></span>
+                        <span class="truncate text-sm font-medium">${_highlight(app.name || '', needle)}</span>
                     </div>
-                </div>`;
+                    ${m.crashed ? '<span class="text-[9px] font-black uppercase tracking-wider shrink-0" style="color:var(--red)">crashed</span>' : ''}
+                </button>`;
             }).join('');
         }
+
+        // ── Sidebar filter ───────────────────────────────────────────────────────
+        function onAppSearchInput() {
+            const input = document.getElementById('app-search');
+            _appFilter = input.value;
+            document.getElementById('app-search-wrap').classList.toggle('has-value', !!_appFilter);
+            _lastAppListHash = '';
+            renderAppList(_cachedApps);
+        }
+
+        function clearAppSearch() {
+            const input = document.getElementById('app-search');
+            if (!input) return;
+            input.value = '';
+            _appFilter = '';
+            document.getElementById('app-search-wrap').classList.remove('has-value');
+            _lastAppListHash = '';
+            renderAppList(_cachedApps);
+            input.focus();
+        }
+
+        // Enter opens the only remaining match; Down arrow moves into the list.
+        function onAppSearchKey(e) {
+            if (e.key === 'Enter') {
+                const rows = document.querySelectorAll('#app-list .app-row');
+                if (rows.length >= 1) { e.preventDefault(); rows[0].click(); }
+            } else if (e.key === 'ArrowDown') {
+                const first = document.querySelector('#app-list .app-row');
+                if (first) { e.preventDefault(); first.focus(); }
+            }
+        }
+
+        // Up/Down roving focus through the application list.
+        document.getElementById('app-list').addEventListener('keydown', (e) => {
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+            const rows = Array.from(document.querySelectorAll('#app-list .app-row'));
+            const i = rows.indexOf(document.activeElement);
+            if (i === -1) return;
+            e.preventDefault();
+            if (e.key === 'ArrowDown') {
+                if (i < rows.length - 1) rows[i + 1].focus();
+            } else {
+                if (i > 0) rows[i - 1].focus();
+                else document.getElementById('app-search')?.focus();
+            }
+        });
 
         // ── Network card ─────────────────────────────────────────────────────────
         // Preference: which URL the "Open App" button uses when both local + CF exist.
@@ -3728,9 +4947,39 @@
         // Tracks in-flight port poll so switching apps cancels the old one cleanly
         let _portPollTimer = null;
 
-        async function selectApp(id) {
+        // True when the Settings form holds edits that have not been saved.
+        function isSettingsDirty() {
+            const dot = document.getElementById('save-status-dot');
+            return !!dot && !dot.classList.contains('hidden');
+        }
+
+        async function selectApp(id, opts = {}) {
+            if (id === activeAppId && !opts.force) {
+                if (opts.tab) switchTab(opts.tab);
+                if (window.innerWidth < 768) closeSidebar();
+                return;
+            }
+
+            // Switching apps overwrites the Settings form — confirm before losing edits.
+            if (activeAppId != null && id !== activeAppId && isSettingsDirty()) {
+                const leave = await confirmDialog({
+                    title: 'Discard unsaved settings?',
+                    sub: activeApp?.name || '',
+                    body: 'You have changes in Settings that have not been saved. Switching to another application will discard them.',
+                    confirmLabel: 'Discard & switch',
+                    cancelLabel: 'Stay here',
+                    danger: true,
+                    icon: 'alert-triangle',
+                });
+                if (!leave) return;
+            }
+
             // Cancel any existing port poll from a previous app
             if (_portPollTimer) { clearInterval(_portPollTimer); _portPollTimer = null; }
+
+            // Reset per-app log state so the previous app's output never bleeds through.
+            _logRaw = ''; _logRenderedKey = ''; _logFollow = true;
+            clearLogSearch();
 
             activeAppId = id;
             if (logInterval) { clearInterval(logInterval); logInterval = null; }
@@ -3766,8 +5015,10 @@
                 document.getElementById('dashboard').classList.remove('hidden');
             }
 
-            switchTab('terminal');
+            switchTab(opts.tab && TABS.includes(opts.tab) ? opts.tab : 'terminal');
             initTerminal(id);
+            syncHash();
+            if (found) announce(`${found.name} selected, ${statusMeta(found.status).label}`);
 
             // Fetch authoritative data in background to ensure we are up to date
             try {
@@ -3812,12 +5063,13 @@
             if (_isSystemViewActive()) return;
             document.getElementById('empty-state').classList.add('hidden');
             document.getElementById('dashboard').classList.remove('hidden');
-            document.getElementById('dash-title').innerText = app.name;
-            const badge = document.getElementById('dash-status');
-            badge.innerText = app.status;
-            badge.className = app.status === 'running'
-                ? 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-running'
-                : 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-stopped';
+            const titleEl = document.getElementById('dash-title');
+            titleEl.innerText = app.name;
+            titleEl.title = app.name;
+            document.title = `${app.name} · Venvy`;
+            applyStatusBadge(document.getElementById('dash-status'), app.status);
+            updateControlButtons(app);
+            updateLogLiveIndicator();
 
             // ONLY update settings if they are not dirty (preserving user unsaved changes)
             // EXCEPT if we are switching to a completely different app.
@@ -3861,6 +5113,23 @@
             window._lastActiveAppId = app.id;
         }
 
+        // Disable the controls that cannot apply right now, and say why on hover.
+        let _controlsBusy = false;
+        function updateControlButtons(app) {
+            if (_controlsBusy) return;
+            const running = app?.status === 'running';
+            const crashed = statusMeta(app?.status).crashed;
+            const set = (id, disabled, title) => {
+                const b = document.getElementById(id);
+                if (!b) return;
+                b.disabled = !!disabled;
+                b.title = title;
+            };
+            set('btn-start', running, running ? 'Already running' : (crashed ? 'Start again after the crash' : 'Start'));
+            set('btn-restart', !running, running ? 'Restart' : 'Not running');
+            set('btn-stop', !running, running ? 'Stop' : 'Not running');
+        }
+
         // ── Control App ──────────────────────────────────────────────────────────
         async function controlApp(action) {
             const targetAppId = activeAppId;
@@ -3868,17 +5137,23 @@
             const originalContent = btn ? btn.innerHTML : '';
 
             function _resetBtn() {
+                _controlsBusy = false;
                 if (!btn) return;
                 btn.disabled = false;
                 btn.innerHTML = originalContent;
-                feather.replace();
+                _featherReplace();
+                // Re-apply state-based enablement so we don't light up an
+                // action that can't actually run (e.g. Stop on a stopped app).
+                updateControlButtons(activeApp);
             }
 
             if (btn) {
+                _controlsBusy = true;
                 btn.disabled = true;
                 btn.innerHTML = '<i data-feather="loader" class="w-4 h-4 animate-spin"></i>';
-                feather.replace();
+                _featherReplace();
             }
+            announce(`${action} requested`);
 
             try {
                 // The backend returns 202 immediately (fire-and-forget).
@@ -4202,30 +5477,7 @@
 
             // ── Create xterm instance ────────────────────────────────────────────
             window.term = new Terminal({
-                theme: {
-                    background: '#111826',  /* matches --surface token */
-                    foreground: '#e2e8f0',
-                    cursor: '#60a5fa',
-                    cursorAccent: '#111826',  /* matches --surface token */
-                    selectionBackground: 'rgba(96, 165, 250, 0.3)',
-                    selectionForeground: '#ffffff',
-                    black: '#1e293b',
-                    red: '#f87171',
-                    green: '#4ade80',
-                    yellow: '#fbbf24',
-                    blue: '#60a5fa',
-                    magenta: '#c084fc',
-                    cyan: '#22d3ee',
-                    white: '#cbd5e1',
-                    brightBlack: '#475569',
-                    brightRed: '#fca5a5',
-                    brightGreen: '#86efac',
-                    brightYellow: '#fde68a',
-                    brightBlue: '#93c5fd',
-                    brightMagenta: '#d8b4fe',
-                    brightCyan: '#67e8f9',
-                    brightWhite: '#ffffff',
-                },
+                theme: xtermTheme(),
                 fontFamily: '"JetBrains Mono", "Cascadia Code", Menlo, Monaco, "Courier New", monospace',
                 fontSize: isMobile ? 12 : 13,
                 lineHeight: 1.35,
@@ -4549,12 +5801,12 @@
                 if (rIsDir) {
                     row.addEventListener('dragover', e => {
                         e.preventDefault();
-                        row.classList.add('bg-[rgba(255,255,255,0.1)]');
+                        row.classList.add('drop-target');
                     });
-                    row.addEventListener('dragleave', e => { row.classList.remove('bg-[rgba(255,255,255,0.1)]'); });
+                    row.addEventListener('dragleave', e => { row.classList.remove('drop-target'); });
                     row.addEventListener('drop', async e => {
                         e.preventDefault(); e.stopPropagation();
-                        row.classList.remove('bg-[rgba(255,255,255,0.1)]');
+                        row.classList.remove('drop-target');
 
                         let dataStr = null;
                         try { dataStr = e.dataTransfer.getData('application/json') || e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text'); } catch (err) { }
@@ -4620,7 +5872,18 @@
                 isMobileFileEditorOpen = true;
                 return;
             }
-            if (_editorDirty) { if (!confirm('Unsaved changes. Discard and open new file?')) return; }
+            if (_editorDirty) {
+                const discard = await confirmDialog({
+                    title: 'Discard unsaved changes?',
+                    sub: document.getElementById('current-filename')?.innerText || '',
+                    body: 'This file has edits that have not been saved. Opening another file will lose them.',
+                    confirmLabel: 'Discard & open',
+                    cancelLabel: 'Keep editing',
+                    danger: true,
+                    icon: 'alert-triangle',
+                });
+                if (!discard) return;
+            }
             const filenameEl = document.getElementById('current-filename');
             filenameEl.innerText = 'Loading…'; filenameEl.dataset.path = ''; _openFilePath = null;
             const res = await fetch(`${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(path)}`);
@@ -4639,8 +5902,19 @@
             if (aceEditor) setTimeout(() => aceEditor.focus(), 100);
         }
 
-        function closeEditorMobile() {
-            if (_editorDirty) { if (!confirm('Unsaved changes. Discard?')) return; }
+        async function closeEditorMobile() {
+            if (_editorDirty) {
+                const discard = await confirmDialog({
+                    title: 'Discard unsaved changes?',
+                    sub: document.getElementById('current-filename')?.innerText || '',
+                    body: 'Closing the editor will lose the edits you have not saved.',
+                    confirmLabel: 'Discard',
+                    cancelLabel: 'Keep editing',
+                    danger: true,
+                    icon: 'alert-triangle',
+                });
+                if (!discard) return;
+            }
             document.getElementById('editor-panel').classList.add('translate-x-full');
             document.getElementById('file-tree-container').classList.remove('slide-out-left');
             isMobileFileEditorOpen = false;
@@ -4744,9 +6018,16 @@
             const filename = path.split('/').pop() || path;
             const rowEl = document.querySelector(`[data-path="${CSS.escape(path)}"]`);
             const isDir = rowEl ? rowEl.dataset.isdir === '1' : true;
-            if (!confirm(isDir
-                ? `Delete folder "${filename}" and all its contents? This cannot be undone.`
-                : `Delete "${filename}"? This cannot be undone.`)) return;
+            const ok = await confirmDialog({
+                title: isDir ? 'Delete folder?' : 'Delete file?',
+                sub: 'This cannot be undone',
+                body: isDir
+                    ? `"${filename}" and everything inside it will be permanently deleted.`
+                    : `"${filename}" will be permanently deleted.`,
+                confirmLabel: 'Delete',
+                danger: true,
+            });
+            if (!ok) return;
             try {
                 const res = await fetch(`${API}/apps/${activeAppId}/files/op`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'delete', path }) });
                 if (res.ok) showToast(`Deleted "${filename}"`, 'info', 2000);
@@ -4757,7 +6038,15 @@
 
         async function deletePaths(items) {
             if (!items || !items.length) return;
-            if (!confirm(`Delete ${items.length} item(s)? This cannot be undone.`)) return;
+            const ok = await confirmDialog({
+                title: `Delete ${items.length} item${items.length === 1 ? '' : 's'}?`,
+                sub: 'This cannot be undone',
+                body: items.slice(0, 6).map(i => i.filename).join(', ')
+                    + (items.length > 6 ? `, and ${items.length - 6} more` : ''),
+                confirmLabel: `Delete ${items.length}`,
+                danger: true,
+            });
+            if (!ok) return;
             let successCount = 0;
             for (const item of items) {
                 try {
@@ -5023,6 +6312,193 @@
 
         // ── Logs ──────────────────────────────────────────────────────────────────
         let _logsInflight = false;
+        // ── Log viewer state ─────────────────────────────────────────────────────
+        const _LOG_EMPTY_HTML = '<span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span>';
+        let _logRaw = '';           // last raw text received from the server
+        let _logRenderedKey = '';   // raw+filter fingerprint of what is on screen
+        let _logFilter = '';
+        let _logFollow = true;      // auto-scroll to the tail as new lines arrive
+        let _logWrap = true;
+
+        function _stripAnsi(t) { return t.replace(/\x1b\[[0-9;]*[mA-Za-z]/g, ''); }
+
+        function _logIsAtBottom(el) {
+            return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }
+
+        // Wrapping the needle in <mark> is done over text nodes only, so it can never
+        // corrupt the <span> markup the ANSI renderer produced.
+        function _markMatches(root, needle) {
+            if (!needle) return 0;
+            const lower = needle.toLowerCase();
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            const targets = [];
+            let n;
+            while ((n = walker.nextNode())) {
+                if (n.nodeValue && n.nodeValue.toLowerCase().includes(lower)) targets.push(n);
+            }
+            let count = 0;
+            for (const node of targets) {
+                const frag = document.createDocumentFragment();
+                const text = node.nodeValue;
+                let i = 0;
+                for (; ;) {
+                    const j = text.toLowerCase().indexOf(lower, i);
+                    if (j === -1) break;
+                    if (j > i) frag.appendChild(document.createTextNode(text.slice(i, j)));
+                    const mark = document.createElement('mark');
+                    mark.textContent = text.slice(j, j + needle.length);
+                    frag.appendChild(mark);
+                    count++;
+                    i = j + needle.length;
+                }
+                if (i < text.length) frag.appendChild(document.createTextNode(text.slice(i)));
+                node.parentNode.replaceChild(frag, node);
+            }
+            return count;
+        }
+
+        function _renderLogs(force = false) {
+            const el = document.getElementById('log-viewer');
+            if (!el) return;
+
+            const q = _logFilter.trim();
+            const key = q + '\u0000' + _logRaw.length + '\u0000' + _logRaw.slice(-400);
+            if (!force && key === _logRenderedKey) return;
+
+            // Never yank the DOM out from under an in-progress text selection.
+            const sel = window.getSelection();
+            if (!force && sel && !sel.isCollapsed && el.contains(sel.anchorNode)) return;
+
+            _logRenderedKey = key;
+            const wasBottom = _logIsAtBottom(el);
+
+            if (!_logRaw) {
+                el.innerHTML = _LOG_EMPTY_HTML;
+                _updateLogCount(0, 0);
+                _updateLogJumpBtn();
+                return;
+            }
+
+            let text = _logRaw;
+            let shown = 0, total = 0;
+            if (q) {
+                const lines = _logRaw.split('\n');
+                total = lines.length;
+                const needle = q.toLowerCase();
+                const kept = lines.filter(l => _stripAnsi(l).toLowerCase().includes(needle));
+                shown = kept.length;
+                text = kept.length ? kept.join('\n') : '';
+            }
+
+            if (q && !shown) {
+                el.innerHTML = `<span class="italic" style="color:var(--text3)">No lines match &ldquo;${escapeHtml(q)}&rdquo;.</span>`;
+                _updateLogCount(0, total);
+                _updateLogJumpBtn();
+                return;
+            }
+
+            el.innerHTML = window._ansiToHtml
+                ? window._ansiToHtml(text)
+                : escapeHtml(text);
+
+            if (q) _markMatches(el, q);
+            _updateLogCount(shown, total);
+
+            if (_logFollow || wasBottom) el.scrollTop = el.scrollHeight;
+            _updateLogJumpBtn();
+        }
+
+        function _updateLogCount(shown, total) {
+            const el = document.getElementById('log-search-count');
+            if (!el) return;
+            el.textContent = _logFilter.trim() ? `${shown}/${total}` : '';
+        }
+
+        function _updateLogJumpBtn() {
+            const el = document.getElementById('log-viewer');
+            const btn = document.getElementById('log-jump-btn');
+            if (!el || !btn) return;
+            btn.classList.toggle('show', !_logIsAtBottom(el) && !!_logRaw);
+        }
+
+        function logJumpToLatest() {
+            const el = document.getElementById('log-viewer');
+            if (!el) return;
+            el.scrollTop = el.scrollHeight;
+            _logFollow = true;
+            _syncLogToolButtons();
+            _updateLogJumpBtn();
+        }
+
+        function toggleLogFollow() {
+            _logFollow = !_logFollow;
+            if (_logFollow) {
+                const el = document.getElementById('log-viewer');
+                if (el) el.scrollTop = el.scrollHeight;
+            }
+            _syncLogToolButtons();
+            _updateLogJumpBtn();
+            showToast(_logFollow ? 'Following new output.' : 'Paused — scroll freely.', 'info', 1400);
+        }
+
+        function toggleLogWrap() {
+            _logWrap = !_logWrap;
+            document.getElementById('log-viewer')?.classList.toggle('wrap-off', !_logWrap);
+            try { localStorage.setItem('venvy-log-wrap', _logWrap ? '1' : '0'); } catch (e) { }
+            _syncLogToolButtons();
+        }
+
+        function _syncLogToolButtons() {
+            const f = document.getElementById('log-follow-btn');
+            const w = document.getElementById('log-wrap-btn');
+            if (f) { f.setAttribute('aria-pressed', String(_logFollow)); f.title = _logFollow ? 'Following new output — click to pause (F)' : 'Paused — click to follow (F)'; }
+            if (w) w.setAttribute('aria-pressed', String(_logWrap));
+        }
+
+        function onLogSearchInput() {
+            _logFilter = document.getElementById('log-search').value;
+            _renderLogs(true);
+        }
+
+        function onLogSearchKey(e) {
+            if (e.key === 'Escape') { e.stopPropagation(); clearLogSearch(); }
+            if (e.key === 'Enter') { e.preventDefault(); logJumpToLatest(); }
+        }
+
+        function clearLogSearch() {
+            const input = document.getElementById('log-search');
+            if (!input) return;
+            input.value = '';
+            _logFilter = '';
+            _renderLogs(true);
+        }
+
+        // Live indicator tells the truth about whether anything is streaming.
+        function updateLogLiveIndicator() {
+            const dot = document.getElementById('log-live-dot');
+            const text = document.getElementById('log-live-text');
+            const label = document.getElementById('log-live-label');
+            if (!dot || !text) return;
+            const m = statusMeta(activeApp?.status);
+            if (activeApp?.status === 'running') {
+                dot.style.background = 'var(--green)';
+                dot.classList.add('pulse-dot');
+                text.textContent = 'Live';
+                if (label) label.title = 'The app is running — new output appears automatically.';
+            } else if (m.crashed) {
+                dot.style.background = 'var(--red)';
+                dot.classList.remove('pulse-dot');
+                text.textContent = 'Crashed';
+                if (label) label.title = 'The process exited unexpectedly. These are its final logs.';
+            } else {
+                dot.style.background = 'var(--text3)';
+                dot.classList.remove('pulse-dot');
+                text.textContent = 'Not running';
+                if (label) label.title = 'The app is stopped — this is the last output it produced.';
+            }
+        }
+
         async function loadLogs() {
             if (!activeAppId || _logsInflight) return;
             _logsInflight = true;
@@ -5030,35 +6506,95 @@
                 const res = await fetch(`${API}/apps/${activeAppId}/logs`);
                 if (!res.ok) return;
                 const data = await res.json();
-                const el = document.getElementById('log-viewer');
-                const wasBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
                 if (!data.content && !data.truncated) {
-                    el.innerHTML = '<span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span>';
+                    _logRaw = '';
                 } else {
-                    const raw = data.truncated
+                    _logRaw = data.truncated
                         ? `[showing last ${data.total_lines > 0 ? data.total_lines : ''} lines (truncated) — clear logs to reset]\n\n` + data.content
                         : data.content;
-                    el.innerHTML = window._ansiToHtml ? window._ansiToHtml(raw) : raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                    el.dataset.rawText = raw;
                 }
-                if (wasBottom || !el.innerHTML) el.scrollTop = el.scrollHeight;
+                document.getElementById('log-viewer').dataset.rawText = _logRaw;
+                _renderLogs();
             } catch (e) { /* network error — silently skip poll tick */ }
             finally { _logsInflight = false; }
         }
+
         async function deleteLogs() {
-            const res = await fetch(`${API}/apps/${activeAppId}/logs`, { method: 'DELETE' });
-            if (res.ok) { document.getElementById('log-viewer').innerHTML = '<span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span>'; showToast('Logs cleared.', 'info', 1500); }
+            const ok = await confirmDialog({
+                title: 'Clear logs?',
+                sub: 'This cannot be undone',
+                body: `The log file for "${activeApp?.name || 'this app'}" will be emptied. Output produced from now on will still be captured.`,
+                confirmLabel: 'Clear logs',
+                danger: true,
+                icon: 'trash-2',
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`${API}/apps/${activeAppId}/logs`, { method: 'DELETE' });
+                if (res.ok) {
+                    _logRaw = ''; _logRenderedKey = '';
+                    _renderLogs(true);
+                    showToast('Logs cleared.', 'success', 1500);
+                } else {
+                    showToast('Could not clear the logs.', 'error');
+                }
+            } catch (e) { showToast('Could not clear the logs: ' + e.message, 'error'); }
         }
-        async function copyLogs() {
+
+        function _logsPlainText() {
             const el = document.getElementById('log-viewer');
-            // Use stored raw text (stripped of ANSI) if available, else fall back to innerText
-            const text = el.dataset.rawText || el.innerText;
-            // Strip ANSI escape sequences for clean clipboard copy
-            const clean = text.replace(/\x1b\[[0-9;]*[mA-Za-z]/g, '');
+            return _stripAnsi(_logRaw || el?.dataset.rawText || el?.innerText || '');
+        }
+
+        async function copyLogs() {
+            const clean = _logsPlainText();
+            if (!clean.trim()) { showToast('There is nothing to copy yet.', 'warn'); return; }
             try { await navigator.clipboard.writeText(clean); }
             catch (e) { const ta = document.createElement('textarea'); ta.value = clean; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
-            showToast('Logs copied!', 'success', 2000);
+            const lines = clean.split('\n').length;
+            showToast(`Copied ${lines.toLocaleString()} line${lines === 1 ? '' : 's'}.`, 'success', 2000);
         }
+
+        function downloadLogs() {
+            const clean = _logsPlainText();
+            if (!clean.trim()) { showToast('There is nothing to download yet.', 'warn'); return; }
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            const name = `${(activeApp?.name || 'app').replace(/[^\w.-]+/g, '_')}-${stamp}.log`;
+            const blob = new Blob([clean], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = name; a.style.display = 'none';
+            document.body.appendChild(a); a.click();
+            setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+            showToast(`Saved ${name}`, 'success', 2500);
+        }
+
+        (function wireLogScroll() {
+            const el = document.getElementById('log-viewer');
+            if (!el) return;
+            let ticking = false;
+            el.addEventListener('scroll', () => {
+                if (ticking) return;
+                ticking = true;
+                requestAnimationFrame(() => {
+                    ticking = false;
+                    const bottom = _logIsAtBottom(el);
+                    // Scrolling away from the tail pauses follow so output stops
+                    // yanking the viewport; scrolling back resumes it.
+                    if (_logFollow && !bottom) { _logFollow = false; _syncLogToolButtons(); }
+                    else if (!_logFollow && bottom) { _logFollow = true; _syncLogToolButtons(); }
+                    _updateLogJumpBtn();
+                });
+            }, { passive: true });
+
+            try {
+                if (localStorage.getItem('venvy-log-wrap') === '0') {
+                    _logWrap = false;
+                    el.classList.add('wrap-off');
+                }
+            } catch (e) { }
+            _syncLogToolButtons();
+        })();
 
         // ── ANSI → HTML renderer for live logs ───────────────────────────────────
         // Converts ANSI escape sequences to styled <span> elements so the log
@@ -5270,7 +6806,7 @@
                         nameSpan.className = 'mono text-xs'; nameSpan.style.color = 'var(--text)'; nameSpan.textContent = pkg;
                         const installBtn = document.createElement('button');
                         installBtn.className = 'text-xs font-bold px-3 py-1 rounded-lg transition';
-                        installBtn.style.cssText = 'color:var(--blue);background:rgba(255, 255, 255,0.1);border:1px solid rgba(255, 255, 255,0.15)';
+                        installBtn.style.cssText = 'color:var(--blue);background:var(--ov);border:1px solid var(--ov-strong)';
                         installBtn.textContent = 'Install';
                         installBtn.addEventListener('click', () => installSingle(pkg, installBtn));
                         li.appendChild(nameSpan); li.appendChild(installBtn);
@@ -5340,13 +6876,21 @@
             document.getElementById('system-view').classList.remove('hidden');
             document.getElementById('system-nav-btn').classList.add('active');
             if (userTriggered && window.innerWidth < 768) closeSidebar();
+            document.title = 'System · Venvy';
+            if (userTriggered) syncHash();
             loadSystemView(); loadCfCredsStatus();
         }
         function closeSystemView() {
             document.getElementById('system-view').classList.add('hidden');
             document.getElementById('system-nav-btn').classList.remove('active');
-            if (activeAppId) document.getElementById('dashboard').classList.remove('hidden');
-            else document.getElementById('empty-state').classList.remove('hidden');
+            if (activeAppId) {
+                document.getElementById('dashboard').classList.remove('hidden');
+                document.title = `${activeApp?.name || 'App'} · Venvy`;
+            } else {
+                document.getElementById('empty-state').classList.remove('hidden');
+                document.title = 'Venvy';
+            }
+            syncHash();
         }
         async function loadSystemView(btn = null) {
             if (btn) {
@@ -5411,7 +6955,7 @@
                     ? `<span class="text-xs italic" style="color:var(--text3)">No suggestions available</span>`
                     : '<div class="flex flex-wrap gap-2">' + free.map(port => `<button onclick="copyPortToClipboard(${port})" title="Click to copy"
                         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs mono font-bold transition active:scale-95"
-                        style="background:rgba(255,255,255,0.03);color:var(--text);border:1px dashed var(--border3)">
+                        style="background:var(--ov-soft);color:var(--text);border:1px dashed var(--border3)">
                         ${port}
                         <svg class="w-3 h-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
                     </button>`).join('') + '</div>';
@@ -6259,6 +7803,22 @@
                 btn.classList.add('btn-primary');
                 btn.classList.remove('btn-orange');
             }
+            // Mark the Settings tab itself so unsaved work is visible from any tab.
+            const tabBtn = document.getElementById('tabbtn-settings');
+            if (tabBtn) {
+                let mark = tabBtn.querySelector('.settings-dirty-dot');
+                if (isDirty && !mark) {
+                    mark = document.createElement('span');
+                    mark.className = 'settings-dirty-dot';
+                    mark.setAttribute('aria-hidden', 'true');
+                    mark.style.cssText = 'display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--amber);margin-left:5px;vertical-align:middle';
+                    tabBtn.appendChild(mark);
+                    tabBtn.title = 'Settings (5) — unsaved changes';
+                } else if (!isDirty && mark) {
+                    mark.remove();
+                    tabBtn.title = 'Settings (5)';
+                }
+            }
         }
 
         let _settingsWired = false;
@@ -6318,40 +7878,88 @@
         function deleteApp() {
             if (!activeApp) return;
             document.getElementById('delete-app-name').textContent = activeApp.name;
+            document.getElementById('delete-app-confirm-hint').textContent = activeApp.name;
+            const input = document.getElementById('delete-app-confirm-input');
+            input.value = '';
+            input.placeholder = activeApp.name;
+            onDeleteAppConfirmInput();
             openModal('delete-app-modal');
         }
+
+        // Deleting an app is irreversible, so the button stays inert until the
+        // name is typed out — the same guard GitHub and Vercel use.
+        function onDeleteAppConfirmInput() {
+            const input = document.getElementById('delete-app-confirm-input');
+            const btn = document.getElementById('delete-app-confirm-btn');
+            if (!input || !btn) return;
+            const match = input.value.trim() === (activeApp?.name || '').trim() && !!activeApp;
+            btn.disabled = !match;
+            input.style.borderColor = !input.value ? '' : (match ? 'var(--green)' : 'rgba(var(--red-rgb),0.5)');
+        }
+
         async function confirmDeleteApp() {
+            const input = document.getElementById('delete-app-confirm-input');
+            if (!activeApp || input.value.trim() !== activeApp.name.trim()) {
+                showToast('Type the application name exactly to confirm.', 'warn', 3000);
+                input.focus();
+                return;
+            }
+            const deletedName = activeApp.name;
             closeModal('delete-app-modal');
             // Clean up terminal resources before deleting
             _termDestroy();
             try {
                 const res = await fetch(`${API}/apps/${activeAppId}`, { method: 'DELETE' });
-                if (!res.ok) throw new Error();
-                showToast('App deleted.', 'info');
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || `Server returned ${res.status}`);
+                }
+                showToast(`Deleted "${deletedName}".`, 'success', 3000);
                 activeAppId = null; activeApp = null;
+                document.title = 'Venvy';
                 if (logInterval) { clearInterval(logInterval); logInterval = null; }
                 _lastAppListHash = '';
                 document.getElementById('dashboard').classList.add('hidden');
                 document.getElementById('empty-state').classList.remove('hidden');
+                syncHash();
                 loadApps();
-            } catch (e) { showToast('Delete failed.', 'error'); }
+            } catch (e) { showToast('Delete failed: ' + (e.message || 'unknown error'), 'error'); }
         }
 
         // ── Tab Switching ─────────────────────────────────────────────────────────
-        function switchTab(tab) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+        const TABS = ['terminal', 'files', 'logs', 'packages', 'settings'];
+        let currentTab = 'terminal';
+
+        function switchTab(tab, opts = {}) {
+            if (!TABS.includes(tab)) tab = 'terminal';
+            currentTab = tab;
+            document.querySelectorAll('.tab-content').forEach(el => {
+                el.classList.add('hidden');
+                el.classList.remove('tab-content-active');
+            });
             document.querySelectorAll('.tab-btn').forEach(el => {
                 el.classList.remove('active');
                 el.style.color = 'var(--text3)';
                 el.style.borderBottomColor = 'transparent';
+                el.setAttribute('aria-selected', 'false');
+                el.tabIndex = -1;
             });
-            document.getElementById(`tab-${tab}`).classList.remove('hidden');
-            const btn = document.querySelector(`button[onclick="switchTab('${tab}')"]`);
+            const panel = document.getElementById(`tab-${tab}`);
+            panel.classList.remove('hidden');
+            panel.classList.add('tab-content-active');
+
+            const btn = document.getElementById(`tabbtn-${tab}`);
             if (btn) {
                 btn.classList.add('active');
                 btn.style.color = 'var(--text)';
                 btn.style.borderBottomColor = 'var(--accent)';
+                btn.setAttribute('aria-selected', 'true');
+                btn.tabIndex = 0;
+                if (opts.focusTab) btn.focus();
+                // Keep the active tab visible in the horizontal scroller on mobile.
+                btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
             }
+
             if (logInterval) { clearInterval(logInterval); logInterval = null; _logsInflight = false; }
             if (tab === 'logs' && !document.hidden) { loadLogs(); logInterval = setInterval(loadLogs, 1000); }
             else if (tab === 'logs') loadLogs();
@@ -6367,6 +7975,20 @@
                 document.getElementById('settings-save-container').classList.add('hidden');
                 document.getElementById('settings-save-container').classList.remove('flex');
             }
+            if (!opts.silent) syncHash();
+        }
+
+        // Left/Right arrows move between tabs, Home/End jump to the ends (WAI-ARIA).
+        function onTabListKey(e) {
+            const i = TABS.indexOf(currentTab);
+            let next = null;
+            if (e.key === 'ArrowRight') next = TABS[(i + 1) % TABS.length];
+            else if (e.key === 'ArrowLeft') next = TABS[(i - 1 + TABS.length) % TABS.length];
+            else if (e.key === 'Home') next = TABS[0];
+            else if (e.key === 'End') next = TABS[TABS.length - 1];
+            if (!next) return;
+            e.preventDefault();
+            switchTab(next, { focusTab: true });
         }
 
         function fileOp(op) { if (op === 'refresh') loadFiles(currentBrowserPath); }
@@ -6377,24 +7999,67 @@
 
         // Custom close callbacks for modals that need cleanup on dismiss
         const _MODAL_CLOSE_FN = {
+            'confirm-modal': () => _confirmResolve(false),
         };
 
         const _openModalIds = [];   // stack so Escape closes the topmost one
+        const _modalReturnFocus = {}; // id -> element that had focus when it opened
+
+        const _FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
+        function _visibleFocusable(root) {
+            return Array.from(root.querySelectorAll(_FOCUSABLE))
+                .filter(el => el.offsetWidth > 0 || el.offsetHeight > 0 || el === document.activeElement);
+        }
 
         function openModal(id) {
             const el = document.getElementById(id);
             if (!el) return;
+            // Remember where focus came from so we can put it back on close.
+            const prev = document.activeElement;
+            if (prev && prev !== document.body) _modalReturnFocus[id] = prev;
             el.classList.remove('hidden');
             if (!_openModalIds.includes(id)) _openModalIds.push(id);
+            document.body.style.overflow = 'hidden';
+            // Move focus inside so Tab is trapped and screen readers enter the dialog.
+            setTimeout(() => {
+                if (el.contains(document.activeElement)) return;
+                const focusables = _visibleFocusable(el);
+                const preferred = el.querySelector('input:not([type="hidden"]):not([disabled]), textarea:not([disabled])');
+                (preferred || focusables[0] || el).focus?.();
+            }, 40);
         }
 
         function closeModal(id) {
             const el = document.getElementById(id);
             if (!el) return;
+            // Don't leave focus on a node inside a hidden subtree.
+            if (el.contains(document.activeElement)) document.activeElement.blur();
             el.classList.add('hidden');
             const idx = _openModalIds.indexOf(id);
             if (idx !== -1) _openModalIds.splice(idx, 1);
+            if (_openModalIds.length === 0) document.body.style.overflow = '';
+            const back = _modalReturnFocus[id];
+            delete _modalReturnFocus[id];
+            if (back && back.isConnected && back.offsetParent !== null) {
+                setTimeout(() => back.focus?.(), 0);
+            }
         }
+
+        // Tab / Shift+Tab cycle within the topmost dialog instead of escaping it.
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab' || _openModalIds.length === 0) return;
+            const top = document.getElementById(_openModalIds[_openModalIds.length - 1]);
+            if (!top || top.classList.contains('hidden')) return;
+            const items = _visibleFocusable(top);
+            if (!items.length) return;
+            const first = items[0], last = items[items.length - 1];
+            if (e.shiftKey && (document.activeElement === first || !top.contains(document.activeElement))) {
+                e.preventDefault(); last.focus();
+            } else if (!e.shiftKey && (document.activeElement === last || !top.contains(document.activeElement))) {
+                e.preventDefault(); first.focus();
+            }
+        }, true);
 
         // Backdrop-click: close if the click target IS the overlay div itself
         // (i.e. the user clicked outside the inner panel)
@@ -6421,12 +8086,29 @@
                 if (_openModalIds.length > 0) {
                     const topId = _openModalIds[_openModalIds.length - 1];
                     if (!_NO_BACKDROP_CLOSE.has(topId)) {
+                        if (topId === 'confirm-modal') { _confirmResolve(false); return; }
                         if (_MODAL_CLOSE_FN[topId]) _MODAL_CLOSE_FN[topId]();
                         else closeModal(topId);
                         return;
                     }
                 }
-                if (isMobileFileEditorOpen && window.innerWidth < 768) closeEditorMobile();
+                // Nothing modal is open. Escape then walks the least-destructive
+                // dismissal it can find, most specific first.
+                if (document.getElementById('log-search') === document.activeElement) {
+                    clearLogSearch();
+                    return;
+                }
+                if (document.getElementById('app-search') === document.activeElement) {
+                    clearAppSearch();
+                    return;
+                }
+                if (isMobileFileEditorOpen && window.innerWidth < 768) {
+                    closeEditorMobile();
+                    return;
+                }
+                if (document.querySelector('#toast-container .toast')) {
+                    dismissAllToasts();
+                }
             }
         });
 
@@ -6575,7 +8257,7 @@
         };
 
         window.addEventListener('beforeunload', (e) => {
-            if (_editorDirty) { e.preventDefault(); e.returnValue = ''; }
+            if (_editorDirty || isSettingsDirty()) { e.preventDefault(); e.returnValue = ''; }
         });
         document.addEventListener('visibilitychange', () => {
             const logsTabVisible = !document.getElementById('tab-logs').classList.contains('hidden');
@@ -6616,6 +8298,478 @@
             }
         });
 
+        // ══════════════════════════════════════════════════════════════════════
+        //  THEME
+        //  Preference is one of light | dark | system and lives in localStorage.
+        //  Everything downstream (CSS tokens, Ace, xterm, the PWA status bar)
+        //  is re-pointed whenever it changes.
+        // ══════════════════════════════════════════════════════════════════════
+        const THEME_KEY = 'venvy-theme';
+        const MOTION_KEY = 'venvy-motion';
+
+        function getThemePref() {
+            try { return localStorage.getItem(THEME_KEY) || 'system'; } catch (e) { return 'system'; }
+        }
+
+        function resolvedTheme() {
+            const pref = getThemePref();
+            if (pref === 'light' || pref === 'dark') return pref;
+            return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+
+        function xtermTheme() {
+            return resolvedTheme() === 'light'
+                ? {
+                    background: '#ffffff', foreground: '#1e293b',
+                    cursor: '#2563eb', cursorAccent: '#ffffff',
+                    selectionBackground: 'rgba(37, 99, 235, 0.22)', selectionForeground: '#0f172a',
+                    black: '#1e293b', red: '#dc2626', green: '#047857', yellow: '#b45309',
+                    blue: '#2563eb', magenta: '#7e22ce', cyan: '#0e7490', white: '#64748b',
+                    brightBlack: '#94a3b8', brightRed: '#ef4444', brightGreen: '#059669',
+                    brightYellow: '#d97706', brightBlue: '#3b82f6', brightMagenta: '#9333ea',
+                    brightCyan: '#0891b2', brightWhite: '#0f172a',
+                }
+                : {
+                    background: '#111826', foreground: '#e2e8f0',
+                    cursor: '#60a5fa', cursorAccent: '#111826',
+                    selectionBackground: 'rgba(96, 165, 250, 0.3)', selectionForeground: '#ffffff',
+                    black: '#1e293b', red: '#f87171', green: '#4ade80', yellow: '#fbbf24',
+                    blue: '#60a5fa', magenta: '#c084fc', cyan: '#22d3ee', white: '#cbd5e1',
+                    brightBlack: '#475569', brightRed: '#fca5a5', brightGreen: '#86efac',
+                    brightYellow: '#fde68a', brightBlue: '#93c5fd', brightMagenta: '#d8b4fe',
+                    brightCyan: '#67e8f9', brightWhite: '#ffffff',
+                };
+        }
+
+        function applyTheme() {
+            const t = resolvedTheme();
+            document.documentElement.setAttribute('data-theme', t);
+
+            // Keep the PWA status bar / browser chrome in step with the page.
+            const color = t === 'light' ? '#ffffff' : '#0c111c';
+            document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.remove());
+            const meta = document.createElement('meta');
+            meta.name = 'theme-color';
+            meta.content = color;
+            document.head.appendChild(meta);
+
+            if (aceEditor) {
+                aceEditor.setTheme(t === 'light' ? 'ace/theme/chrome' : 'ace/theme/one_dark');
+                aceEditor.container.style.background = 'var(--surface)';
+            }
+            if (window.term) {
+                try { window.term.options.theme = xtermTheme(); } catch (e) { }
+            }
+            syncAppearanceControls();
+        }
+
+        function setTheme(pref) {
+            try { localStorage.setItem(THEME_KEY, pref); } catch (e) { }
+            applyTheme();
+            announce(`Theme set to ${pref}`);
+        }
+
+        function toggleTheme() {
+            setTheme(resolvedTheme() === 'light' ? 'dark' : 'light');
+        }
+
+        function reduceMotionOn() {
+            try { return localStorage.getItem(MOTION_KEY) === 'reduce'; } catch (e) { return false; }
+        }
+
+        function toggleReduceMotion() {
+            const next = !reduceMotionOn();
+            try { localStorage.setItem(MOTION_KEY, next ? 'reduce' : 'full'); } catch (e) { }
+            document.documentElement.toggleAttribute('data-motion', false);
+            if (next) document.documentElement.setAttribute('data-motion', 'reduce');
+            else document.documentElement.removeAttribute('data-motion');
+            syncAppearanceControls();
+        }
+
+        function syncAppearanceControls() {
+            const pref = getThemePref();
+            document.querySelectorAll('[data-theme-opt]').forEach(b => {
+                b.setAttribute('aria-checked', String(b.dataset.themeOpt === pref));
+            });
+            const t = document.getElementById('motion-toggle');
+            if (t) {
+                const on = reduceMotionOn();
+                t.setAttribute('aria-checked', String(on));
+                t.classList.toggle('on', on);
+            }
+        }
+
+        // Follow the OS when the preference is "system".
+        try {
+            window.matchMedia('(prefers-color-scheme: light)')
+                .addEventListener('change', () => { if (getThemePref() === 'system') applyTheme(); });
+        } catch (e) { }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  DEEP LINKS  —  #/app/<id>/<tab>  and  #/system
+        //  Reload, the back button and bookmarks all land where you left off.
+        // ══════════════════════════════════════════════════════════════════════
+        let _suppressHashHandler = false;
+        let _routeApplied = false;
+
+        function currentHash() {
+            if (_isSystemViewActive()) return '#/system';
+            if (activeAppId) return `#/app/${activeAppId}/${currentTab}`;
+            return '';
+        }
+
+        function syncHash() {
+            const want = currentHash();
+            if (want === window.location.hash) return;
+            _suppressHashHandler = true;
+            try {
+                // replaceState keeps tab switches out of the back-button history;
+                // only app/system changes push a new entry.
+                history.replaceState(null, '', want || window.location.pathname + window.location.search);
+            } catch (e) { window.location.hash = want; }
+            setTimeout(() => { _suppressHashHandler = false; }, 0);
+        }
+
+        function parseHash() {
+            const h = (window.location.hash || '').replace(/^#/, '');
+            if (h === '/system') return { view: 'system' };
+            const m = h.match(/^\/app\/(\d+)(?:\/([a-z]+))?$/);
+            if (m) return { view: 'app', id: parseInt(m[1], 10), tab: m[2] || 'terminal' };
+            return null;
+        }
+
+        function applyRoute() {
+            const r = parseHash();
+            if (!r) return false;
+            if (r.view === 'system') { openSystemView(); return true; }
+            if (r.view === 'app') {
+                if (!_cachedApps.some(a => a.id === r.id)) return false;
+                selectApp(r.id, { tab: r.tab, force: true });
+                return true;
+            }
+            return false;
+        }
+
+        window.addEventListener('hashchange', () => {
+            if (_suppressHashHandler) return;
+            applyRoute();
+        });
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  CONNECTION BANNER
+        // ══════════════════════════════════════════════════════════════════════
+        let _connOk = true;
+        function setConnected(ok) {
+            if (ok === _connOk) return;
+            _connOk = ok;
+            const b = document.getElementById('conn-banner');
+            if (b) {
+                b.classList.toggle('show', !ok);
+                // Reflow the app below the banner rather than covering the app
+                // header with it — body is border-box, so padding shrinks it.
+                document.body.style.paddingTop = ok ? '' : b.offsetHeight + 'px';
+                // The terminal sizes itself to its container, so re-fit it.
+                setTimeout(() => { try { _termFit(); } catch (e) { } }, 320);
+            }
+            if (ok) showToast('Reconnected to the server.', 'success', 2000);
+            else announce('Connection to the server lost. Retrying.');
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  CRASH NOTICES
+        //  A process that dies on its own should say so, once, with a way to
+        //  jump straight to the evidence.
+        // ══════════════════════════════════════════════════════════════════════
+        const _lastKnownStatus = {};
+        function _noticeCrash(app) {
+            const prev = _lastKnownStatus[app.id];
+            const nowCrashed = statusMeta(app.status).crashed;
+            _lastKnownStatus[app.id] = app.status;
+            if (prev === undefined || !nowCrashed || statusMeta(prev).crashed) return;
+            showToast(`"${app.name}" stopped unexpectedly.`, 'error', 0, {
+                actionLabel: 'View logs',
+                onAction: () => selectApp(app.id, { tab: 'logs', force: true }),
+            });
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  COMMAND PALETTE
+        // ══════════════════════════════════════════════════════════════════════
+        let _paletteItems = [];
+        let _paletteIndex = 0;
+
+        function _paletteCommands() {
+            const cmds = [];
+            const running = activeApp?.status === 'running';
+
+            if (activeApp) {
+                if (!running) cmds.push({ icon: 'play', label: 'Start application', hint: activeApp.name, run: () => controlApp('start') });
+                if (running) cmds.push({ icon: 'refresh-cw', label: 'Restart application', hint: activeApp.name, run: () => controlApp('restart') });
+                if (running) cmds.push({ icon: 'square', label: 'Stop application', hint: activeApp.name, run: () => controlApp('stop') });
+                TABS.forEach((t, i) => cmds.push({
+                    icon: 'chevron-right',
+                    label: 'Go to ' + t.charAt(0).toUpperCase() + t.slice(1),
+                    hint: String(i + 1),
+                    run: () => switchTab(t),
+                }));
+            }
+            cmds.push({ icon: 'plus', label: 'New application', run: () => openModal('create-app-modal') });
+            cmds.push({ icon: 'monitor', label: 'System overview', run: () => openSystemView(true) });
+            if (currentUser?.role === 'admin') {
+                cmds.push({ icon: 'users', label: 'Manage users', run: () => openUsersModal() });
+            }
+            cmds.push({ icon: 'lock', label: 'Change password', run: () => openChangePwdModal() });
+            cmds.push({
+                icon: resolvedTheme() === 'light' ? 'moon' : 'sun',
+                label: `Switch to ${resolvedTheme() === 'light' ? 'dark' : 'light'} theme`,
+                run: () => toggleTheme(),
+            });
+            cmds.push({ icon: 'command', label: 'Keyboard shortcuts', hint: '?', run: () => openShortcutsModal() });
+            cmds.push({ icon: 'log-out', label: 'Sign out', run: () => logout() });
+            return cmds;
+        }
+
+        function _buildPaletteItems(query) {
+            const q = query.trim().toLowerCase();
+            const items = [];
+
+            _cachedApps.forEach(app => {
+                const m = statusMeta(app.status);
+                items.push({
+                    kind: 'app',
+                    icon: null,
+                    dot: m,
+                    label: app.name,
+                    hint: m.label,
+                    run: () => selectApp(app.id, { force: true }),
+                });
+            });
+            _paletteCommands().forEach(c => items.push({ kind: 'cmd', ...c }));
+
+            if (!q) return items;
+            // Subsequence match so "stpp" still finds "Stop application".
+            const score = (text) => {
+                const t = text.toLowerCase();
+                const idx = t.indexOf(q);
+                if (idx === 0) return 0;
+                if (idx > 0) return 1;
+                let i = 0;
+                for (const ch of t) { if (ch === q[i]) i++; if (i === q.length) return 2; }
+                return -1;
+            };
+            return items
+                .map(it => ({ it, s: score(it.label) }))
+                .filter(x => x.s >= 0)
+                .sort((a, b) => a.s - b.s)
+                .map(x => x.it);
+        }
+
+        function renderPalette() {
+            const wrap = document.getElementById('palette-results');
+            if (!_paletteItems.length) {
+                wrap.innerHTML = '<div class="px-4 py-8 text-center text-sm" style="color:var(--text3)">No matches</div>';
+                return;
+            }
+            wrap.innerHTML = _paletteItems.map((it, i) => {
+                const lead = it.kind === 'app'
+                    ? `<span class="w-2 h-2 rounded-full shrink-0" style="background:${it.dot.dot}"></span>`
+                    : `<i data-feather="${it.icon || 'chevron-right'}" class="w-3.5 h-3.5 shrink-0"></i>`;
+                return `<div class="palette-item" role="option" id="palette-opt-${i}" data-i="${i}"
+                             data-active="${i === _paletteIndex ? 1 : 0}"
+                             aria-selected="${i === _paletteIndex}"
+                             onmousemove="setPaletteIndex(${i})" onclick="runPaletteItem(${i})">
+                    ${lead}
+                    <span class="flex-1 min-w-0 truncate text-sm font-medium">${escapeHtml(it.label)}</span>
+                    ${it.hint ? `<span class="text-[10.5px] mono shrink-0" style="color:var(--text3)">${escapeHtml(it.hint)}</span>` : ''}
+                </div>`;
+            }).join('');
+            _featherReplace();
+            document.getElementById('palette-input')
+                ?.setAttribute('aria-activedescendant', `palette-opt-${_paletteIndex}`);
+            _scrollPaletteIntoView();
+        }
+
+        function setPaletteIndex(i) {
+            if (i === _paletteIndex) return;
+            _paletteIndex = i;
+            document.querySelectorAll('#palette-results .palette-item').forEach(el => {
+                const active = Number(el.dataset.i) === i;
+                el.dataset.active = active ? '1' : '0';
+                el.setAttribute('aria-selected', String(active));
+            });
+            document.getElementById('palette-input')?.setAttribute('aria-activedescendant', `palette-opt-${i}`);
+        }
+
+        function _scrollPaletteIntoView() {
+            document.querySelector(`#palette-results .palette-item[data-i="${_paletteIndex}"]`)
+                ?.scrollIntoView({ block: 'nearest' });
+        }
+
+        function runPaletteItem(i) {
+            const it = _paletteItems[i];
+            closePalette();
+            if (it && typeof it.run === 'function') setTimeout(() => it.run(), 10);
+        }
+
+        function openPalette() {
+            if (!currentUser) return;
+            const input = document.getElementById('palette-input');
+            input.value = '';
+            _paletteItems = _buildPaletteItems('');
+            _paletteIndex = 0;
+            renderPalette();
+            openModal('command-palette');
+            setTimeout(() => input.focus(), 50);
+        }
+
+        function closePalette() { closeModal('command-palette'); }
+
+        document.getElementById('palette-input').addEventListener('input', (e) => {
+            _paletteItems = _buildPaletteItems(e.target.value);
+            _paletteIndex = 0;
+            renderPalette();
+        });
+
+        document.getElementById('palette-input').addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setPaletteIndex(Math.min(_paletteIndex + 1, _paletteItems.length - 1));
+                _scrollPaletteIntoView();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setPaletteIndex(Math.max(_paletteIndex - 1, 0));
+                _scrollPaletteIntoView();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                runPaletteItem(_paletteIndex);
+            }
+        });
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  SHORTCUTS REFERENCE
+        // ══════════════════════════════════════════════════════════════════════
+        const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+        const MOD = IS_MAC ? '⌘' : 'Ctrl';
+
+        const SHORTCUT_GROUPS = [
+            {
+                title: 'Global', items: [
+                    [[MOD, 'K'], 'Open the command palette'],
+                    [['?'], 'Show this list'],
+                    [['/'], 'Filter applications (or log lines)'],
+                    [['Esc'], 'Close dialog · clear filter · dismiss toasts'],
+                ]
+            },
+            {
+                title: 'Navigation', items: [
+                    [['1'], 'Terminal'],
+                    [['2'], 'Files'],
+                    [['3'], 'Logs'],
+                    [['4'], 'Packages'],
+                    [['5'], 'Settings'],
+                    [['['], 'Previous application'],
+                    [[']'], 'Next application'],
+                    [['←', '→'], 'Move between tabs (when a tab is focused)'],
+                ]
+            },
+            {
+                title: 'Editor', items: [
+                    [[MOD, 'S'], 'Save the open file'],
+                    [[MOD, 'F'], 'Find in the open file'],
+                ]
+            },
+            {
+                title: 'Logs', items: [
+                    [['F'], 'Follow / pause new output'],
+                    [['W'], 'Toggle line wrapping'],
+                ]
+            },
+        ];
+
+        function openShortcutsModal() {
+            document.getElementById('shortcuts-body').innerHTML = SHORTCUT_GROUPS.map(g => `
+                <div class="mb-5 last:mb-0">
+                    <div class="section-label mb-2.5">${g.title}</div>
+                    <div class="space-y-1.5">
+                        ${g.items.map(([keys, desc]) => `
+                            <div class="flex items-center gap-3 text-sm">
+                                <span class="flex items-center gap-1 shrink-0" style="min-width:92px">
+                                    ${keys.map(k => `<span class="kbd">${escapeHtml(k)}</span>`).join('')}
+                                </span>
+                                <span style="color:var(--text2)">${escapeHtml(desc)}</span>
+                            </div>`).join('')}
+                    </div>
+                </div>`).join('');
+            openModal('shortcuts-modal');
+            _featherReplace();
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  GLOBAL SHORTCUTS
+        // ══════════════════════════════════════════════════════════════════════
+        // A shortcut must never fire while the user is composing text — that
+        // includes the xterm helper textarea, which is a real focusable input.
+        function isTypingTarget(el) {
+            if (!el) return false;
+            if (el.isContentEditable) return true;
+            const tag = el.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+            if (el.closest?.('.ace_editor, .xterm')) return true;
+            return false;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            const mod = e.metaKey || e.ctrlKey;
+
+            // Command palette works from anywhere, including the terminal.
+            if (mod && (e.key === 'k' || e.key === 'K')) {
+                e.preventDefault();
+                if (document.getElementById('command-palette').classList.contains('hidden')) openPalette();
+                else closePalette();
+                return;
+            }
+
+            if (isTypingTarget(e.target) || _openModalIds.length > 0) return;
+            if (e.altKey || mod) return;
+            if (!currentUser) return;
+
+            switch (e.key) {
+                case '?':
+                    e.preventDefault(); openShortcutsModal(); return;
+                case '/':
+                    e.preventDefault();
+                    if (currentTab === 'logs' && activeAppId) document.getElementById('log-search')?.focus();
+                    else {
+                        if (window.innerWidth < 768) openSidebar();
+                        document.getElementById('app-search')?.focus();
+                    }
+                    return;
+                case '1': case '2': case '3': case '4': case '5':
+                    if (!activeAppId) return;
+                    e.preventDefault(); switchTab(TABS[Number(e.key) - 1]); return;
+                case '[': case ']':
+                    e.preventDefault(); cycleApp(e.key === ']' ? 1 : -1); return;
+                case 'f': case 'F':
+                    if (currentTab === 'logs' && activeAppId) { e.preventDefault(); toggleLogFollow(); }
+                    return;
+                case 'w': case 'W':
+                    if (currentTab === 'logs' && activeAppId) { e.preventDefault(); toggleLogWrap(); }
+                    return;
+            }
+        });
+
+        function cycleApp(delta) {
+            if (!_cachedApps.length) return;
+            const i = _cachedApps.findIndex(a => a.id === activeAppId);
+            const next = _cachedApps[(i + delta + _cachedApps.length) % _cachedApps.length];
+            if (next && next.id !== activeAppId) selectApp(next.id, { tab: currentTab });
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  BOOT
+        // ══════════════════════════════════════════════════════════════════════
+        applyTheme();
+        syncAppearanceControls();
         checkAuth();
         _featherReplace();
 
