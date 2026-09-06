@@ -286,14 +286,16 @@ extension APIClient {
     }
 
     func cloudflareZones() async throws -> [CFZone] {
-        try await get("/api/system/cloudflare/zones")
+        // Server replies {"ok": true, "zones": [...]}.
+        try await getList("/api/system/cloudflare/zones", keys: ["zones"])
     }
 
     func tunnelRoutes(appID: Int) async throws -> [CFRoute] {
-        try await get("/api/apps/\(appID)/tunnel")
+        // Server replies {"routes": [...]}.
+        try await getList("/api/apps/\(appID)/tunnel", keys: ["routes"])
     }
 
-    func tunnelCheck(appID: Int, hostname: String, localPort: Int) async throws -> [String: JSONValue] {
+    func tunnelCheck(appID: Int, hostname: String, localPort: Int) async throws -> TunnelCheck {
         try await get("/api/apps/\(appID)/tunnel/check", query: [
             URLQueryItem(name: "hostname", value: hostname),
             URLQueryItem(name: "local_port", value: String(localPort)),

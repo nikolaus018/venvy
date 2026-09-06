@@ -94,6 +94,12 @@ struct TunnelView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        if !route.published {
+                            Label("Recorded locally but not live in the tunnel.",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(VenvyColor.warning)
+                        }
                         if let url = URL(string: "https://\(route.hostname)") {
                             Button {
                                 openURL(url)
@@ -236,17 +242,12 @@ struct TunnelView: View {
                 let result = try await client.tunnelCheck(appID: appID,
                                                           hostname: hostnamePreview,
                                                           localPort: port)
-                // The check endpoint's exact shape varies; surface whatever
-                // message it gives, and treat an explicit ok:false as failure.
-                let okFlag: Bool? = {
-                    if case let .bool(b)? = result["ok"] { return b }
-                    return nil
-                }()
-                let message = result["detail"]?.stringValue
-                    ?? result["message"]?.stringValue
-                    ?? (okFlag == false ? "That hostname or port isn't available." : "Looks good — ready to publish.")
-                checkOK = okFlag ?? true
-                checkResult = message
+                // A conflict is a warning, not a blocker: publishing takes the
+                // hostname over from whatever holds it.
+                checkOK = !result.conflict
+                checkResult = result.conflict
+                    ? (result.reason ?? "That hostname is already in use. Publishing will take it over.")
+                    : "No conflicts — ready to publish."
             } catch let error as APIError {
                 checkOK = false
                 checkResult = error.localizedDescription

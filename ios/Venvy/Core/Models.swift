@@ -495,11 +495,14 @@ struct CFRoute: Decodable, Identifiable, Hashable {
     var hostname: String
     var localPort: Int?
     var cfRouteId: String?
+    /// A row can exist without a live Cloudflare route behind it — the server
+    /// reports that as `published: false`.
+    var published: Bool
 
     var id: String { hostname + "-" + String(localPort ?? 0) }
 
     enum CodingKeys: String, CodingKey {
-        case hostname
+        case hostname, published
         case localPort = "local_port"
         case cfRouteId = "cf_route_id"
     }
@@ -509,6 +512,32 @@ struct CFRoute: Decodable, Identifiable, Hashable {
         hostname = (try? c.decode(String.self, forKey: .hostname)) ?? ""
         localPort = try? c.decodeIfPresent(Int.self, forKey: .localPort)
         cfRouteId = try? c.decodeIfPresent(String.self, forKey: .cfRouteId)
+        published = ((try? c.decodeIfPresent(Bool.self, forKey: .published)) ?? nil)
+            ?? (cfRouteId?.isEmpty == false)
+    }
+}
+
+/// Result of `GET /tunnel/check`. Note this endpoint reports a *conflict*
+/// rather than an ok/error — a conflict is a warning that publishing will
+/// take the hostname over, not a hard failure.
+struct TunnelCheck: Decodable {
+    var conflict: Bool
+    var conflictType: String?
+    var reason: String?
+    var ownedBy: String?
+
+    enum CodingKeys: String, CodingKey {
+        case conflict, reason
+        case conflictType = "conflict_type"
+        case ownedBy = "owned_by"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        conflict = (try? c.decode(Bool.self, forKey: .conflict)) ?? false
+        conflictType = try? c.decodeIfPresent(String.self, forKey: .conflictType)
+        reason = try? c.decodeIfPresent(String.self, forKey: .reason)
+        ownedBy = try? c.decodeIfPresent(String.self, forKey: .ownedBy)
     }
 }
 

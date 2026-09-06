@@ -167,6 +167,29 @@ final class APIClient: @unchecked Sendable {
         return try decode(data)
     }
 
+    /// Decodes either a bare JSON array or an object wrapping one, e.g.
+    /// `{"routes": [...]}` / `{"ok": true, "zones": [...]}`.
+    ///
+    /// Several list endpoints wrap their array in an object even though the
+    /// API reference describes them as plain lists, so accept both shapes
+    /// rather than hard-coding one and breaking on the other.
+    func getList<T: Decodable>(_ path: String, keys: [String],
+                               query: [URLQueryItem] = []) async throws -> [T] {
+        let (data, _) = try await perform(makeRequest("GET", path, query: query))
+        if let array = try? decoder.decode([T].self, from: data) { return array }
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            for key in keys {
+                guard let inner = object[key],
+                      let innerData = try? JSONSerialization.data(withJSONObject: inner),
+                      let array = try? decoder.decode([T].self, from: innerData) else { continue }
+                return array
+            }
+            // An explicitly empty wrapper is a valid empty list, not a failure.
+            if keys.contains(where: { object[$0] is NSNull }) { return [] }
+        }
+        throw APIError.decoding("Couldn't read the server's response. It may be running a different Venvy version.")
+    }
+
     @discardableResult
     func post<T: Decodable>(_ path: String, body: Encodable? = nil, query: [URLQueryItem] = []) async throws -> T {
         try await send("POST", path, body: body, query: query)
