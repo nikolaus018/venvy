@@ -45,8 +45,8 @@ venv.bak/
 data.db
 data.db.bak.*
 
-# Logs
-logs/
+# Logs (Venvy's runtime log dir at the repo root)
+/logs/
 *.log
 
 # IDEs and Editors
@@ -62,5 +62,11 @@ logs/
 .coverage
 htmlcov/
 
-# Apps Directory (if dynamically created by Venvy)
-apps/
+# Apps directory, created at the repo root by Venvy at runtime
+/apps/
+
+# Xcode / iOS
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+ios/**/DerivedData/
+.DS_Store
