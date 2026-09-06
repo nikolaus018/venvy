@@ -20,6 +20,8 @@ struct FileEditorView: View {
     @State private var lastSaved: Date?
     @State private var confirmDiscard = false
     @State private var wrapLines = true
+    @State private var showLineNumbers = true
+    @State private var fontSize: CGFloat = 12.5
     @FocusState private var editorFocused: Bool
 
     private var isDirty: Bool { text != originalText }
@@ -42,6 +44,7 @@ struct FileEditorView: View {
         .navigationTitle(node.name)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(isDirty)
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             if isDirty {
                 ToolbarItem(placement: .topBarLeading) {
@@ -92,56 +95,86 @@ struct FileEditorView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(Color(.secondarySystemBackground))
+            } else if isOversizedForHighlighting {
+                HStack(spacing: 6) {
+                    Image(systemName: "paintbrush.pointed")
+                    Text("Syntax highlighting is off — this file is too large.")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground))
             }
 
-            if wrapLines {
-                TextEditor(text: $text)
-                    .font(.system(.callout, design: .monospaced))
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .scrollContentBackground(.hidden)
-                    .background(Color(.systemBackground))
-                    .focused($editorFocused)
-                    .disabled(!isEditable)
-            } else {
-                // Horizontal scrolling keeps long lines readable for code that
-                // relies on alignment; TextEditor itself always wraps.
-                ScrollView(.horizontal) {
-                    TextEditor(text: $text)
-                        .font(.system(.callout, design: .monospaced))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .scrollContentBackground(.hidden)
-                        .frame(width: 1200)
-                        .focused($editorFocused)
-                        .disabled(!isEditable)
-                }
-                .background(Color(.systemBackground))
-            }
+            CodeEditor(text: $text,
+                       language: language,
+                       isEditable: isEditable,
+                       showsLineNumbers: showLineNumbers,
+                       wrapLines: wrapLines,
+                       fontSize: fontSize)
+                .focused($editorFocused)
         }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
-                Button("Tab") { insert("    ") }
-                Button("(") { insert("(") }
-                Button("[") { insert("[") }
-                Button("{") { insert("{") }
-                Button("\"") { insert("\"") }
-                Button(":") { insert(":") }
-                Spacer()
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 7) {
+                        ForEach(snippetKeys, id: \.self) { key in
+                            Button {
+                                insert(key == "tab" ? "    " : key)
+                            } label: {
+                                Text(key)
+                                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 5)
+                            }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.roundedRectangle(radius: 7))
+                            .tint(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
                 Button("Done") { editorFocused = false }
                     .fontWeight(.semibold)
             }
         }
     }
 
+    /// Punctuation that's fiddly to reach on the software keyboard but
+    /// constant in code.
+    private var snippetKeys: [String] {
+        switch language {
+        case .python:
+            return ["tab", ":", "(", ")", "[", "]", "{", "}", "\"", "'", "_", "=", "#", ".", ","]
+        case .rust:
+            return ["tab", "{", "}", "(", ")", "<", ">", ";", "&", "\"", ":", "_", "-", ">", ","]
+        default:
+            return ["tab", "{", "}", "(", ")", "[", "]", ":", ";", "\"", "'", "_", "-", "=", ","]
+        }
+    }
+
+    private var language: CodeLanguage { CodeLanguage.detect(filename: node.name) }
+
+    private var isOversizedForHighlighting: Bool {
+        language != .plain && text.utf16.count > SyntaxHighlighter.maximumLength
+    }
+
     private var statusBar: some View {
         HStack(spacing: 10) {
             Menu {
                 Toggle("Wrap lines", isOn: $wrapLines)
+                Toggle("Line numbers", isOn: $showLineNumbers)
+                Picker("Text size", selection: $fontSize) {
+                    Text("Small").tag(CGFloat(11))
+                    Text("Medium").tag(CGFloat(12.5))
+                    Text("Large").tag(CGFloat(14.5))
+                }
             } label: {
                 Image(systemName: "textformat.size")
             }
-            Text("\(lineCount) lines · \(text.count) chars")
+            Text("\(language.displayName) · \(lineCount) lines")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -164,8 +197,10 @@ struct FileEditorView: View {
         text.isEmpty ? 0 : text.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
     }
 
+    /// Inserts at the caret. `CodeEditor` owns the caret, so post a
+    /// notification it can act on rather than appending at the end.
     private func insert(_ s: String) {
-        text.append(s)
+        NotificationCenter.default.post(name: .venvyCodeEditorInsert, object: s)
     }
 
     private func load() async {
