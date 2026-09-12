@@ -7,36 +7,32 @@ blocks the event loop on startup).
 -------------------------------------------------------------------------------
 Backup & restore procedure
 -------------------------------------------------------------------------------
-Venvy's persistent state lives in two places, both under the directory Venvy
-is launched from (DATA_DIR = the current working directory at startup):
+Venvy's persistent state lives under the directory Venvy is launched from
+(DATA_DIR = the current working directory at startup): `data.db` (SQLite —
+users, sessions, app metadata, settings), `apps/` (every hosted app's code,
+venv, and logs), and `.venvy_key` (the local symmetric-encryption key used
+to decrypt Cloudflare credentials and app env vars stored in `data.db` —
+without it, those encrypted columns are unrecoverable; treat it like a
+private key).
 
-  1. `data.db` — SQLite database (users, sessions, app metadata, settings).
-     Do NOT `cp` this file while Venvy is running — it's in WAL mode, so a
-     raw copy can miss data still sitting in the `-wal` file. Instead, use
-     the admin-only `POST /api/system/backup` endpoint, which performs a
-     consistent snapshot via SQLite's `VACUUM INTO` and returns the path to
-     the resulting file. That snapshot is a single ordinary file and is
-     always safe to copy with `cp`.
-  2. `apps/` — every hosted app's code, venv, and logs. A plain recursive
-     copy (`cp -a apps/ backup/apps/` or `rsync -a apps/ backup/apps/`) is
-     safe to run at any time; nothing in there uses WAL semantics. For a
-     perfectly consistent snapshot, stop apps first (or accept that a
-     running app's log file may be mid-write, which is harmless).
-  3. `.venvy_key` — the local symmetric-encryption key used to decrypt
-     Cloudflare credentials and app env vars stored in `data.db`. **This
-     file must be backed up alongside `data.db`** — without it, the
-     encrypted columns in a restored database are unrecoverable. Treat it
-     with the same care as a private key (mode 0600, never logged).
+Normal case — Venvy is alive, you want a backup or to roll back: use the
+UI (System → Database Backups), or hit the API directly:
+  - `POST /api/system/backup` bundles a consistent `data.db` snapshot (via
+    `VACUUM INTO` — safe on a live WAL-mode database, unlike a raw `cp`),
+    `.venvy_key`, and all of `apps/` into one `full-*.tar.gz` in `backups/`.
+    One file is a complete backup; no shell access to the server needed.
+  - `POST /api/system/backup/restore/{filename}` rolls this same live
+    server back to one of those archives in place: stops every running
+    app, swaps in the backup's files, and restarts the process. A safety
+    backup of the pre-restore state is taken automatically first.
 
-To restore on a new host:
-  1. Stop Venvy (if running).
-  2. Place the backed-up `data.db` (or the `VACUUM INTO` snapshot, renamed
-     to `data.db`) and `.venvy_key` into the new working directory.
-  3. Restore `apps/` into the same working directory.
-  4. Start Venvy as usual — it will pick up the restored DB and app files.
-
-There is no one-click restore command; the above is a manual but
-straightforward procedure suitable for a small self-hosted team.
+Disaster case — the host itself is gone and you're standing up a
+replacement, so there's no running Venvy to call the API on: this still
+requires manual file placement, same as always —
+  1. Stop Venvy on the new host (if it's already running against a fresh DB).
+  2. Untar a `full-*.tar.gz` backup (or place a manually-copied `data.db` +
+     `.venvy_key` + `apps/`) into the new working directory.
+  3. Start Venvy — it picks up the restored files.
 -------------------------------------------------------------------------------
 """
 import os as _os; _os.environ.setdefault("PYDEVD_DISABLE_FILE_VALIDATION", "1")
@@ -73,6 +69,7 @@ import signal
 import socket
 import struct
 import sys
+import tarfile
 import termios
 import threading
 import time
@@ -2454,76 +2451,111 @@ def get_system_metrics(user: User = Depends(check_admin)):
     }
 
 
+def _create_full_backup_archive() -> Path:
+    """Build a complete disaster-recovery backup — a consistent data.db
+    snapshot (via SQLite's VACUUM INTO, safe on a live WAL-mode database),
+    the .venvy_key encryption key, and the entire apps/ directory (code,
+    venvs, logs) — bundled into one tar.gz in BACKUP_DIR. This is the only
+    format the UI creates going forward: one file covers everything needed
+    to restore Venvy, so backing up (and restoring) never requires touching
+    the server's filesystem directly.
+
+    Raises HTTPException on failure. Returns the path to the finished
+    archive on success. Blocking (tars the whole apps/ dir) — callers on
+    the event loop should run this via asyncio.to_thread; sync route
+    handlers already run off the event loop via Starlette's threadpool.
+    """
+    BACKUP_DIR.mkdir(exist_ok=True)
+    timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
+    dest = BACKUP_DIR / f"full-{timestamp}.tar.gz"
+
+    # Same "write under a name only this request knows, then hard-link into
+    # place" trick the old DB-only backup used — a concurrent request that
+    # loses the race on this second-resolution timestamp can only ever
+    # delete its OWN temp files, never a different request's completed one.
+    suffix = secrets.token_hex(4)
+    tmp_db = BACKUP_DIR / f".tmp-{timestamp}-{suffix}.db"
+    tmp_archive = BACKUP_DIR / f".tmp-{timestamp}-{suffix}.tar.gz"
+
+    try:
+        conn = sqlite3.connect(str(DB_FILE))
+        try:
+            conn.execute("VACUUM INTO ?", (str(tmp_db),))
+        finally:
+            conn.close()
+
+        with tarfile.open(tmp_archive, "w:gz") as tar:
+            tar.add(tmp_db, arcname="data.db")
+            if _VENVY_KEY_FILE.exists():
+                tar.add(_VENVY_KEY_FILE, arcname=_VENVY_KEY_FILE.name)
+            if APPS_BASE_DIR.exists():
+                tar.add(APPS_BASE_DIR, arcname="apps")
+    except Exception as e:
+        logging.error(f"Full backup failed: {e}")
+        tmp_archive.unlink(missing_ok=True)
+        raise HTTPException(500, f"Backup failed: {e}")
+    finally:
+        tmp_db.unlink(missing_ok=True)
+
+    try:
+        os.link(str(tmp_archive), str(dest))
+    except FileExistsError:
+        raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
+    finally:
+        tmp_archive.unlink(missing_ok=True)
+
+    return dest
+
+
 @api_router.post("/system/backup")
 def create_backup(
     admin: User = Depends(check_admin),
     _rl: None = Depends(rate_limit_mutations),
 ):
-    """Create a consistent point-in-time snapshot of data.db via SQLite's
-    VACUUM INTO. Safe to call while Venvy is running (WAL mode) — VACUUM INTO
-    reads the database inside its own read transaction, so it never sees a
-    half-written state, unlike a raw `cp` of the db file.
-
-    Does not touch apps/ — see the backup & restore notes at the top of this
-    file for the full procedure (this endpoint only covers the database).
-    """
-    BACKUP_DIR.mkdir(exist_ok=True)
-    timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
-    dest = BACKUP_DIR / f"data-{timestamp}.db"
-
-    # VACUUM INTO writes to a uniquely-named temp file first, then we
-    # hard-link it to the final (second-resolution, so collidable) name.
-    # os.link() atomically fails if dest already exists — unlike a plain
-    # exists()-check-then-write, this means a concurrent request that loses
-    # the race can NEVER delete the winner's completed backup, because it
-    # only ever unlinks the temp path it created itself, never `dest`.
-    tmp_dest = BACKUP_DIR / f".tmp-{timestamp}-{secrets.token_hex(4)}.db"
-    try:
-        conn = sqlite3.connect(str(DB_FILE))
-        try:
-            conn.execute("VACUUM INTO ?", (str(tmp_dest),))
-        finally:
-            conn.close()
-    except Exception as e:
-        logging.error(f"Database backup failed: {e}")
-        tmp_dest.unlink(missing_ok=True)
-        raise HTTPException(500, f"Backup failed: {e}")
-
-    try:
-        os.link(str(tmp_dest), str(dest))
-    except FileExistsError:
-        raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
-    finally:
-        tmp_dest.unlink(missing_ok=True)
-
-    audit_log(admin.username, "system_backup", f"path={dest}")
+    """Create a full disaster-recovery backup — see _create_full_backup_archive()."""
+    dest = _create_full_backup_archive()
+    audit_log(admin.username, "system_full_backup", f"path={dest}")
     return {"ok": True, "path": str(dest), "size_bytes": dest.stat().st_size}
+
+
+# (pattern, type label) — "database" is a legacy DB-only snapshot from an
+# older Venvy version (download/delete only, not restorable from the UI);
+# "full" is the current format, listed so upgrading never orphans old backups.
+_BACKUP_TYPES = (
+    ("data-*.db", "database"),
+    ("full-*.tar.gz", "full"),
+)
 
 
 @api_router.get("/system/backups")
 def list_backups(admin: User = Depends(check_admin)):
-    """List existing database backups created via POST /api/system/backup."""
+    """List existing backups of both kinds — see _BACKUP_TYPES."""
     if not BACKUP_DIR.exists():
         return []
-    return sorted(
-        (
-            {"filename": f.name, "size_bytes": f.stat().st_size, "created_at": datetime.datetime.fromtimestamp(f.stat().st_mtime, tz=datetime.timezone.utc).isoformat()}
-            for f in BACKUP_DIR.glob("data-*.db")
-        ),
-        key=lambda b: b["created_at"],
-        reverse=True,
-    )
+    entries = [
+        {
+            "filename": f.name,
+            "size_bytes": f.stat().st_size,
+            "created_at": datetime.datetime.fromtimestamp(f.stat().st_mtime, tz=datetime.timezone.utc).isoformat(),
+            "type": kind,
+        }
+        for pattern, kind in _BACKUP_TYPES
+        for f in BACKUP_DIR.glob(pattern)
+    ]
+    return sorted(entries, key=lambda b: b["created_at"], reverse=True)
 
 
-_BACKUP_FILENAME_RE = re.compile(r"\Adata-\d{8}-\d{6}\.db\Z")
+_BACKUP_FILENAME_RE = re.compile(r"\A(?:data-\d{8}-\d{6}\.db|full-\d{8}-\d{6}\.tar\.gz)\Z")
+_FULL_BACKUP_FILENAME_RE = re.compile(r"\Afull-\d{8}-\d{6}\.tar\.gz\Z")
 
 
 def _resolve_backup_path(filename: str) -> Path:
-    """Validate a backup filename against the fixed naming scheme used by
-    create_backup(), resolve it inside BACKUP_DIR, and confirm the resolved
-    path is actually still inside BACKUP_DIR (matches the is_safe_path
-    pattern used for app file access elsewhere in this file) — rejects
-    anything that isn't an exact, contained match."""
+    """Validate a backup filename against the fixed naming schemes used by
+    _create_full_backup_archive() (current) and the retired DB-only
+    create_backup() (legacy), resolve it inside BACKUP_DIR, and confirm the
+    resolved path is actually still inside BACKUP_DIR (matches the
+    is_safe_path pattern used for app file access elsewhere in this file) —
+    rejects anything that isn't an exact, contained match."""
     if not _BACKUP_FILENAME_RE.match(filename):
         raise HTTPException(400, "Invalid backup filename.")
     path = BACKUP_DIR / filename
@@ -2534,7 +2566,7 @@ def _resolve_backup_path(filename: str) -> Path:
 
 @api_router.get("/system/backups/{filename}/download")
 def download_backup(filename: str, admin: User = Depends(check_admin)):
-    """Download a previously created database backup snapshot."""
+    """Download a previously created backup."""
     path = _resolve_backup_path(filename)
     audit_log(admin.username, "system_backup_download", f"path={path}")
     return FileResponse(
@@ -2554,11 +2586,119 @@ def delete_backup(
     admin: User = Depends(check_admin),
     _rl: None = Depends(rate_limit_mutations),
 ):
-    """Delete a database backup snapshot."""
+    """Delete a backup."""
     path = _resolve_backup_path(filename)
     path.unlink()
     audit_log(admin.username, "system_backup_delete", f"path={path}")
     return {"ok": True}
+
+
+class RestoreBackupReq(BaseModel):
+    confirm: str
+
+
+def _self_restart():
+    """Replace this process's image with a fresh invocation of itself
+    (same PID, same argv/cwd/env) so every piece of in-memory state — the
+    DB engine's connections, the encryption key cache, active-process
+    tracking, background tasks — reinitializes cleanly against whatever is
+    now on disk. Used after a restore, where swapping data.db/apps/the key
+    out from under a live process is otherwise fragile."""
+    logging.warning("Restarting Venvy to complete the restore...")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+@api_router.post("/system/backup/restore/{filename}")
+async def restore_backup(
+    filename: str,
+    req: RestoreBackupReq,
+    admin: User = Depends(check_admin),
+    session: Session = Depends(get_session),
+    _rl: None = Depends(rate_limit_mutations),
+):
+    """Roll this live server back to a full backup: stops every running app,
+    replaces data.db / apps/ / the encryption key with the backup's
+    contents, then restarts the Venvy process so it comes back up clean.
+
+    Destructive and only partly undoable — a fresh full backup of the
+    CURRENT state is taken automatically before anything else is touched,
+    so the restore itself can be reversed, but any apps running at the time
+    are stopped and stay stopped. Requires confirm == "RESTORE" or this is
+    a no-op 400; only full backups (not legacy DB-only ones) are restorable.
+    """
+    if req.confirm != "RESTORE":
+        raise HTTPException(400, 'Confirmation phrase did not match — send {"confirm": "RESTORE"}.')
+    if not _FULL_BACKUP_FILENAME_RE.match(filename):
+        raise HTTPException(400, "Only full backups can be restored — legacy database-only backups are download-only.")
+    archive_path = BACKUP_DIR / filename
+    if not is_safe_path(BACKUP_DIR, archive_path) or not archive_path.is_file():
+        raise HTTPException(404, "Backup not found.")
+
+    audit_log(admin.username, "system_restore_started", f"path={archive_path}")
+
+    # Safety net: back up the CURRENT state before touching anything, so a
+    # restore that turns out to be a mistake can itself be undone. If this
+    # fails, abort here — nothing has been touched yet.
+    try:
+        pre_restore = await asyncio.to_thread(_create_full_backup_archive)
+    except HTTPException as e:
+        raise HTTPException(500, f"Could not create a safety backup before restoring — aborted, nothing was touched: {e.detail}")
+    audit_log(admin.username, "system_restore_safety_backup", f"path={pre_restore}")
+
+    # Stop every running app before touching apps/ or data.db out from under them.
+    for a in session.exec(select(App)).all():
+        try:
+            await stop_app_process_logic(a.id, session, manual=True)
+        except Exception as e:
+            logging.warning(f"Failed to stop app {a.id} before restore: {e}")
+
+    staging = BACKUP_DIR / f".restore-staging-{secrets.token_hex(4)}"
+    staging.mkdir()
+
+    def _extract():
+        with tarfile.open(archive_path, "r:gz") as tar:
+            # Reject anything that would land outside `staging` (a crafted
+            # or corrupted archive with "../" entries) before extracting a
+            # single byte. tarfile's own filter="data" (PEP 706) covers this
+            # on 3.12+, but this file supports older interpreters too, so
+            # check explicitly regardless of Python version.
+            for member in tar.getmembers():
+                target = (staging / member.name).resolve()
+                if not is_safe_path(staging, target):
+                    raise ValueError(f"Backup archive contains an unsafe path: {member.name}")
+            try:
+                tar.extractall(staging, filter="data")
+            except TypeError:
+                tar.extractall(staging)  # Python < 3.12 has no `filter` kwarg
+
+    def _swap():
+        if (staging / "apps").is_dir():
+            if APPS_BASE_DIR.exists():
+                shutil.rmtree(APPS_BASE_DIR)
+            shutil.move(str(staging / "apps"), str(APPS_BASE_DIR))
+        shutil.move(str(staging / "data.db"), str(DB_FILE))
+        restored_key = staging / _VENVY_KEY_FILE.name
+        if restored_key.is_file():
+            shutil.move(str(restored_key), str(_VENVY_KEY_FILE))
+            _VENVY_KEY_FILE.chmod(0o600)
+
+    try:
+        await asyncio.to_thread(_extract)
+        if not (staging / "data.db").is_file():
+            raise HTTPException(400, "Backup archive is missing data.db — restore aborted, nothing was changed.")
+        await asyncio.to_thread(_swap)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        await asyncio.to_thread(shutil.rmtree, staging, True)
+
+    audit_log(admin.username, "system_restore_completed", f"path={archive_path}")
+
+    # Venvy's in-memory state is now stale relative to what's on disk —
+    # restart so everything reinitializes cleanly. Delay briefly so this
+    # response actually reaches the client before the process image swaps.
+    asyncio.get_event_loop().call_later(1.0, _self_restart)
+    return {"ok": True, "restarting": True}
 
 
 @api_router.post("/apps/upload")

@@ -777,12 +777,21 @@ async def system_ports(request: Request):
     free = [3000, 3001, 4000, 5000, 8001, 8080, 8081, 8888, 9001, 9090, 9091, 9092]
     return {"listening": listening, "free": free}
 
-# In-memory fake backups — seeded with one so the list isn't empty on first load.
+# In-memory fake backups — seeded with one legacy (db-only) and one full
+# backup so the list, and the "legacy" vs restorable UI paths, aren't empty
+# on first load.
 FAKE_BACKUPS: List[dict] = [
     {
         "filename": "data-20260901-090000.db",
         "size_bytes": 2_400_000,
+        "created_at": (datetime.datetime.utcnow() - datetime.timedelta(days=5)).isoformat() + "Z",
+        "type": "database",
+    },
+    {
+        "filename": "full-20260905-120000.tar.gz",
+        "size_bytes": 84_000_000,
         "created_at": (datetime.datetime.utcnow() - datetime.timedelta(days=2)).isoformat() + "Z",
+        "type": "full",
     },
 ]
 
@@ -790,13 +799,14 @@ FAKE_BACKUPS: List[dict] = [
 def create_backup(request: Request):
     _check_auth(request)
     ts = datetime.datetime.utcnow()
-    filename = f"data-{ts.strftime('%Y%m%d-%H%M%S')}.db"
+    filename = f"full-{ts.strftime('%Y%m%d-%H%M%S')}.tar.gz"
     if any(b["filename"] == filename for b in FAKE_BACKUPS):
         raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
     entry = {
         "filename": filename,
-        "size_bytes": random.randint(1_800_000, 3_200_000),
+        "size_bytes": random.randint(40_000_000, 120_000_000),
         "created_at": ts.isoformat() + "Z",
+        "type": "full",
     }
     FAKE_BACKUPS.insert(0, entry)
     return {"ok": True, "path": f"backups/{filename}", "size_bytes": entry["size_bytes"]}
@@ -812,7 +822,7 @@ def download_backup(filename: str, request: Request):
     if not any(b["filename"] == filename for b in FAKE_BACKUPS):
         raise HTTPException(404, "Backup not found.")
     return PlainTextResponse(
-        f"-- fake SQLite backup snapshot: {filename} --\n(emulator placeholder, not a real database file)\n",
+        f"-- fake backup: {filename} --\n(emulator placeholder, not a real archive)\n",
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -825,6 +835,24 @@ def delete_backup(filename: str, request: Request):
     if len(FAKE_BACKUPS) == before:
         raise HTTPException(404, "Backup not found.")
     return {"ok": True}
+
+class RestoreBackupReq(BaseModel):
+    confirm: str
+
+@app.post("/api/system/backup/restore/{filename}")
+def restore_backup(filename: str, req: RestoreBackupReq, request: Request):
+    _check_auth(request)
+    if req.confirm != "RESTORE":
+        raise HTTPException(400, 'Confirmation phrase did not match — send {"confirm": "RESTORE"}.')
+    entry = next((b for b in FAKE_BACKUPS if b["filename"] == filename), None)
+    if not entry:
+        raise HTTPException(404, "Backup not found.")
+    if entry.get("type") != "full":
+        raise HTTPException(400, "Only full backups can be restored.")
+    # The emulator has no real files/process to restart — just report success
+    # so the UI's restore flow (confirm modal, in-progress overlay, then
+    # polling until the server answers again) can be exercised end to end.
+    return {"ok": True, "restarting": True}
 
 @app.get("/api/system/settings/{key}")
 def get_system_setting(key: str, request: Request):

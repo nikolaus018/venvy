@@ -2172,7 +2172,7 @@
                                 <i data-feather="database" class="w-4 h-4" style="color:var(--text)"></i>
                             </div>
                             <div class="flex-1 min-w-0">
-                                <p class="text-sm font-semibold" style="color:var(--text)">Database Backups</p>
+                                <p class="text-sm font-semibold" style="color:var(--text)">Backups</p>
                                 <p class="text-xs mt-0.5" id="sys-backups-summary" style="color:var(--text3)">Loading…
                                 </p>
                             </div>
@@ -2992,13 +2992,19 @@
 
                             <!-- Resource Limits -->
                             <div class="card p-5">
-                                <h3 class="text-sm font-semibold mb-1 flex items-center gap-2"
-                                    style="color:var(--text)">
-                                    <i data-feather="cpu" class="w-4 h-4" style="color:var(--text)"></i>
-                                    Resource Limits
-                                </h3>
-                                <p class="text-xs mb-4" style="color:var(--text3)">Hard caps applied when the app
-                                    starts. Set either to 0 for unlimited.</p>
+                                <div class="flex items-center justify-between mb-1">
+                                    <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="cpu" class="w-4 h-4" style="color:var(--text)"></i>
+                                        Resource Limits
+                                    </h3>
+                                    <button type="button" id="setting-limits-toggle" role="switch"
+                                        aria-checked="false" aria-label="Limit resources" onclick="toggleResourceLimits()"
+                                        class="toggle-track shrink-0">
+                                        <span class="toggle-knob"></span>
+                                    </button>
+                                </div>
+                                <p class="text-xs mb-4" style="color:var(--text3)">Off = this app can use whatever
+                                    CPU and memory it wants. On = pick hard caps below.</p>
                                 <div id="setting-limits-unenforced-warn"
                                     class="hidden items-start gap-2.5 mb-4 px-4 py-3 rounded-xl text-xs font-medium"
                                     style="background:var(--surface3);border:1px solid var(--border3);color:var(--text2)">
@@ -3010,19 +3016,18 @@
                                     <span>This host has no systemd — limits below will be saved but not enforced
                                         until the app runs on a systemd Linux host.</span>
                                 </div>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div id="resource-limit-sliders-wrap" class="hidden grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div>
                                         <div class="flex items-center justify-between mb-2.5">
                                             <label class="section-label">Memory Limit</label>
                                             <span id="setting-memory-limit-label" class="text-xs font-bold mono"
                                                 style="color:var(--text)">512 MB</span>
                                         </div>
-                                        <input type="range" id="setting-memory-limit" class="slider" min="0"
+                                        <input type="range" id="setting-memory-limit" class="slider" min="16"
                                             max="8192" step="16" value="512"
                                             oninput="_updateResourceLimitLabels()">
-                                        <p class="text-xs mt-2" style="color:var(--text3)">Drag to the left edge for
-                                            unlimited. Max reflects this host's total RAM<span
-                                                id="setting-memory-limit-hint"></span>.</p>
+                                        <p class="text-xs mt-2" style="color:var(--text3)">Max reflects this host's
+                                            total RAM<span id="setting-memory-limit-hint"></span>.</p>
                                     </div>
                                     <div>
                                         <div class="flex items-center justify-between mb-2.5">
@@ -3030,11 +3035,10 @@
                                             <span id="setting-cpu-limit-label" class="text-xs font-bold mono"
                                                 style="color:var(--text)">0.5 cores</span>
                                         </div>
-                                        <input type="range" id="setting-cpu-limit" class="slider" min="0" max="800"
+                                        <input type="range" id="setting-cpu-limit" class="slider" min="25" max="800"
                                             step="25" value="50" oninput="_updateResourceLimitLabels()">
-                                        <p class="text-xs mt-2" style="color:var(--text3)">Drag to the left edge for
-                                            unlimited. Max reflects this host's core count<span
-                                                id="setting-cpu-limit-hint"></span>.</p>
+                                        <p class="text-xs mt-2" style="color:var(--text3)">Max reflects this host's
+                                            core count<span id="setting-cpu-limit-hint"></span>.</p>
                                     </div>
                                 </div>
                             </div>
@@ -3413,17 +3417,15 @@
         class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0">
         <div class="modal-panel p-5 w-full max-w-lg shadow-lg h-[80vh] md:h-[560px] flex flex-col">
             <div class="flex justify-between items-center mb-2 shrink-0">
-                <h2 class="text-lg font-bold" id="backups-modal-title" style="color:var(--text)">Database Backups
+                <h2 class="text-lg font-bold" id="backups-modal-title" style="color:var(--text)">Backups
                 </h2>
                 <button onclick="closeModal('backups-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
                         data-feather="x" class="w-4 h-4"></i></button>
             </div>
             <p class="text-xs mb-4 leading-relaxed shrink-0" style="color:var(--text3)">
-                Point-in-time snapshots of <code class="px-1 py-0.5 rounded mono"
-                    style="background:var(--surface2)">data.db</code> (users, app metadata, settings) — safe to
-                create while Venvy is running. Does not include the <code class="px-1 py-0.5 rounded mono"
-                    style="background:var(--surface2)">apps/</code> directory or the encryption key; back those up
-                separately for full disaster recovery.
+                Each backup bundles everything — the database, every app's code and venv, and the encryption key —
+                into one file. Safe to create while Venvy is running. Restore rolls this server back to a backup
+                in place; nothing here ever requires touching the server's filesystem directly.
             </p>
             <button onclick="createBackup(this)" id="btn-create-backup"
                 class="btn-primary shrink-0 w-full flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-xl mb-4">
@@ -3433,6 +3435,65 @@
                 <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
             </div>
         </div>
+    </div>
+
+    <!-- Restore Backup Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="restore-backup-modal-title" id="restore-backup-modal"
+        class="fixed inset-0 z-[97] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2)">
+                    <svg class="w-5 h-5" fill="none" stroke="var(--red)" viewBox="0 0 24 24" stroke-width="2">
+                        <polyline points="1 4 1 10 7 10" />
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                    </svg>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" id="restore-backup-modal-title" style="color:var(--text)">Restore
+                        This Backup?</h2>
+                    <p class="text-xs" style="color:var(--text3)">Replaces everything on this server</p>
+                </div>
+            </div>
+            <p class="text-sm mb-3" style="color:var(--text2)">
+                <strong id="restore-backup-filename" class="mono" style="color:var(--text)"></strong> will replace
+                the current database, every app's files, and the encryption key. Every running app is stopped
+                first, and Venvy restarts automatically once this finishes.
+            </p>
+            <p class="text-xs mb-4" style="color:var(--text3)">
+                The current state is backed up automatically right before this runs, so the restore itself can be
+                undone — but treat this as a real rollback, not a preview.
+            </p>
+            <label for="restore-backup-confirm-input" class="block text-xs mb-2" style="color:var(--text3)">
+                Type <strong class="mono" style="color:var(--text2)">RESTORE</strong> to confirm
+            </label>
+            <input type="text" id="restore-backup-confirm-input" autocomplete="off" spellcheck="false"
+                class="inp w-full px-3.5 py-2.5 text-sm mono mb-5" placeholder="RESTORE"
+                oninput="onRestoreConfirmInput()" onkeydown="if(event.key==='Enter')confirmRestoreBackup()">
+            <div class="flex gap-3">
+                <button onclick="closeModal('restore-backup-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmRestoreBackup()" id="restore-backup-confirm-btn" disabled
+                    class="btn-danger-solid flex-1 py-2.5 text-sm disabled:opacity-40">Restore &amp; Restart</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Restore In Progress Overlay -->
+    <div id="restore-progress-overlay"
+        class="hidden fixed inset-0 z-[999] flex-col items-center justify-center text-center px-6"
+        style="background:var(--bg)">
+        <div class="w-16 h-16 rounded-2xl flex items-center justify-center mb-6"
+            style="background:var(--ov-soft);border:1px solid var(--ov-border)">
+            <svg class="w-7 h-7 animate-spin" fill="none" stroke="var(--accent)" viewBox="0 0 24 24"
+                stroke-width="2">
+                <polyline points="1 4 1 10 7 10" />
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+            </svg>
+        </div>
+        <h2 class="text-xl font-bold mb-2" style="color:var(--text)">Restoring backup…</h2>
+        <p class="text-sm max-w-sm" id="restore-progress-text" style="color:var(--text3)">Venvy is restarting. This
+            page will reload automatically once it's back.</p>
     </div>
 
 
@@ -5239,8 +5300,10 @@
                 document.getElementById('setting-entrypoint').value = app.entrypoint || '';
                 const boot = document.getElementById('setting-boot');
                 if (app.start_on_boot) boot.checked = true; else boot.checked = false;
-                _setSliderValue(document.getElementById('setting-memory-limit'), app.memory_limit_mb ?? 0);
-                _setSliderValue(document.getElementById('setting-cpu-limit'), app.cpu_limit_percent ?? 0);
+                const appMemLimit = app.memory_limit_mb ?? 0, appCpuLimit = app.cpu_limit_percent ?? 0;
+                _setResourceLimitsToggle(appMemLimit > 0 || appCpuLimit > 0);
+                if (appMemLimit > 0) _setSliderValue(document.getElementById('setting-memory-limit'), appMemLimit);
+                if (appCpuLimit > 0) _setSliderValue(document.getElementById('setting-cpu-limit'), appCpuLimit);
                 _updateResourceLimitLabels();
                 const limitsWarnEl = document.getElementById('setting-limits-unenforced-warn');
                 limitsWarnEl.classList.toggle('flex', !app.resource_limits_enforced);
@@ -7174,11 +7237,19 @@
                 // a filename can break out of that context.
                 listEl.innerHTML = backups.map(b => `
                     <div class="flex items-center gap-3 px-4 py-3 rounded-xl" style="background:var(--surface2);border:1px solid var(--border)">
-                        <i data-feather="database" class="w-4 h-4 shrink-0" style="color:var(--text3)"></i>
+                        <i data-feather="${b.type === 'full' ? 'archive' : 'database'}" class="w-4 h-4 shrink-0" style="color:var(--text3)"></i>
                         <div class="flex-1 min-w-0">
                             <p class="text-xs font-semibold mono truncate" style="color:var(--text)">${escapeHtml(b.filename)}</p>
-                            <p class="text-[11px] mt-0.5" style="color:var(--text3)">${new Date(b.created_at).toLocaleString()} · ${formatBytes(b.size_bytes)}</p>
+                            <p class="text-[11px] mt-0.5" style="color:var(--text3)">${new Date(b.created_at).toLocaleString()} · ${formatBytes(b.size_bytes)}${b.type !== 'full' ? ' · legacy, database only' : ''}</p>
                         </div>
+                        ${b.type === 'full' ? `
+                        <button data-filename="${escapeHtml(b.filename)}" onclick="openRestoreBackupModal(this.dataset.filename)" title="Restore this backup"
+                            class="shrink-0 p-1.5 rounded-lg transition active:scale-95" style="color:var(--amber)">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                                <polyline points="1 4 1 10 7 10" />
+                                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                            </svg>
+                        </button>` : ''}
                         <button data-filename="${escapeHtml(b.filename)}" onclick="downloadBackup(this.dataset.filename)" title="Download"
                             class="shrink-0 p-1.5 rounded-lg transition active:scale-95" style="color:var(--text)">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -7211,7 +7282,9 @@
             const original = btn ? btn.innerHTML : '';
             if (btn) {
                 btn.disabled = true;
-                btn.innerHTML = '<i data-feather="loader" class="w-3.5 h-3.5 animate-spin"></i> Creating…';
+                // A full backup tars the whole apps/ directory, so this can
+                // take a while for apps with large venvs — say so up front.
+                btn.innerHTML = '<i data-feather="loader" class="w-3.5 h-3.5 animate-spin"></i> Creating… this can take a bit';
                 _featherReplace();
             }
             try {
@@ -7261,6 +7334,77 @@
             } catch (e) {
                 showToast('Network error: ' + e.message, 'error');
             }
+        }
+
+        // ── Restore ───────────────────────────────────────────────────────────────
+        let _pendingRestoreFilename = null;
+
+        function openRestoreBackupModal(filename) {
+            _pendingRestoreFilename = filename;
+            document.getElementById('restore-backup-filename').textContent = filename;
+            document.getElementById('restore-backup-confirm-input').value = '';
+            document.getElementById('restore-backup-confirm-btn').disabled = true;
+            openModal('restore-backup-modal');
+        }
+
+        function onRestoreConfirmInput() {
+            document.getElementById('restore-backup-confirm-btn').disabled =
+                document.getElementById('restore-backup-confirm-input').value !== 'RESTORE';
+        }
+
+        async function confirmRestoreBackup() {
+            if (!_pendingRestoreFilename) return;
+            const btn = document.getElementById('restore-backup-confirm-btn');
+            const original = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mx-auto"></div>';
+            try {
+                const res = await fetch(`${API}/system/backup/restore/${encodeURIComponent(_pendingRestoreFilename)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ confirm: 'RESTORE' }),
+                });
+                if (!res.ok) {
+                    const e = await res.json().catch(() => ({ detail: 'Restore failed' }));
+                    showToast(e.detail || 'Restore failed', 'error', 6000);
+                    btn.disabled = false;
+                    btn.innerHTML = original;
+                    return;
+                }
+                closeModal('restore-backup-modal');
+                closeModal('backups-modal');
+                _showRestoreInProgressOverlay();
+            } catch (e) {
+                showToast('Network error: ' + e.message, 'error');
+                btn.disabled = false;
+                btn.innerHTML = original;
+            }
+        }
+
+        function _showRestoreInProgressOverlay() {
+            const overlay = document.getElementById('restore-progress-overlay');
+            overlay.classList.remove('hidden');
+            overlay.classList.add('flex');
+            // The server is about to restart — the normal 1s app-list poll
+            // would just spam connection-refused errors while it's down.
+            if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+            let attempts = 0;
+            const check = setInterval(async () => {
+                attempts++;
+                try {
+                    const res = await fetch(`${API}/auth/status`, { cache: 'no-store' });
+                    if (res.ok) {
+                        clearInterval(check);
+                        document.getElementById('restore-progress-text').textContent = 'Back online — reloading…';
+                        setTimeout(() => window.location.reload(), 600);
+                    }
+                } catch (e) { /* still down — keep polling */ }
+                if (attempts > 60) { // ~2 minutes at 2s
+                    clearInterval(check);
+                    document.getElementById('restore-progress-text').textContent =
+                        "Still waiting for Venvy to come back — you can also just refresh this page manually.";
+                }
+            }, 2000);
         }
 
         // ── Cloudflare ────────────────────────────────────────────────────────────
@@ -7929,13 +8073,13 @@
         }
 
         function _formatMemoryLimitLabel(mb) {
-            if (mb === 0) return 'Unlimited';
+            if (mb <= 0) return 'Unlimited'; // shouldn't happen with the toggle off-loading "unlimited" — kept defensively
             if (mb >= 1024) return `${(mb % 1024 === 0 ? mb / 1024 : (mb / 1024).toFixed(1))} GB`;
             return `${mb} MB`;
         }
 
         function _formatCpuLimitLabel(percent) {
-            if (percent === 0) return 'Unlimited';
+            if (percent <= 0) return 'Unlimited'; // same defensive note as above
             const cores = percent / 100;
             return `${cores % 1 === 0 ? cores.toFixed(0) : cores.toFixed(2)} core${cores === 1 ? '' : 's'}`;
         }
@@ -7958,6 +8102,50 @@
             const v = Number(value) || 0;
             if (v > parseInt(el.max, 10)) el.max = v;
             el.value = v;
+        }
+
+        // Whether the "Limit Resources" toggle is on. The sliders below it
+        // only ever hold a real value (min 16 MB / 0.25 core) — "unlimited"
+        // is this toggle's off state, not a slider position, so 0 is never
+        // sent while it's on and always sent while it's off, regardless of
+        // whatever the (hidden) sliders happen to be showing.
+        function isResourceLimitsEnabled() {
+            return document.getElementById('setting-limits-toggle')?.getAttribute('aria-checked') === 'true';
+        }
+
+        function _setResourceLimitsToggle(enabled) {
+            const toggle = document.getElementById('setting-limits-toggle');
+            const wrap = document.getElementById('resource-limit-sliders-wrap');
+            if (!toggle || !wrap) return;
+            toggle.setAttribute('aria-checked', String(enabled));
+            toggle.classList.toggle('on', enabled);
+            wrap.classList.toggle('hidden', !enabled);
+        }
+
+        function toggleResourceLimits() {
+            const nowOn = !isResourceLimitsEnabled();
+            _setResourceLimitsToggle(nowOn);
+            if (nowOn) {
+                // Switching on fresh (both sliders still sitting at 0 from a
+                // toggled-off state) — jump to a sensible starting point
+                // rather than leaving them below their own min.
+                const memEl = document.getElementById('setting-memory-limit');
+                const cpuEl = document.getElementById('setting-cpu-limit');
+                if (!(parseInt(memEl.value, 10) > 0)) _setSliderValue(memEl, 512);
+                if (!(parseInt(cpuEl.value, 10) > 0)) _setSliderValue(cpuEl, 50);
+                _updateResourceLimitLabels();
+            }
+            checkSettingsDirty();
+        }
+
+        // Effective memory/cpu limit given the toggle — the single source of
+        // truth saveSettings() and checkSettingsDirty() both read from.
+        function _readResourceLimits() {
+            if (!isResourceLimitsEnabled()) return { memoryLimit: 0, cpuLimit: 0 };
+            return {
+                memoryLimit: parseInt(document.getElementById('setting-memory-limit').value, 10) || 0,
+                cpuLimit: parseInt(document.getElementById('setting-cpu-limit').value, 10) || 0,
+            };
         }
 
         // ── Auto-save settings ───────────────────────────────────────────────────
@@ -8029,8 +8217,7 @@
             const manualPorts = portsStr.split(/[\s,]+/).map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
             const entrypoint = document.getElementById('setting-entrypoint').value.trim();
             const name = document.getElementById('setting-name').value.trim();
-            const memoryLimit = parseInt(document.getElementById('setting-memory-limit').value, 10) || 0;
-            const cpuLimit = parseInt(document.getElementById('setting-cpu-limit').value, 10) || 0;
+            const { memoryLimit, cpuLimit } = _readResourceLimits();
 
             if (portsStr && manualPorts.length === 0) {
                 showToast('Invalid ports format. Use comma-separated numbers.', 'warn'); return;
@@ -8108,8 +8295,10 @@
                 } catch (e) { }
                 document.getElementById('setting-port').value = portsDisplay;
                 document.getElementById('setting-entrypoint').value = activeApp.entrypoint || '';
-                _setSliderValue(document.getElementById('setting-memory-limit'), activeApp.memory_limit_mb ?? 0);
-                _setSliderValue(document.getElementById('setting-cpu-limit'), activeApp.cpu_limit_percent ?? 0);
+                const savedMemLimit = activeApp.memory_limit_mb ?? 0, savedCpuLimit = activeApp.cpu_limit_percent ?? 0;
+                _setResourceLimitsToggle(savedMemLimit > 0 || savedCpuLimit > 0);
+                if (savedMemLimit > 0) _setSliderValue(document.getElementById('setting-memory-limit'), savedMemLimit);
+                if (savedCpuLimit > 0) _setSliderValue(document.getElementById('setting-cpu-limit'), savedCpuLimit);
                 _updateResourceLimitLabels();
                 _tempOpenUrlPref = activeApp.url_source_pref || 'local';
                 _renderOpenPrefButtons(_tempOpenUrlPref);
@@ -8165,8 +8354,7 @@
             const currentEntryPoint = (activeApp.runtime === 'rust' || runtime === 'rust') ? 'main.rs' : (activeApp.entrypoint || '');
             const normalizedEntry = runtime === 'rust' ? 'main.rs' : entrypoint;
 
-            const memoryLimit = parseInt(document.getElementById('setting-memory-limit').value, 10) || 0;
-            const cpuLimit = parseInt(document.getElementById('setting-cpu-limit').value, 10) || 0;
+            const { memoryLimit, cpuLimit } = _readResourceLimits();
 
             const isDirty = (
                 runtime !== (activeApp.runtime || 'python') ||

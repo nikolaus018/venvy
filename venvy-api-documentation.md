@@ -341,20 +341,30 @@ Any role. `lines` is clamped `1–10000` (default 2000). Reads at most the last 
 Host-level CPU/memory/disk/load averages via `psutil` (returns `{"error": "psutil not installed"}` if the optional dependency is absent).
 
 #### `POST /api/system/backup` — admin only
-Creates a consistent SQLite snapshot of `data.db` using `VACUUM INTO` (safe to call on a live, WAL-mode database — unlike a raw file copy). Does **not** back up the `apps/` directory or the `.venvy_key` encryption key; see §7.
+Creates a **full** backup: a consistent `data.db` snapshot (via `VACUUM INTO`, safe on a live WAL-mode database), the `.venvy_key` encryption key, and the entire `apps/` directory (code, venvs, logs), bundled into one `full-YYYYMMDD-HHMMSS.tar.gz` in `backups/`. This is the only kind of backup created from here on — one file is enough to fully restore Venvy, so backing up never requires shell/filesystem access to the server.
 ```json
-{ "ok": true, "path": "/.../backups/data-20260802-143000.db", "size_bytes": 98304 }
+{ "ok": true, "path": "/.../backups/full-20260802-143000.tar.gz", "size_bytes": 104857600 }
 ```
-`409` if a backup with the same second-resolution timestamp already exists.
+`409` if a backup with the same second-resolution timestamp already exists (hard-linked into place atomically, so a losing concurrent request can never delete a winning one's file — see the source comment on `_create_full_backup_archive`). `500` on failure (disk full, tar error, etc).
 
 #### `GET /api/system/backups` — admin only
-Lists existing snapshots: `[{ "filename", "size_bytes", "created_at" }, ...]`.
+Lists existing backups: `[{ "filename", "size_bytes", "created_at", "type" }, ...]`. `type` is `"full"` (the current format — restorable) or `"database"` (a legacy DB-only snapshot from an older Venvy version, kept listed so upgrading doesn't orphan it, but download/delete only — not restorable).
 
 #### `GET /api/system/backups/{filename}/download` — admin only
-Downloads a snapshot created via `POST /api/system/backup`. `filename` must match the fixed naming scheme (`data-YYYYMMDD-HHMMSS.db`); anything else is `400`, a non-existent file is `404`.
+Downloads a backup of either type. `filename` must match one of the fixed naming schemes (`full-YYYYMMDD-HHMMSS.tar.gz` or the legacy `data-YYYYMMDD-HHMMSS.db`); anything else is `400`, a non-existent file is `404`.
 
 #### `DELETE /api/system/backups/{filename}` — admin only
-Permanently deletes a snapshot. Same filename validation as the download endpoint.
+Permanently deletes a backup of either type. Same filename validation as the download endpoint.
+
+#### `POST /api/system/backup/restore/{filename}` — admin only
+Rolls this **live** server back to a full backup. Only `type: "full"` backups are accepted (`400` for a legacy DB-only filename or anything not matching the naming scheme). **Body:** `{ "confirm": "RESTORE" }` — any other value is a `400` no-op, nothing is touched.
+
+Sequence: (1) creates a fresh full backup of the *current* state first, so the restore itself can be undone if it turns out to be a mistake — if this safety backup fails, the request aborts here and nothing else is touched; (2) stops every running app; (3) extracts the target archive to a staging directory, rejecting any entry whose path would land outside it (defends against a crafted or corrupted archive attempting path traversal on extraction); (4) swaps `apps/`, `data.db`, and `.venvy_key` into place; (5) restarts the whole Venvy process (`os.execv` — same PID, fresh process image) so every piece of in-memory state (DB connections, the encryption-key cache, active-process tracking, background tasks) reinitializes cleanly against the restored files.
+
+```json
+{ "ok": true, "restarting": true }
+```
+The response is sent *before* the process restarts (with a ~1s delay to let it flush), so a `200` here means the restore itself succeeded even though the connection will drop moments later as Venvy comes back up. Apps that were running are stopped and stay stopped — start them again manually after reconnecting.
 
 #### `GET /api/system/info`
 Any role. Returns the server's LAN IPv4 address: `{ "ipv4": "192.168.1.20" }`.
@@ -516,7 +526,7 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 ## 7. Operational Notes
 
 - **Resource isolation:** apps are launched under `systemd-run` when available, applying `memory_limit_mb` / `cpu_limit_percent` as hard caps.
-- **Backups:** a full disaster-recovery backup requires three artifacts — the `POST /api/system/backup` snapshot, the `apps/` directory (plain `cp -a` / `rsync -a` is safe), and `.venvy_key` (the local encryption key for stored secrets — without it, encrypted env vars and Cloudflare credentials in a restored DB are unrecoverable). There is no one-click restore endpoint; restoring is a manual file-placement procedure.
+- **Backups:** `POST /api/system/backup` produces one self-contained archive — `data.db`, the `apps/` directory, and `.venvy_key` — so both backup and restore go entirely through the API/UI now; no shell access to the server is needed for either. `POST /api/system/backup/restore/{filename}` restores a full backup onto a *live* server in place (stops all apps, swaps the files, restarts the process). The old manual "copy three artifacts into a fresh working directory" procedure documented in `main.py`'s top-of-file docstring still applies for the one case an API call fundamentally can't cover: standing Venvy back up on a *new* or *replacement* host where no Venvy instance is running yet to call the API on.
 - **Password hashing:** scrypt (`n=16384, r=8, p=1`); legacy PBKDF2-HMAC-SHA256 hashes are still verifiable for backward compatibility.
 - **Security headers:** every response includes `X-Content-Type-Options`, `X-Frame-Options: DENY`, a restrictive `Content-Security-Policy`, and related hardening headers.
 
@@ -561,6 +571,7 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 | GET | `/api/system/backups` | admin |
 | GET | `/api/system/backups/{filename}/download` | admin |
 | DELETE | `/api/system/backups/{filename}` | admin |
+| POST | `/api/system/backup/restore/{filename}` | admin |
 | GET/PUT | `/api/system/settings/{key}` | admin |
 | POST | `/api/system/settings/batch` | admin |
 | POST | `/api/system/cloudflare/test` | admin |
