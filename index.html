@@ -401,6 +401,57 @@
             min-height: 100px;
         }
 
+        /* ── Resource-limit sliders ──────────────────────────────────────── */
+        input[type="range"].slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 999px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            outline: none;
+            cursor: pointer;
+        }
+
+        input[type="range"].slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 3px solid var(--surface);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+            cursor: pointer;
+            transition: transform var(--transition-fast);
+        }
+
+        input[type="range"].slider::-webkit-slider-thumb:hover,
+        input[type="range"].slider:focus-visible::-webkit-slider-thumb {
+            transform: scale(1.15);
+        }
+
+        input[type="range"].slider::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 3px solid var(--surface);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+            cursor: pointer;
+        }
+
+        input[type="range"].slider::-moz-range-track {
+            height: 6px;
+            border-radius: 999px;
+            background: var(--surface2);
+        }
+
+        input[type="range"].slider:focus-visible {
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
         select.inp {
             appearance: none;
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2355556b' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
@@ -2114,32 +2165,19 @@
                         </div>
 
                         <!-- Backups -->
-                        <div id="sys-backups-card" class="card overflow-hidden">
-                            <div class="px-5 py-3.5 flex items-center gap-2.5"
-                                style="border-bottom:1px solid var(--border)">
-                                <div class="w-1.5 h-4 rounded-full" style="background:var(--accent)"></div>
-                                <div class="flex-1 min-w-0">
-                                    <h3 class="text-sm font-semibold" style="color:var(--text)">Database Backups</h3>
-                                </div>
-                                <button onclick="createBackup(this)" id="btn-create-backup"
-                                    class="btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg shrink-0">
-                                    <i data-feather="plus" class="w-3.5 h-3.5"></i> Create Backup
-                                </button>
+                        <button id="sys-backups-card" onclick="openBackupsModal()"
+                            class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                            <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                style="background:var(--ov);border:1px solid var(--ov-border)">
+                                <i data-feather="database" class="w-4 h-4" style="color:var(--text)"></i>
                             </div>
-                            <div class="p-5">
-                                <p class="text-xs mb-4 leading-relaxed" style="color:var(--text3)">
-                                    Point-in-time snapshots of <code class="px-1 py-0.5 rounded mono"
-                                        style="background:var(--surface2)">data.db</code> (users, app metadata,
-                                    settings) — safe to create while Venvy is running. Does not include the
-                                    <code class="px-1 py-0.5 rounded mono" style="background:var(--surface2)">apps/</code>
-                                    directory or the encryption key; back those up separately for full disaster
-                                    recovery.
+                            <div class="flex-1 min-w-0">
+                                <p class="text-sm font-semibold" style="color:var(--text)">Database Backups</p>
+                                <p class="text-xs mt-0.5" id="sys-backups-summary" style="color:var(--text3)">Loading…
                                 </p>
-                                <div id="sys-backups-list" class="space-y-2">
-                                    <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
-                                </div>
                             </div>
-                        </div>
+                            <span class="btn-ghost shrink-0 px-3 py-2 text-xs font-bold rounded-lg pointer-events-none">Manage</span>
+                        </button>
 
                         <!-- Cloudflare Tunnel -->
                         <div class="card overflow-hidden">
@@ -2972,19 +3010,31 @@
                                     <span>This host has no systemd — limits below will be saved but not enforced
                                         until the app runs on a systemd Linux host.</span>
                                 </div>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div>
-                                        <label class="block section-label mb-2">Memory Limit (MB)</label>
-                                        <input type="number" id="setting-memory-limit" min="0" max="1048576" step="1"
-                                            class="inp w-full px-4 py-3 text-sm font-semibold mono" placeholder="512">
-                                        <p class="text-xs mt-1.5" style="color:var(--text3)">0 = unlimited</p>
+                                        <div class="flex items-center justify-between mb-2.5">
+                                            <label class="section-label">Memory Limit</label>
+                                            <span id="setting-memory-limit-label" class="text-xs font-bold mono"
+                                                style="color:var(--text)">512 MB</span>
+                                        </div>
+                                        <input type="range" id="setting-memory-limit" class="slider" min="0"
+                                            max="8192" step="16" value="512"
+                                            oninput="_updateResourceLimitLabels()">
+                                        <p class="text-xs mt-2" style="color:var(--text3)">Drag to the left edge for
+                                            unlimited. Max reflects this host's total RAM<span
+                                                id="setting-memory-limit-hint"></span>.</p>
                                     </div>
                                     <div>
-                                        <label class="block section-label mb-2">CPU Limit (%)</label>
-                                        <input type="number" id="setting-cpu-limit" min="0" max="10000" step="1"
-                                            class="inp w-full px-4 py-3 text-sm font-semibold mono" placeholder="50">
-                                        <p class="text-xs mt-1.5" style="color:var(--text3)">100 = one core. 0 =
-                                            unlimited</p>
+                                        <div class="flex items-center justify-between mb-2.5">
+                                            <label class="section-label">CPU Limit</label>
+                                            <span id="setting-cpu-limit-label" class="text-xs font-bold mono"
+                                                style="color:var(--text)">0.5 cores</span>
+                                        </div>
+                                        <input type="range" id="setting-cpu-limit" class="slider" min="0" max="800"
+                                            step="25" value="50" oninput="_updateResourceLimitLabels()">
+                                        <p class="text-xs mt-2" style="color:var(--text3)">Drag to the left edge for
+                                            unlimited. Max reflects this host's core count<span
+                                                id="setting-cpu-limit-hint"></span>.</p>
                                     </div>
                                 </div>
                             </div>
@@ -3358,7 +3408,32 @@
         </div>
     </div>
 
-
+    <!-- Backups Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="backups-modal-title" id="backups-modal"
+        class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0">
+        <div class="modal-panel p-5 w-full max-w-lg shadow-lg h-[80vh] md:h-[560px] flex flex-col">
+            <div class="flex justify-between items-center mb-2 shrink-0">
+                <h2 class="text-lg font-bold" id="backups-modal-title" style="color:var(--text)">Database Backups
+                </h2>
+                <button onclick="closeModal('backups-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
+                        data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <p class="text-xs mb-4 leading-relaxed shrink-0" style="color:var(--text3)">
+                Point-in-time snapshots of <code class="px-1 py-0.5 rounded mono"
+                    style="background:var(--surface2)">data.db</code> (users, app metadata, settings) — safe to
+                create while Venvy is running. Does not include the <code class="px-1 py-0.5 rounded mono"
+                    style="background:var(--surface2)">apps/</code> directory or the encryption key; back those up
+                separately for full disaster recovery.
+            </p>
+            <button onclick="createBackup(this)" id="btn-create-backup"
+                class="btn-primary shrink-0 w-full flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-xl mb-4">
+                <i data-feather="plus" class="w-4 h-4"></i> Create Backup
+            </button>
+            <div id="sys-backups-list" class="flex-1 overflow-y-auto space-y-2 min-h-0">
+                <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
+            </div>
+        </div>
+    </div>
 
 
     <!-- Delete App Modal -->
@@ -4325,6 +4400,7 @@
                         _appInitialized = true;
                         initAceEditor();
                         loadApps();
+                        _loadHostCapacity();
                     }
                     startPolling();
                 } else {
@@ -5163,8 +5239,9 @@
                 document.getElementById('setting-entrypoint').value = app.entrypoint || '';
                 const boot = document.getElementById('setting-boot');
                 if (app.start_on_boot) boot.checked = true; else boot.checked = false;
-                document.getElementById('setting-memory-limit').value = app.memory_limit_mb ?? 0;
-                document.getElementById('setting-cpu-limit').value = app.cpu_limit_percent ?? 0;
+                _setSliderValue(document.getElementById('setting-memory-limit'), app.memory_limit_mb ?? 0);
+                _setSliderValue(document.getElementById('setting-cpu-limit'), app.cpu_limit_percent ?? 0);
+                _updateResourceLimitLabels();
                 const limitsWarnEl = document.getElementById('setting-limits-unenforced-warn');
                 limitsWarnEl.classList.toggle('flex', !app.resource_limits_enforced);
                 limitsWarnEl.classList.toggle('hidden', !!app.resource_limits_enforced);
@@ -7070,6 +7147,7 @@
             card.classList.remove('hidden');
 
             const listEl = document.getElementById('sys-backups-list');
+            const summaryEl = document.getElementById('sys-backups-summary');
             const seq = ++_backupsReqSeq;
             try {
                 const res = await fetch(`${API}/system/backups`);
@@ -7079,6 +7157,12 @@
                 // newer request has since been issued, so a slow reply can't
                 // clobber a fresher list with stale data.
                 if (seq !== _backupsReqSeq) return;
+
+                if (summaryEl) {
+                    summaryEl.textContent = backups.length
+                        ? `${backups.length} snapshot${backups.length !== 1 ? 's' : ''} · latest ${new Date(backups[0].created_at).toLocaleDateString()}`
+                        : 'No backups yet';
+                }
 
                 if (!backups.length) {
                     listEl.innerHTML = `<span class="text-xs italic" style="color:var(--text3)">No backups yet — create one to get started.</span>`;
@@ -7113,8 +7197,14 @@
             } catch (e) {
                 if (seq === _backupsReqSeq) {
                     listEl.innerHTML = `<span class="text-xs" style="color:var(--red)">Failed to load backups.</span>`;
+                    if (summaryEl) summaryEl.textContent = 'Failed to load';
                 }
             }
+        }
+
+        function openBackupsModal() {
+            openModal('backups-modal');
+            loadBackups();
         }
 
         async function createBackup(btn) {
@@ -7801,6 +7891,75 @@
         }
 
         // ── Settings ──────────────────────────────────────────────────────────────
+        // ── Resource-limit sliders ───────────────────────────────────────────────
+        // The backend stores memory as MB and CPU as a systemd-style percent
+        // (100 = one core) — both sliders keep that as their underlying value
+        // (so saveSettings/checkSettingsDirty don't need to know about units),
+        // and only the label above each slider is translated into GB/cores for
+        // display. Bounds default to a generic small-VPS guess until the real
+        // host capacity loads (fetched once at boot; 403s for non-admins, so
+        // this degrades to the generic guess rather than failing loudly).
+        let _hostCapacity = { memMB: null, cores: null };
+
+        async function _loadHostCapacity() {
+            try {
+                const res = await fetch(`${API}/system/metrics`);
+                if (!res.ok) return; // non-admin (403) or psutil missing — keep the generic fallback bounds
+                const data = await res.json();
+                if (data.memory?.total) _hostCapacity.memMB = Math.min(1048576, Math.floor(data.memory.total / (1024 * 1024)));
+                if (data.cpu?.cores) _hostCapacity.cores = Math.min(100, data.cpu.cores);
+                _applyHostCapacityToSliders();
+            } catch (e) { /* offline at boot — keep the generic fallback bounds */ }
+        }
+
+        function _applyHostCapacityToSliders() {
+            const memEl = document.getElementById('setting-memory-limit');
+            const cpuEl = document.getElementById('setting-cpu-limit');
+            const memHint = document.getElementById('setting-memory-limit-hint');
+            const cpuHint = document.getElementById('setting-cpu-limit-hint');
+            if (memEl && _hostCapacity.memMB) {
+                memEl.max = Math.max(_hostCapacity.memMB, parseInt(memEl.value, 10) || 0);
+                if (memHint) memHint.textContent = ` (${(_hostCapacity.memMB / 1024).toFixed(1)} GB)`;
+            }
+            if (cpuEl && _hostCapacity.cores) {
+                cpuEl.max = Math.max(_hostCapacity.cores * 100, parseInt(cpuEl.value, 10) || 0);
+                if (cpuHint) cpuHint.textContent = ` (${_hostCapacity.cores} core${_hostCapacity.cores === 1 ? '' : 's'})`;
+            }
+            _updateResourceLimitLabels();
+        }
+
+        function _formatMemoryLimitLabel(mb) {
+            if (mb === 0) return 'Unlimited';
+            if (mb >= 1024) return `${(mb % 1024 === 0 ? mb / 1024 : (mb / 1024).toFixed(1))} GB`;
+            return `${mb} MB`;
+        }
+
+        function _formatCpuLimitLabel(percent) {
+            if (percent === 0) return 'Unlimited';
+            const cores = percent / 100;
+            return `${cores % 1 === 0 ? cores.toFixed(0) : cores.toFixed(2)} core${cores === 1 ? '' : 's'}`;
+        }
+
+        function _updateResourceLimitLabels() {
+            const memEl = document.getElementById('setting-memory-limit');
+            const cpuEl = document.getElementById('setting-cpu-limit');
+            const memLabel = document.getElementById('setting-memory-limit-label');
+            const cpuLabel = document.getElementById('setting-cpu-limit-label');
+            if (memEl && memLabel) memLabel.textContent = _formatMemoryLimitLabel(parseInt(memEl.value, 10) || 0);
+            if (cpuEl && cpuLabel) cpuLabel.textContent = _formatCpuLimitLabel(parseInt(cpuEl.value, 10) || 0);
+        }
+
+        // Sets a slider's value, widening `max` first if the stored value
+        // exceeds it — otherwise the browser silently clamps the displayed
+        // (and later re-saved) value down to `max`, quietly shrinking a limit
+        // the user actually set before host capacity was known.
+        function _setSliderValue(el, value) {
+            if (!el) return;
+            const v = Number(value) || 0;
+            if (v > parseInt(el.max, 10)) el.max = v;
+            el.value = v;
+        }
+
         // ── Auto-save settings ───────────────────────────────────────────────────
         // All settings fields save automatically:
         //   restart_policy, start_on_boot → onChange (instant)
@@ -7949,8 +8108,9 @@
                 } catch (e) { }
                 document.getElementById('setting-port').value = portsDisplay;
                 document.getElementById('setting-entrypoint').value = activeApp.entrypoint || '';
-                document.getElementById('setting-memory-limit').value = activeApp.memory_limit_mb ?? 0;
-                document.getElementById('setting-cpu-limit').value = activeApp.cpu_limit_percent ?? 0;
+                _setSliderValue(document.getElementById('setting-memory-limit'), activeApp.memory_limit_mb ?? 0);
+                _setSliderValue(document.getElementById('setting-cpu-limit'), activeApp.cpu_limit_percent ?? 0);
+                _updateResourceLimitLabels();
                 _tempOpenUrlPref = activeApp.url_source_pref || 'local';
                 _renderOpenPrefButtons(_tempOpenUrlPref);
                 _updateNetworkCard(activeApp);
