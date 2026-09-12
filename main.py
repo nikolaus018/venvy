@@ -174,6 +174,7 @@ else:
 
 DATA_DIR = Path.cwd()
 APPS_BASE_DIR = DATA_DIR / "apps"
+BACKUP_DIR = DATA_DIR / "backups"
 DB_FILE = DATA_DIR / "data.db"
 DATABASE_URL = f"sqlite:///{DB_FILE}"
 
@@ -1329,52 +1330,80 @@ alias ll='ls -la'
     return bashrc_path
 
 
+def _collect_metrics_tick(current_app_ids: list, proc_cache: Dict[int, "psutil.Process"]) -> float:  # type: ignore
+    """Blocking psutil work for one metrics-collector tick, run via
+    asyncio.to_thread so per-app (and per-child-process) /proc reads don't
+    stall the event loop — websocket terminal I/O, HTTP responses, and the
+    app-supervisor loop all share that loop with this background task.
+
+    proc_cache holds both app-root and child-process Process objects, keyed
+    by pid. psutil.Process.cpu_percent(interval=None) always returns 0.0 on
+    an instance's first call (it needs a prior sample to diff against) —
+    children used to be re-materialized fresh every tick via p.children(),
+    so their CPU never accumulated a real sample and always read as 0.0.
+    Caching child Process objects across ticks the same way the root
+    already was fixes that."""
+    host_cpu = psutil.cpu_percent(interval=None)
+    live_pids: set = set()
+
+    for app_id in current_app_ids:
+        pid = _active_app_pids.get(app_id)
+        if not pid:
+            continue
+        try:
+            if pid not in proc_cache:
+                p = psutil.Process(pid)
+                p.cpu_percent()
+                proc_cache[pid] = p
+
+            p = proc_cache[pid]
+            live_pids.add(pid)
+            with p.oneshot():
+                cpu = p.cpu_percent()
+                mem = p.memory_info().rss
+
+            for child in p.children(recursive=True):
+                cpid = child.pid
+                try:
+                    if cpid not in proc_cache:
+                        child.cpu_percent()  # prime — first read is unreliable, don't use it
+                        proc_cache[cpid] = child
+                    cached_child = proc_cache[cpid]
+                    live_pids.add(cpid)
+                    with cached_child.oneshot():
+                        cpu += cached_child.cpu_percent()
+                        mem += cached_child.memory_info().rss
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    proc_cache.pop(cpid, None)
+                    continue
+
+            _app_metrics[app_id] = {"cpu": round(cpu, 1), "memory": mem}
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            _app_metrics.pop(app_id, None)
+            proc_cache.pop(pid, None)
+        except Exception:
+            pass
+
+    for pid in list(proc_cache.keys()):
+        if pid not in live_pids:
+            proc_cache.pop(pid, None)
+    return host_cpu
+
+
 async def metrics_collector_task():
     """Background task to collect CPU/RAM usage for all active app processes."""
     if psutil is None:
         return
     proc_cache: Dict[int, psutil.Process] = {} # type: ignore
-    psutil.cpu_percent(interval=None) 
-    
+    psutil.cpu_percent(interval=None)
+
     while True:
         try:
             global _host_cpu_percent
-            _host_cpu_percent = psutil.cpu_percent(interval=None)
-            
             current_app_ids = list(_active_app_pids.keys())
-            active_pids = set(_active_app_pids.values())
-            for pid in list(proc_cache.keys()):
-                if pid not in active_pids:
-                    proc_cache.pop(pid, None)
-            
-            for app_id in current_app_ids:
-                pid = _active_app_pids.get(app_id)
-                if not pid:
-                    continue
-                try:
-                    if pid not in proc_cache:
-                        p = psutil.Process(pid)
-                        p.cpu_percent()
-                        proc_cache[pid] = p
-                    
-                    p = proc_cache[pid]
-                    with p.oneshot():
-                        cpu = p.cpu_percent()
-                        mem = p.memory_info().rss
-                        for child in p.children(recursive=True):
-                            try:
-                                with child.oneshot():
-                                    cpu += child.cpu_percent()
-                                    mem += child.memory_info().rss
-                            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                                continue
-                        
-                        _app_metrics[app_id] = {"cpu": round(cpu, 1), "memory": mem}
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    _app_metrics.pop(app_id, None)
-                    proc_cache.pop(pid, None)
-                except Exception:
-                    pass
+            _host_cpu_percent = await asyncio.to_thread(
+                _collect_metrics_tick, current_app_ids, proc_cache
+            )
         except Exception as exc:
             logging.error(f"Metrics engine error: {exc}")
         await asyncio.sleep(2.5)
@@ -1992,6 +2021,7 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
     local_url = f"http://{get_server_ipv4()}:{app_row.port}" if app_row.port else None
     d["local_url"] = local_url
     d["metrics"]   = _app_metrics.get(app_row.id, {"cpu": 0.0, "memory": 0})
+    d["resource_limits_enforced"] = _systemd_run_available()
     pref = app_row.url_source_pref
     if pref == "public" and app_row.external_url:
         d["access_url"] = app_row.external_url
@@ -2425,7 +2455,10 @@ def get_system_metrics(user: User = Depends(check_admin)):
 
 
 @api_router.post("/system/backup")
-def create_backup(admin: User = Depends(check_admin)):
+def create_backup(
+    admin: User = Depends(check_admin),
+    _rl: None = Depends(rate_limit_mutations),
+):
     """Create a consistent point-in-time snapshot of data.db via SQLite's
     VACUUM INTO. Safe to call while Venvy is running (WAL mode) — VACUUM INTO
     reads the database inside its own read transaction, so it never sees a
@@ -2434,25 +2467,34 @@ def create_backup(admin: User = Depends(check_admin)):
     Does not touch apps/ — see the backup & restore notes at the top of this
     file for the full procedure (this endpoint only covers the database).
     """
-    backup_dir = DATA_DIR / "backups"
-    backup_dir.mkdir(exist_ok=True)
+    BACKUP_DIR.mkdir(exist_ok=True)
     timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
-    dest = backup_dir / f"data-{timestamp}.db"
+    dest = BACKUP_DIR / f"data-{timestamp}.db"
 
-    if dest.exists():
-        raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
-
+    # VACUUM INTO writes to a uniquely-named temp file first, then we
+    # hard-link it to the final (second-resolution, so collidable) name.
+    # os.link() atomically fails if dest already exists — unlike a plain
+    # exists()-check-then-write, this means a concurrent request that loses
+    # the race can NEVER delete the winner's completed backup, because it
+    # only ever unlinks the temp path it created itself, never `dest`.
+    tmp_dest = BACKUP_DIR / f".tmp-{timestamp}-{secrets.token_hex(4)}.db"
     try:
         conn = sqlite3.connect(str(DB_FILE))
         try:
-            conn.execute("VACUUM INTO ?", (str(dest),))
+            conn.execute("VACUUM INTO ?", (str(tmp_dest),))
         finally:
             conn.close()
     except Exception as e:
         logging.error(f"Database backup failed: {e}")
-        if dest.exists():
-            dest.unlink(missing_ok=True)
+        tmp_dest.unlink(missing_ok=True)
         raise HTTPException(500, f"Backup failed: {e}")
+
+    try:
+        os.link(str(tmp_dest), str(dest))
+    except FileExistsError:
+        raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
+    finally:
+        tmp_dest.unlink(missing_ok=True)
 
     audit_log(admin.username, "system_backup", f"path={dest}")
     return {"ok": True, "path": str(dest), "size_bytes": dest.stat().st_size}
@@ -2461,17 +2503,62 @@ def create_backup(admin: User = Depends(check_admin)):
 @api_router.get("/system/backups")
 def list_backups(admin: User = Depends(check_admin)):
     """List existing database backups created via POST /api/system/backup."""
-    backup_dir = DATA_DIR / "backups"
-    if not backup_dir.exists():
+    if not BACKUP_DIR.exists():
         return []
     return sorted(
         (
             {"filename": f.name, "size_bytes": f.stat().st_size, "created_at": datetime.datetime.fromtimestamp(f.stat().st_mtime, tz=datetime.timezone.utc).isoformat()}
-            for f in backup_dir.glob("data-*.db")
+            for f in BACKUP_DIR.glob("data-*.db")
         ),
         key=lambda b: b["created_at"],
         reverse=True,
     )
+
+
+_BACKUP_FILENAME_RE = re.compile(r"\Adata-\d{8}-\d{6}\.db\Z")
+
+
+def _resolve_backup_path(filename: str) -> Path:
+    """Validate a backup filename against the fixed naming scheme used by
+    create_backup(), resolve it inside BACKUP_DIR, and confirm the resolved
+    path is actually still inside BACKUP_DIR (matches the is_safe_path
+    pattern used for app file access elsewhere in this file) — rejects
+    anything that isn't an exact, contained match."""
+    if not _BACKUP_FILENAME_RE.match(filename):
+        raise HTTPException(400, "Invalid backup filename.")
+    path = BACKUP_DIR / filename
+    if not is_safe_path(BACKUP_DIR, path) or not path.is_file():
+        raise HTTPException(404, "Backup not found.")
+    return path
+
+
+@api_router.get("/system/backups/{filename}/download")
+def download_backup(filename: str, admin: User = Depends(check_admin)):
+    """Download a previously created database backup snapshot."""
+    path = _resolve_backup_path(filename)
+    audit_log(admin.username, "system_backup_download", f"path={path}")
+    return FileResponse(
+        path,
+        filename=path.name,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma":        "no-cache",
+        },
+    )
+
+
+@api_router.delete("/system/backups/{filename}")
+def delete_backup(
+    filename: str,
+    admin: User = Depends(check_admin),
+    _rl: None = Depends(rate_limit_mutations),
+):
+    """Delete a database backup snapshot."""
+    path = _resolve_backup_path(filename)
+    path.unlink()
+    audit_log(admin.username, "system_backup_delete", f"path={path}")
+    return {"ok": True}
 
 
 @api_router.post("/apps/upload")
@@ -2876,7 +2963,12 @@ def file_tree(
     app_id: int,
     path: str = "",
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    # A viewer's role is explicitly "read-only: status, logs, metrics" — not
+    # file contents. App directories routinely contain .env files, config
+    # with DB credentials, service-account JSON, etc., so this needs the same
+    # gate as file_operations() (mutations) and env_json redaction, not the
+    # bare-authenticated get_current_user any role can satisfy.
+    user: User = Depends(require_operator),
 ):
     app_row = session.get(App, app_id)
     if not app_row:
@@ -2977,7 +3069,8 @@ async def download_file(
     app_id: int,
     path: str,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    # See file_tree() above — same reasoning, viewers don't get file contents.
+    user: User = Depends(require_operator),
 ):
     app_row = session.get(App, app_id)
     if not app_row:

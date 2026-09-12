@@ -267,7 +267,7 @@ Any authenticated role. Live process stats, sampled fresh on each call (not cach
 All paths are relative to the app's sandbox root and validated to prevent traversal outside it.
 
 #### `GET /files/tree?path=`
-Any role. Lists immediate children of `path` (default: app root). Hidden files and internal directories (`venv`, `__pycache__`, `logs`, `node_modules`, `.git`, etc.) are omitted. Sorted directories-first, then alphabetically.
+`require_operator`. Lists immediate children of `path` (default: app root). Hidden files and internal directories (`venv`, `__pycache__`, `logs`, `node_modules`, `.git`, etc.) are omitted. Sorted directories-first, then alphabetically. Viewers don't get file contents — app directories routinely hold `.env`/config files with real secrets, so this is gated the same as `files/op` rather than left on bare authentication.
 ```json
 [{ "name": "main.py", "path": "main.py", "is_dir": false, "size": 1240 }]
 ```
@@ -288,7 +288,7 @@ Any role. Lists immediate children of `path` (default: app root). Hidden files a
 Writes to `.jailrc*` / `.jailsh*` (sandbox bootstrap scripts) are rejected with `403` regardless of role.
 
 #### `GET /files/download?path=`
-Any role. Streams the file as an attachment with cache-busting headers. `404` if the path isn't a regular file.
+`require_operator`. Streams the file as an attachment with cache-busting headers. `404` if the path isn't a regular file.
 
 #### `POST /files/upload`
 `require_operator`, rate-limited. `multipart/form-data`: `path` (target dir, default root) + `files[]`.
@@ -349,6 +349,12 @@ Creates a consistent SQLite snapshot of `data.db` using `VACUUM INTO` (safe to c
 
 #### `GET /api/system/backups` — admin only
 Lists existing snapshots: `[{ "filename", "size_bytes", "created_at" }, ...]`.
+
+#### `GET /api/system/backups/{filename}/download` — admin only
+Downloads a snapshot created via `POST /api/system/backup`. `filename` must match the fixed naming scheme (`data-YYYYMMDD-HHMMSS.db`); anything else is `400`, a non-existent file is `404`.
+
+#### `DELETE /api/system/backups/{filename}` — admin only
+Permanently deletes a snapshot. Same filename validation as the download endpoint.
 
 #### `GET /api/system/info`
 Any role. Returns the server's LAN IPv4 address: `{ "ipv4": "192.168.1.20" }`.
@@ -493,6 +499,7 @@ This is the exact shape returned by `GET /api/apps` (array of these), `POST /api
 | `memory_limit_mb` | int \| null | default `512`; `null` = unlimited |
 | `cpu_limit_percent` | int \| null | default `50`; `null` = unlimited |
 | `systemd_scope` | string \| null | set when launched under `systemd-run` |
+| `resource_limits_enforced` | bool | *(computed)* `true` if this host has `systemd-run`/`systemctl` and systemd as PID 1 — i.e. whether `memory_limit_mb`/`cpu_limit_percent` are actually enforced rather than just stored. `false` on non-systemd hosts (macOS, most containers). |
 | `local_url` | string \| null | *(computed)* `http://<server-lan-ip>:<port>`, or `null` if no port assigned |
 | `metrics` | object *(computed)* | `{ "cpu": float, "memory": int }` — a cached last-seen sample from the background metrics collector (**not** a live read; use `GET /apps/{id}/stats` for a fresh one). Defaults to `{"cpu": 0.0, "memory": 0}` if never sampled. |
 | `access_url` | string \| null | *(computed)* Resolves `url_source_pref`: `external_url` if pref is `public` and one exists, else `local_url`, else `null`. This is the URL a frontend should show as "open app". |
@@ -537,9 +544,9 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 | DELETE | `/api/apps/{id}` | operator |
 | POST | `/api/apps/{id}/control` | operator |
 | GET | `/api/apps/{id}/stats` | viewer |
-| GET | `/api/apps/{id}/files/tree` | viewer |
+| GET | `/api/apps/{id}/files/tree` | operator |
 | POST | `/api/apps/{id}/files/op` | operator |
-| GET | `/api/apps/{id}/files/download` | viewer |
+| GET | `/api/apps/{id}/files/download` | operator |
 | POST | `/api/apps/{id}/files/upload` | operator |
 | GET | `/api/apps/{id}/packages` | viewer |
 | POST | `/api/apps/{id}/packages` | operator |
@@ -552,6 +559,8 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 | GET | `/api/system/metrics` | admin |
 | POST | `/api/system/backup` | admin |
 | GET | `/api/system/backups` | admin |
+| GET | `/api/system/backups/{filename}/download` | admin |
+| DELETE | `/api/system/backups/{filename}` | admin |
 | GET/PUT | `/api/system/settings/{key}` | admin |
 | POST | `/api/system/settings/batch` | admin |
 | POST | `/api/system/cloudflare/test` | admin |

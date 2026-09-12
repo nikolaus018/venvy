@@ -2023,7 +2023,7 @@
                         </h2>
                         <p class="text-xs mt-0.5" style="color:var(--text3)">Port usage and network overview</p>
                     </div>
-                    <button onclick="loadSystemView(this)"
+                    <button onclick="loadSystemView(this); loadBackups()"
                         class="ml-auto flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50"
                         style="color:var(--text3)">
                         <i data-feather="refresh-cw" class="w-3.5 h-3.5"></i> Refresh
@@ -2110,6 +2110,34 @@
                             </div>
                             <div id="sys-free-ports" class="p-5 min-h-[60px] flex items-center">
                                 <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
+                            </div>
+                        </div>
+
+                        <!-- Backups -->
+                        <div id="sys-backups-card" class="card overflow-hidden">
+                            <div class="px-5 py-3.5 flex items-center gap-2.5"
+                                style="border-bottom:1px solid var(--border)">
+                                <div class="w-1.5 h-4 rounded-full" style="background:var(--accent)"></div>
+                                <div class="flex-1 min-w-0">
+                                    <h3 class="text-sm font-semibold" style="color:var(--text)">Database Backups</h3>
+                                </div>
+                                <button onclick="createBackup(this)" id="btn-create-backup"
+                                    class="btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg shrink-0">
+                                    <i data-feather="plus" class="w-3.5 h-3.5"></i> Create Backup
+                                </button>
+                            </div>
+                            <div class="p-5">
+                                <p class="text-xs mb-4 leading-relaxed" style="color:var(--text3)">
+                                    Point-in-time snapshots of <code class="px-1 py-0.5 rounded mono"
+                                        style="background:var(--surface2)">data.db</code> (users, app metadata,
+                                    settings) — safe to create while Venvy is running. Does not include the
+                                    <code class="px-1 py-0.5 rounded mono" style="background:var(--surface2)">apps/</code>
+                                    directory or the encryption key; back those up separately for full disaster
+                                    recovery.
+                                </p>
+                                <div id="sys-backups-list" class="space-y-2">
+                                    <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
+                                </div>
                             </div>
                         </div>
 
@@ -2437,7 +2465,7 @@
                         <button class="tab-btn active h-full whitespace-nowrap" data-requires-operator role="tab"
                             id="tabbtn-terminal" aria-controls="tab-terminal" aria-selected="true" data-tab="terminal"
                             title="Terminal (1)" onclick="switchTab('terminal')">Terminal</button>
-                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-files"
+                        <button class="tab-btn h-full whitespace-nowrap" data-requires-operator role="tab" id="tabbtn-files"
                             aria-controls="tab-files" aria-selected="false" data-tab="files" tabindex="-1"
                             title="Files (2)" onclick="switchTab('files')">Files</button>
                         <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-logs"
@@ -2921,6 +2949,43 @@
                                         your app (e.g. <code class="px-1 py-0.5 rounded mono"
                                             style="background:var(--surface2)">main.py</code>). Upload files first if
                                         the app has none yet.</p>
+                                </div>
+                            </div>
+
+                            <!-- Resource Limits -->
+                            <div class="card p-5">
+                                <h3 class="text-sm font-semibold mb-1 flex items-center gap-2"
+                                    style="color:var(--text)">
+                                    <i data-feather="cpu" class="w-4 h-4" style="color:var(--text)"></i>
+                                    Resource Limits
+                                </h3>
+                                <p class="text-xs mb-4" style="color:var(--text3)">Hard caps applied when the app
+                                    starts. Set either to 0 for unlimited.</p>
+                                <div id="setting-limits-unenforced-warn"
+                                    class="hidden items-start gap-2.5 mb-4 px-4 py-3 rounded-xl text-xs font-medium"
+                                    style="background:var(--surface3);border:1px solid var(--border3);color:var(--text2)">
+                                    <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor"
+                                        viewBox="0 0 24 24" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                    </svg>
+                                    <span>This host has no systemd — limits below will be saved but not enforced
+                                        until the app runs on a systemd Linux host.</span>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    <div>
+                                        <label class="block section-label mb-2">Memory Limit (MB)</label>
+                                        <input type="number" id="setting-memory-limit" min="0" max="1048576" step="1"
+                                            class="inp w-full px-4 py-3 text-sm font-semibold mono" placeholder="512">
+                                        <p class="text-xs mt-1.5" style="color:var(--text3)">0 = unlimited</p>
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-2">CPU Limit (%)</label>
+                                        <input type="number" id="setting-cpu-limit" min="0" max="10000" step="1"
+                                            class="inp w-full px-4 py-3 text-sm font-semibold mono" placeholder="50">
+                                        <p class="text-xs mt-1.5" style="color:var(--text3)">100 = one core. 0 =
+                                            unlimited</p>
+                                    </div>
                                 </div>
                             </div>
 
@@ -4955,6 +5020,10 @@
 
         async function selectApp(id, opts = {}) {
             if (id === activeAppId && !opts.force) {
+                // Re-selecting the already-active app should still leave System view,
+                // since that's how the user navigates back from it. activeAppId is
+                // truthy here, so this is exactly closeSystemView()'s own transition.
+                if (_isSystemViewActive()) closeSystemView();
                 if (opts.tab) switchTab(opts.tab);
                 if (window.innerWidth < 768) closeSidebar();
                 return;
@@ -5094,6 +5163,11 @@
                 document.getElementById('setting-entrypoint').value = app.entrypoint || '';
                 const boot = document.getElementById('setting-boot');
                 if (app.start_on_boot) boot.checked = true; else boot.checked = false;
+                document.getElementById('setting-memory-limit').value = app.memory_limit_mb ?? 0;
+                document.getElementById('setting-cpu-limit').value = app.cpu_limit_percent ?? 0;
+                const limitsWarnEl = document.getElementById('setting-limits-unenforced-warn');
+                limitsWarnEl.classList.toggle('flex', !app.resource_limits_enforced);
+                limitsWarnEl.classList.toggle('hidden', !!app.resource_limits_enforced);
 
                 onRuntimeChange('settings');
                 document.getElementById('setting-entrypoint').value = app.entrypoint || '';
@@ -5955,15 +6029,21 @@
             }
         }
 
+        // Shared by downloadCurrentFile() and downloadBackup() — a same-origin
+        // URL with Content-Disposition: attachment just needs a click to save.
+        function triggerDownload(url, filename) {
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            link.style.display = 'none';
+            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+        }
+
         function downloadCurrentFile() {
             const path = document.getElementById('current-filename').dataset.path;
             const name = document.getElementById('current-filename').innerText;
             if (!path) { showToast("No file selected.", 'warn'); return; }
-            const link = document.createElement('a');
-            link.href = `${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(path)}`;
-            link.download = name || path.split('/').pop();
-            link.style.display = 'none';
-            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            triggerDownload(`${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(path)}`, name || path.split('/').pop());
         }
 
         let _pendingFileOp = null, _pendingRenamePath = null;
@@ -6878,7 +6958,7 @@
             if (userTriggered && window.innerWidth < 768) closeSidebar();
             document.title = 'System · Venvy';
             if (userTriggered) syncHash();
-            loadSystemView(); loadCfCredsStatus();
+            loadSystemView(); loadCfCredsStatus(); loadBackups();
         }
         function closeSystemView() {
             document.getElementById('system-view').classList.add('hidden');
@@ -6976,7 +7056,122 @@
             }
         }
 
+        // ── Backups ───────────────────────────────────────────────────────────────
+        // Deliberately NOT called from loadSystemView() — that also runs on every
+        // tick of the 1s live-metrics poll while System view is open, and backups
+        // don't change that often. Call sites: opening System view, and the
+        // Refresh button (both explicit user actions).
+        let _backupsReqSeq = 0;
+        async function loadBackups() {
+            const card = document.getElementById('sys-backups-card');
+            if (!card) return;
+            // Admin-only feature server-side — don't show a card full of 403s to anyone else.
+            if (currentUser?.role !== 'admin') { card.classList.add('hidden'); return; }
+            card.classList.remove('hidden');
 
+            const listEl = document.getElementById('sys-backups-list');
+            const seq = ++_backupsReqSeq;
+            try {
+                const res = await fetch(`${API}/system/backups`);
+                if (!res.ok) throw new Error('Failed');
+                const backups = await res.json();
+                // Create/delete/refresh can overlap — drop this response if a
+                // newer request has since been issued, so a slow reply can't
+                // clobber a fresher list with stale data.
+                if (seq !== _backupsReqSeq) return;
+
+                if (!backups.length) {
+                    listEl.innerHTML = `<span class="text-xs italic" style="color:var(--text3)">No backups yet — create one to get started.</span>`;
+                    return;
+                }
+
+                // Filenames go in data-* attributes (read back via this.dataset),
+                // never interpolated into onclick's JS string, so nothing about
+                // a filename can break out of that context.
+                listEl.innerHTML = backups.map(b => `
+                    <div class="flex items-center gap-3 px-4 py-3 rounded-xl" style="background:var(--surface2);border:1px solid var(--border)">
+                        <i data-feather="database" class="w-4 h-4 shrink-0" style="color:var(--text3)"></i>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-xs font-semibold mono truncate" style="color:var(--text)">${escapeHtml(b.filename)}</p>
+                            <p class="text-[11px] mt-0.5" style="color:var(--text3)">${new Date(b.created_at).toLocaleString()} · ${formatBytes(b.size_bytes)}</p>
+                        </div>
+                        <button data-filename="${escapeHtml(b.filename)}" onclick="downloadBackup(this.dataset.filename)" title="Download"
+                            class="shrink-0 p-1.5 rounded-lg transition active:scale-95" style="color:var(--text)">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
+                            </svg>
+                        </button>
+                        <button data-filename="${escapeHtml(b.filename)}" onclick="deleteBackup(this.dataset.filename)" title="Delete"
+                            class="shrink-0 p-1.5 rounded-lg transition active:scale-95" style="color:var(--red)">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" />
+                            </svg>
+                        </button>
+                    </div>
+                `).join('');
+                _featherReplace();
+            } catch (e) {
+                if (seq === _backupsReqSeq) {
+                    listEl.innerHTML = `<span class="text-xs" style="color:var(--red)">Failed to load backups.</span>`;
+                }
+            }
+        }
+
+        async function createBackup(btn) {
+            const original = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i data-feather="loader" class="w-3.5 h-3.5 animate-spin"></i> Creating…';
+                _featherReplace();
+            }
+            try {
+                const res = await fetch(`${API}/system/backup`, { method: 'POST' });
+                if (!res.ok) {
+                    const e = await res.json().catch(() => ({ detail: 'Backup failed' }));
+                    showToast(e.detail || 'Backup failed', 'error');
+                    return;
+                }
+                showToast('Backup created.', 'success');
+                await loadBackups();
+            } catch (e) {
+                showToast('Network error: ' + e.message, 'error');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = original;
+                    _featherReplace();
+                }
+            }
+        }
+
+        function downloadBackup(filename) {
+            triggerDownload(`${API}/system/backups/${encodeURIComponent(filename)}/download`, filename);
+        }
+
+        async function deleteBackup(filename) {
+            const ok = await confirmDialog({
+                title: 'Delete this backup?',
+                sub: filename,
+                body: 'This snapshot will be permanently removed. This cannot be undone.',
+                confirmLabel: 'Delete',
+                cancelLabel: 'Cancel',
+                danger: true,
+                icon: 'trash-2',
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`${API}/system/backups/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+                if (!res.ok) {
+                    const e = await res.json().catch(() => ({ detail: 'Delete failed' }));
+                    showToast(e.detail || 'Delete failed', 'error');
+                    return;
+                }
+                showToast('Backup deleted.', 'success');
+                loadBackups();
+            } catch (e) {
+                showToast('Network error: ' + e.message, 'error');
+            }
+        }
 
         // ── Cloudflare ────────────────────────────────────────────────────────────
         function _cfStrip(s) {
@@ -7661,6 +7856,10 @@
 
         async function saveSettings() {
             if (!activeAppId) return;
+            // Pin the app this save is for — if the user switches apps while
+            // the PUT is in flight, the response must not overwrite the
+            // Settings form (or activeApp) now showing a different app.
+            const targetAppId = activeAppId;
             const btn = document.getElementById('settings-save-btn');
             const btnText = document.getElementById('save-btn-text');
 
@@ -7671,9 +7870,17 @@
             const manualPorts = portsStr.split(/[\s,]+/).map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
             const entrypoint = document.getElementById('setting-entrypoint').value.trim();
             const name = document.getElementById('setting-name').value.trim();
+            const memoryLimit = parseInt(document.getElementById('setting-memory-limit').value, 10) || 0;
+            const cpuLimit = parseInt(document.getElementById('setting-cpu-limit').value, 10) || 0;
 
             if (portsStr && manualPorts.length === 0) {
                 showToast('Invalid ports format. Use comma-separated numbers.', 'warn'); return;
+            }
+            if (memoryLimit !== 0 && (memoryLimit < 16 || memoryLimit > 1048576)) {
+                showToast('Memory limit must be between 16 and 1,048,576 MB (or 0 for unlimited).', 'warn'); return;
+            }
+            if (cpuLimit !== 0 && (cpuLimit < 1 || cpuLimit > 10000)) {
+                showToast('CPU limit must be between 1 and 10,000% (or 0 for unlimited).', 'warn'); return;
             }
 
             let env = {};
@@ -7695,7 +7902,9 @@
                 env_vars: env,
                 entrypoint,
                 manual_ports: manualPorts,
-                url_source_pref: _getOpenUrlPref()
+                url_source_pref: _getOpenUrlPref(),
+                memory_limit_mb: memoryLimit,
+                cpu_limit_percent: cpuLimit
             };
 
             btn.disabled = true;
@@ -7711,10 +7920,24 @@
                 if (!res.ok) {
                     const e = await res.json().catch(() => ({ detail: 'Save failed' }));
                     showToast('Error: ' + (e.detail || 'Save failed'), 'error');
-                    _showAutosave('error');
+                    if (targetAppId === activeAppId) _showAutosave('error');
                     return;
                 }
-                activeApp = await res.json();
+                const saved = await res.json();
+
+                if (targetAppId !== activeAppId) {
+                    // User switched to a different app while this save was in
+                    // flight — the save itself succeeded server-side, but
+                    // don't paint its response over the app now on screen.
+                    // _showAutosave('saving') already ran for this save before
+                    // the fetch — that indicator is shared DOM, not per-app, so
+                    // without this it would stay stuck on "Saving…" over
+                    // whichever app the user is now looking at.
+                    document.getElementById('autosave-indicator')?.classList.add('hidden');
+                    showToast(`Settings saved for ${saved.name || 'the app'}.`, 'success');
+                    return;
+                }
+                activeApp = saved;
 
                 // Sync UI
                 let portsDisplay = '';
@@ -7726,6 +7949,8 @@
                 } catch (e) { }
                 document.getElementById('setting-port').value = portsDisplay;
                 document.getElementById('setting-entrypoint').value = activeApp.entrypoint || '';
+                document.getElementById('setting-memory-limit').value = activeApp.memory_limit_mb ?? 0;
+                document.getElementById('setting-cpu-limit').value = activeApp.cpu_limit_percent ?? 0;
                 _tempOpenUrlPref = activeApp.url_source_pref || 'local';
                 _renderOpenPrefButtons(_tempOpenUrlPref);
                 _updateNetworkCard(activeApp);
@@ -7780,6 +8005,9 @@
             const currentEntryPoint = (activeApp.runtime === 'rust' || runtime === 'rust') ? 'main.rs' : (activeApp.entrypoint || '');
             const normalizedEntry = runtime === 'rust' ? 'main.rs' : entrypoint;
 
+            const memoryLimit = parseInt(document.getElementById('setting-memory-limit').value, 10) || 0;
+            const cpuLimit = parseInt(document.getElementById('setting-cpu-limit').value, 10) || 0;
+
             const isDirty = (
                 runtime !== (activeApp.runtime || 'python') ||
                 policy !== activeApp.restart_policy ||
@@ -7787,6 +8015,8 @@
                 !portsMatch ||
                 normalizedEntry !== currentEntryPoint ||
                 _getOpenUrlPref() !== (activeApp.url_source_pref || 'local') ||
+                memoryLimit !== (activeApp.memory_limit_mb ?? 0) ||
+                cpuLimit !== (activeApp.cpu_limit_percent ?? 0) ||
                 !envMatch
             );
 
@@ -7828,7 +8058,7 @@
             ['setting-runtime', 'setting-policy', 'setting-boot'].forEach(id => {
                 document.getElementById(id)?.addEventListener('change', checkSettingsDirty);
             });
-            ['setting-entrypoint', 'setting-env', 'setting-port'].forEach(id => {
+            ['setting-entrypoint', 'setting-env', 'setting-port', 'setting-memory-limit', 'setting-cpu-limit'].forEach(id => {
                 document.getElementById(id)?.addEventListener('input', checkSettingsDirty);
             });
         }

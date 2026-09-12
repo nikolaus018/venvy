@@ -92,6 +92,9 @@ FAKE_APPS: Dict[int, dict] = {
         "access_url": "http://127.0.0.1:8000",
         "url_source": "local",
         "metrics": {"cpu": 2.3, "memory": 45_000_000},
+        "memory_limit_mb": 512,
+        "cpu_limit_percent": 50,
+        "resource_limits_enforced": False,
     },
     2: {
         "id": 2,
@@ -123,6 +126,9 @@ FAKE_APPS: Dict[int, dict] = {
         "access_url": "http://127.0.0.1:8001",
         "url_source": "local",
         "metrics": {"cpu": 0.0, "memory": 0},
+        "memory_limit_mb": None,
+        "cpu_limit_percent": 100,
+        "resource_limits_enforced": False,
     },
     3: {
         "id": 3,
@@ -154,6 +160,9 @@ FAKE_APPS: Dict[int, dict] = {
         "access_url": "https://rust-service.example.com",
         "url_source": "cloudflare",
         "metrics": {"cpu": 0.8, "memory": 12_000_000},
+        "memory_limit_mb": 1024,
+        "cpu_limit_percent": 200,
+        "resource_limits_enforced": False,
     },
 }
 
@@ -291,6 +300,7 @@ def auth_status(request: Request):
         "authenticated": authenticated,
         "username": FAKE_USER["username"] if authenticated else None,
         "is_admin": FAKE_USER["is_admin"] if authenticated else False,
+        "role": ("admin" if FAKE_USER["is_admin"] else "operator") if authenticated else None,
         "totp_enabled": FAKE_USER["totp_enabled"] if authenticated else False,
     }
 
@@ -448,6 +458,9 @@ async def upload_app(
         "access_url": None,
         "url_source": None,
         "metrics": {"cpu": 0.0, "memory": 0},
+        "memory_limit_mb": 512,
+        "cpu_limit_percent": 50,
+        "resource_limits_enforced": False,
     }
     FAKE_APPS[app_id] = new_app
     FAKE_PACKAGES[app_id] = []
@@ -499,6 +512,8 @@ class AppUpdateReq(BaseModel):
     env_vars: Optional[Dict[str, str]] = None
     entrypoint: Optional[str] = None
     url_source_pref: Optional[str] = None
+    memory_limit_mb: Optional[int] = None
+    cpu_limit_percent: Optional[int] = None
 
 @app.put("/api/apps/{app_id}")
 async def update_app(app_id: int, req: AppUpdateReq, request: Request):
@@ -523,6 +538,14 @@ async def update_app(app_id: int, req: AppUpdateReq, request: Request):
         a["entrypoint"] = req.entrypoint
     if req.url_source_pref is not None:
         a["url_source_pref"] = req.url_source_pref
+    if req.memory_limit_mb is not None:
+        if req.memory_limit_mb != 0 and not (16 <= req.memory_limit_mb <= 1_048_576):
+            raise HTTPException(400, "memory_limit_mb must be between 16 and 1048576 (or 0 for unlimited).")
+        a["memory_limit_mb"] = None if req.memory_limit_mb == 0 else req.memory_limit_mb
+    if req.cpu_limit_percent is not None:
+        if req.cpu_limit_percent != 0 and not (1 <= req.cpu_limit_percent <= 10000):
+            raise HTTPException(400, "cpu_limit_percent must be between 1 and 10000 (or 0 for unlimited).")
+        a["cpu_limit_percent"] = None if req.cpu_limit_percent == 0 else req.cpu_limit_percent
     a["updated_at"] = _now_iso()
     return a
 
@@ -753,6 +776,55 @@ async def system_ports(request: Request):
     ]
     free = [3000, 3001, 4000, 5000, 8001, 8080, 8081, 8888, 9001, 9090, 9091, 9092]
     return {"listening": listening, "free": free}
+
+# In-memory fake backups — seeded with one so the list isn't empty on first load.
+FAKE_BACKUPS: List[dict] = [
+    {
+        "filename": "data-20260901-090000.db",
+        "size_bytes": 2_400_000,
+        "created_at": (datetime.datetime.utcnow() - datetime.timedelta(days=2)).isoformat() + "Z",
+    },
+]
+
+@app.post("/api/system/backup")
+def create_backup(request: Request):
+    _check_auth(request)
+    ts = datetime.datetime.utcnow()
+    filename = f"data-{ts.strftime('%Y%m%d-%H%M%S')}.db"
+    if any(b["filename"] == filename for b in FAKE_BACKUPS):
+        raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
+    entry = {
+        "filename": filename,
+        "size_bytes": random.randint(1_800_000, 3_200_000),
+        "created_at": ts.isoformat() + "Z",
+    }
+    FAKE_BACKUPS.insert(0, entry)
+    return {"ok": True, "path": f"backups/{filename}", "size_bytes": entry["size_bytes"]}
+
+@app.get("/api/system/backups")
+def list_backups(request: Request):
+    _check_auth(request)
+    return sorted(FAKE_BACKUPS, key=lambda b: b["created_at"], reverse=True)
+
+@app.get("/api/system/backups/{filename}/download")
+def download_backup(filename: str, request: Request):
+    _check_auth(request)
+    if not any(b["filename"] == filename for b in FAKE_BACKUPS):
+        raise HTTPException(404, "Backup not found.")
+    return PlainTextResponse(
+        f"-- fake SQLite backup snapshot: {filename} --\n(emulator placeholder, not a real database file)\n",
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@app.delete("/api/system/backups/{filename}")
+def delete_backup(filename: str, request: Request):
+    _check_auth(request)
+    before = len(FAKE_BACKUPS)
+    FAKE_BACKUPS[:] = [b for b in FAKE_BACKUPS if b["filename"] != filename]
+    if len(FAKE_BACKUPS) == before:
+        raise HTTPException(404, "Backup not found.")
+    return {"ok": True}
 
 @app.get("/api/system/settings/{key}")
 def get_system_setting(key: str, request: Request):
