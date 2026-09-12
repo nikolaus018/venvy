@@ -4416,6 +4416,17 @@ async def terminal_ws(
 ):
     await websocket.accept()
 
+    # This endpoint is registered directly on `app`, not on api_router, so it
+    # doesn't pick up api_router's check_ip_allowlist dependency automatically
+    # — every other /api/* route is IP-gated, but a shell into an app's
+    # sandbox was not. Check it explicitly, first, before any session/auth
+    # logic below.
+    try:
+        check_ip_allowlist(websocket)
+    except HTTPException:
+        await websocket.close(code=1008, reason="Access from this IP is not allowed.")
+        return
+
     token = websocket.cookies.get("session")
     if not token:
         await websocket.close(code=1008, reason="Not authenticated.")

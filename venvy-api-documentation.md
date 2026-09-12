@@ -412,7 +412,7 @@ Updates the Cloudflare Tunnel's ingress config and upserts a DNS `CNAME` record;
 ### 5.9 Terminal — WebSocket
 
 #### `WS /api/apps/{app_id}/terminal`
-Authenticates via the `session` cookie (read directly from the WebSocket handshake — no separate token, and no CSRF check since WS isn't covered by `CSRFMiddleware`). Requires `operator` or `admin` role. Opens an interactive PTY (`bash --rcfile`, with the app's venv on `PATH` and its decrypted env vars injected) inside the app's sandboxed directory. Closes with code `1008` and a `reason` string if: unauthenticated, session invalid/expired, user not found, app not found, or role is `viewer`.
+Authenticates via the `session` cookie (read directly from the WebSocket handshake — no separate token, and no CSRF check since WS isn't covered by `CSRFMiddleware`). Subject to the IP allowlist (§2.7) — checked explicitly and first, since this route is registered directly on the app rather than on `api_router` and so doesn't pick up its `check_ip_allowlist` dependency automatically. Requires `operator` or `admin` role. Opens an interactive PTY (`bash --rcfile`, with the app's venv on `PATH` and its decrypted env vars injected) inside the app's sandboxed directory. Closes with code `1008` and a `reason` string if: IP not allowlisted, unauthenticated, session invalid/expired, user not found, app not found, or role is `viewer`.
 
 **Wire protocol** — all frames are **text frames**, not binary:
 
