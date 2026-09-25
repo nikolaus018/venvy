@@ -71,3 +71,6 @@ ios/**/xcuserdata/
 ios/**/*.xcuserstate
 ios/**/DerivedData/
 .DS_Store
+
+# dist.py output (contains the full source)
+/dist/
