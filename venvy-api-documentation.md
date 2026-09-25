@@ -28,14 +28,19 @@ All endpoints except `GET /api/health` and `GET /` live under `/api` and are sub
 
 ### 2.1 Session model
 
-Venvy uses **server-side sessions** backed by an HTTP-only cookie — there are no bearer tokens or API keys for browser clients.
+Venvy uses **server-side sessions**. Every authenticated request needs **two** secrets:
 
-| Cookie | Attributes | Purpose |
+| Secret | Where it lives | Purpose |
 |---|---|---|
-| `session` | `HttpOnly`, `SameSite=Lax`, `Secure` (if `SESSION_COOKIE_SECURE=1`), 30-day max-age | Identifies the authenticated user |
-| `csrf_token` | `SameSite=Lax`, **not** HttpOnly, `Secure` if configured | Double-submit CSRF token, auto-issued on first response |
+| `session` cookie | `HttpOnly`, `SameSite=Strict`, `Secure` (if `SESSION_COOKIE_SECURE=1`), 30-day max-age | Identifies the session |
+| `X-Venvy-Key` header | returned as `auth_key` by login/setup; the web UI keeps it in `localStorage` | Proves the request comes from the Venvy UI's own origin |
+| `csrf_token` cookie | `SameSite=Lax`, **not** HttpOnly, `Secure` if configured | Double-submit CSRF token, auto-issued on first response |
 
-A session is valid for 30 days from issuance and **slides forward** automatically: any authenticated request extends `expires_at` to a fresh 30 days if fewer than 7 days remain.
+Why the header: browsers send cookies to *every port* on a host, so the `session` cookie also reaches each hosted app opened at `http://<same-host>:<port>`. `localStorage` is per origin (port included) and never sent automatically, so a hosted app that captures the cookie still can't use it. A request with the cookie but no (or a wrong) key gets `401`.
+
+Both secrets are stored only as SHA-256 hashes in `data.db`. A session is valid for 30 days from issuance and **slides forward** automatically: any authenticated request extends `expires_at` to a fresh 30 days if fewer than 7 days remain. Changing your password signs out all of your other sessions.
+
+**Downloads.** A plain `<a download>` link can't send the header, so the client first calls `POST /api/auth/download-ticket` and appends the returned ticket as `?ticket=` to the download URL. Tickets are single-use, expire after 60 s, and only work together with the same user's session cookie.
 
 ### 2.2 First-run setup
 
@@ -47,7 +52,8 @@ The server has no users on first boot. `GET /api/auth/status` reports `user_exis
 1. Client → POST /api/auth/login { username, password }
 2. If the account has TOTP enabled and no totp_code was sent → 403 "totp_required"
 3. Client retries with totp_code included
-4. Server sets the "session" cookie and returns { ok, username, role }
+4. Server sets the "session" cookie and returns { ok, username, role, auth_key }
+5. Client sends auth_key as the X-Venvy-Key header on every later request
 ```
 
 Failed logins are rate-limited **per client IP** (not per account): 5 failures locks that IP out for 5 minutes (`429` with an `X-Retry-After` header). A successful login clears the counter.
@@ -66,7 +72,9 @@ Standard RFC 6238 TOTP (SHA-1, 6 digits, 30-second step), compatible with any au
 
 ### 2.7 IP allowlisting
 
-If the server is started with the `IP_ALLOWLIST` environment variable set (comma-separated IPs), every `/api/*` request is checked against it. The server trusts the `CF-Connecting-IP` header (set by Cloudflare's edge and unforgeable by the client) and falls back to the raw socket address — it deliberately ignores `X-Forwarded-For`, which a client could spoof. Requests from IPs off the list get `403`.
+If the server is started with the `IP_ALLOWLIST` environment variable set (comma-separated IPs), every `/api/*` request (and the terminal WebSocket) is checked against it. Requests from IPs off the list get `403`.
+
+How the client IP is determined (also used by the login lockout and rate limits): the raw TCP peer address. `X-Forwarded-For` is never used (uvicorn runs with `proxy_headers=False`). `CF-Connecting-IP` is honoured **only** when the TCP peer is in `TRUSTED_PROXY_IPS` (default `127.0.0.1,::1`, i.e. `cloudflared` on the same host), because only then did the request really pass through Cloudflare. If `cloudflared` runs on a different machine, add that machine's IP to `TRUSTED_PROXY_IPS`.
 
 ---
 
@@ -131,13 +139,24 @@ Two independent limiters, both keyed by client IP:
 | Limiter | Scope | Limit |
 |---|---|---|
 | Login | `POST /api/auth/login` | 5 failed attempts → 5-minute lockout |
-| Mutations | Every app/file/package/log/tunnel-mutating route | 60 requests / 60-second sliding window |
+| Mutations | Every app/file/package/log/tunnel-mutating route except `POST /files/upload/chunk` (one large file is hundreds of chunks) | 60 requests / 60-second sliding window |
 
 Both return `429` with an `X-Retry-After` header (seconds).
 
+### 4.4a Background jobs
+
+Operations that can run for minutes answer immediately with `{"job_id": "..."}` instead of blocking (Cloudflare cuts off proxied requests after 100 s): `POST /apps/upload`, `POST`/`DELETE /apps/{id}/packages`, `POST /system/backup`, `POST /system/backup/restore/{filename}`. Input validation still happens up front and fails the request itself with `4xx`.
+
+#### `GET /api/jobs/{job_id}`
+Any authenticated user; only the job's creator (or an admin) can see it. Finished jobs are kept for an hour.
+```json
+{ "id": "…", "kind": "package_install", "status": "running | done | error", "result": { }, "error": null, "code": null }
+```
+`result` is what the endpoint used to return directly; on `error`, `error` holds the message and `code` the HTTP status it corresponds to.
+
 ### 4.5 Path safety
 
-All file-tree, file-op, download, and upload endpoints resolve the requested path against the app's sandbox root and reject anything that escapes it (`403`), as well as writes to internal jail bootstrap files (`.jailrc*`, `.jailsh*`).
+All file-tree, file-op, download, and upload endpoints resolve the requested path against the app's sandbox root and reject anything that escapes it (`403`), as well as writes to files Venvy itself manages in the app root (`.jailrc*`, `.jailsh*`, `.bashrc-venvy*`).
 
 ---
 
@@ -158,14 +177,14 @@ Unauthenticated. Reports instance/session state.
 ```
 
 #### `POST /api/auth/setup`
-One-time only — creates the first (admin) account and logs it in. `400` if any user already exists.
+One-time only — creates the first (admin) account and logs it in (response includes `auth_key`, see §2.1). `400` if any user already exists.
 
 **Body:** `{ "username": "string", "password": "string", "role"?: "string" }` (role is ignored — always `admin`)
 **Password policy:** ≥ 8 characters, must contain at least one letter and one digit.
 
 #### `POST /api/auth/login`
 **Body:** `{ "username": "string", "password": "string", "totp_code"?: "string" }`
-**Responses:** `200` sets session cookie · `401` invalid credentials/code · `403 "totp_required"` when TOTP is enabled and no code was sent · `429` when rate-limited.
+**Responses:** `200` sets session cookie and returns `{ ok, username, role, auth_key }` · `401` invalid credentials/code · `403 "totp_required"` when TOTP is enabled and no code was sent · `429` when rate-limited.
 
 #### `POST /api/auth/logout`
 Deletes the server-side session record and clears the cookie. Idempotent.
@@ -174,6 +193,10 @@ Deletes the server-side session record and clears the cookie. Idempotent.
 Change the caller's own password.
 **Body:** `{ "current_password", "password", "password_confirm" }`
 **Errors:** `401` wrong current password · `400` mismatch or weak new password.
+On success every other session of this user is revoked; the calling session stays signed in.
+
+#### `POST /api/auth/download-ticket`
+Returns `{ "ticket": "..." }`: a one-time, 60-second ticket to append as `?ticket=` to `GET /files/download` or `GET /system/backups/{filename}/download` (see §2.1).
 
 #### `GET /api/auth/totp/setup`
 Generates (or re-returns) a pending TOTP secret + `otpauth://` URI for QR display. **Does not enable TOTP.**
@@ -220,10 +243,10 @@ Authenticated (any role). Returns every app on the instance as an array of the *
 | `entrypoint` | string | default `""` |
 | `start_on_boot` | bool | default `false` |
 | `restart_policy` | string | `never` \| `on-failure` \| `always` |
-| `files` | file[] | app source files |
+| `files` | file[] | optional app source files (50 MB each). The web UI sends none here and uploads them afterwards via `POST /files/upload/chunk` |
 | `requirements` | file | optional `requirements.txt` / `Cargo.toml` |
 
-Creates the app's sandboxed directory, virtual environment, and DB record. **This call is synchronous** — it installs `requirements.txt`/`Cargo.toml` dependencies inline (10-minute timeout for pip; on failure or timeout the partially-created app directory is removed and an error is raised) before responding. A frontend should show a long-running/blocking state, not assume this resolves instantly. Returns the full **App object** (§6.1) on success.
+Creates the app's directory and DB record right away (status `installing`), then builds the virtual environment and installs `requirements.txt` in a **background job** (§4.4a; 10-minute pip timeout). Response: `{ "job_id", "app_id", "skipped_files": [{ path, reason }] }`. The job's `result` is the full **App object** (§6.1) with status `stopped`. If the job fails, the app, its directory and (with per-app users) its OS user are removed again. Starting or deleting an app while it is `installing` answers `409`.
 
 #### `PUT /api/apps/{app_id}`
 `require_operator`. Partial update — any field omitted (or `null`) is left unchanged.
@@ -267,7 +290,7 @@ Any authenticated role. Live process stats, sampled fresh on each call (not cach
 All paths are relative to the app's sandbox root and validated to prevent traversal outside it.
 
 #### `GET /files/tree?path=`
-`require_operator`. Lists immediate children of `path` (default: app root). Hidden files and internal directories (`venv`, `__pycache__`, `logs`, `node_modules`, `.git`, etc.) are omitted. Sorted directories-first, then alphabetically. Viewers don't get file contents — app directories routinely hold `.env`/config files with real secrets, so this is gated the same as `files/op` rather than left on bare authentication.
+`require_operator`. Lists immediate children of `path` (default: app root). Dotfiles (e.g. `.env`) are listed; internal directories (`venv`, `__pycache__`, `logs`, `node_modules`, `.git`, etc.) and Venvy's own `.jailrc*`/`.jailsh*`/`.bashrc-venvy*` files are omitted. Sorted directories-first, then alphabetically. Viewers don't get file contents — app directories routinely hold `.env`/config files with real secrets, so this is gated the same as `files/op` rather than left on bare authentication.
 ```json
 [{ "name": "main.py", "path": "main.py", "is_dir": false, "size": 1240 }]
 ```
@@ -281,19 +304,41 @@ All paths are relative to the app's sandbox root and validated to prevent traver
 | `create_file` | `path` | Creates parent dirs + an empty file |
 | `create_folder` | `path` | Creates directory (and parents) |
 | `delete` | `path` | Recursively deletes file or directory |
-| `rename` | `path`, `new_path` | Moves the file/dir |
-| `copy` | `path`, `new_path` | Copies file (with metadata) or directory tree |
-| `save` | `path`, `content` | Overwrites file content (UTF-8) |
+| `rename` | `path`, `new_path` | Moves the file/dir; `409` if `new_path` already exists |
+| `copy` | `path`, `new_path` | Copies file (with metadata) or directory tree; `409` if `new_path` already exists |
+| `save` | `path`, `content` | Overwrites file content (UTF-8) atomically (temp file + rename), keeping the file mode |
 
-Writes to `.jailrc*` / `.jailsh*` (sandbox bootstrap scripts) are rejected with `403` regardless of role.
+Writes to `.jailrc*` / `.jailsh*` / `.bashrc-venvy*` are rejected with `403` regardless of role. Every operation except `create_folder` refuses the app root itself (`path: ""`) with `400`, so e.g. `delete` can't wipe the whole app. With per-app users (§7), files Venvy creates are handed to the app's user.
 
 #### `GET /files/download?path=`
 `require_operator`. Streams the file as an attachment with cache-busting headers. `404` if the path isn't a regular file.
 
 #### `POST /files/upload`
 `require_operator`, rate-limited. `multipart/form-data`: `path` (target dir, default root) + `files[]`.
-- 50 MB per-file limit (`413` if exceeded).
-- Filenames are sanitized: no path traversal, no null bytes, no leading dot, and must match `[A-Za-z0-9_.+\-\s()[\]@#!~]+` (`400` otherwise).
+Single-request upload, kept for API clients (the web UI uses the chunked endpoint below). Files stream to disk, 50 MB per file.
+- Each file's name may contain folders (`sub/dir/file.txt`). Rejected: absolute paths, `.`/`..`/empty segments, backslashes, control characters, segments over 255 bytes, and Venvy's reserved filenames.
+- A rejected or oversized file doesn't fail the request. It is left out and listed: `{ "ok": true, "skipped": [{ "path", "reason" }] }`.
+
+#### `POST /files/upload/chunk`
+`require_operator`, **not** mutation-rate-limited. `multipart/form-data`, one chunk of one file per request:
+
+| Field | Notes |
+|---|---|
+| `upload_id` | 32 lowercase hex chars, client-generated, one per file |
+| `path` | target directory (default root) |
+| `rel_path` | file path relative to `path`; same rules as `/files/upload` (`400` otherwise) |
+| `offset` | byte offset of this chunk; must equal the bytes received so far |
+| `total` | final file size in bytes |
+| `chunk` | the bytes (≤ 16 MB) |
+
+Chunks are appended to `DATA_DIR/.upload-tmp/`. Once `total` bytes are in, the file is moved into place atomically. Response: `{ "ok": true, "received": <bytes>, "done": <bool> }`.
+- `409 {"detail": {"message", "received"}}`: offset mismatch (e.g. the previous response was lost). Resume from `received`.
+- `413`: `total` is over the limit (`VENVY_MAX_UPLOAD_MB`, default 10240). `507`: not enough free disk space (checked on the first chunk).
+- `409` with a string detail: the destination already exists as a folder.
+- Partial files untouched for 24 h are purged automatically.
+
+#### `DELETE /files/upload/{upload_id}`
+`require_operator`. Discards a partial upload (e.g. after the user cancels).
 
 ---
 
@@ -309,10 +354,10 @@ Any role. Response shape **differs by runtime**:
 
 #### `POST /api/apps/{app_id}/packages`
 `require_operator`, rate-limited. **Body:** `{ "name": "package[extra]==1.2.3" }` (or `crate@version` for Rust).
-Package specifiers are validated against a strict allow-list regex before being passed to `pip install` / `cargo add` (no shell is invoked). Install timeout: 300 seconds.
+Package specifiers are validated against a strict allow-list regex (and may not start with `-`, so they can't be read as a pip/cargo option) before being passed to `pip install` / `cargo add` (no shell is invoked). Runs as a **background job** (§4.4a); timeout 600 s (pip) / 300 s (cargo).
 
 #### `DELETE /api/apps/{app_id}/packages/{name}`
-`require_operator`, rate-limited. Uninstalls via `pip uninstall -y` / `cargo remove`. Timeout: 120s (Python) / 60s (Rust).
+`require_operator`, rate-limited. Uninstalls via `pip uninstall -y` / `cargo remove` as a **background job** (§4.4a). Timeout: 300 s (Python) / 120 s (Rust).
 
 #### `GET /api/apps/{app_id}/scan-imports`
 Any role. Python-only static analysis: walks the app's `.py` files via `ast`, collects top-level imports, and diffs them against stdlib + the venv's installed packages.
@@ -333,6 +378,8 @@ Any role. `lines` is clamped `1–10000` (default 2000). Reads at most the last 
 #### `DELETE /logs`
 `require_operator`, rate-limited. Truncates the app's log file to empty.
 
+Logs rotate while the app runs once `app.log` passes `VENVY_LOG_MAX_MB` (default 20); the newest 5 rotated files are kept. Lines longer than 64 KB are split. With per-app users (§7) logs live in `DATA_DIR/app-logs/<app_id>/` instead of the app directory.
+
 ---
 
 ### 5.7 System — `/api/system`
@@ -342,10 +389,11 @@ Host-level CPU/memory/disk/load averages via `psutil` (returns `{"error": "psuti
 
 #### `POST /api/system/backup` — admin only
 Creates a **full** backup: a consistent `data.db` snapshot (via `VACUUM INTO`, safe on a live WAL-mode database), the `.venvy_key` encryption key, and the entire `apps/` directory (code, venvs, logs), bundled into one `full-YYYYMMDD-HHMMSS.tar.gz` in `backups/`. This is the only kind of backup created from here on — one file is enough to fully restore Venvy, so backing up never requires shell/filesystem access to the server.
+Runs as a **background job** (§4.4a); the job's `result` is:
 ```json
 { "ok": true, "path": "/.../backups/full-20260802-143000.tar.gz", "size_bytes": 104857600 }
 ```
-`409` if a backup with the same second-resolution timestamp already exists (hard-linked into place atomically, so a losing concurrent request can never delete a winning one's file — see the source comment on `_create_full_backup_archive`). `500` on failure (disk full, tar error, etc).
+Fails with `507` up front if free disk space looks insufficient. Only the newest `VENVY_BACKUP_KEEP` (default 10) full backups are kept; older ones are deleted after each new backup. `409` if a backup with the same second-resolution timestamp already exists (hard-linked into place atomically, so a losing concurrent request can never delete a winning one's file — see the source comment on `_create_full_backup_archive`). `500` on failure (disk full, tar error, etc).
 
 #### `GET /api/system/backups` — admin only
 Lists existing backups: `[{ "filename", "size_bytes", "created_at", "type" }, ...]`. `type` is `"full"` (the current format — restorable) or `"database"` (a legacy DB-only snapshot from an older Venvy version, kept listed so upgrading doesn't orphan it, but download/delete only — not restorable).
@@ -359,18 +407,15 @@ Permanently deletes a backup of either type. Same filename validation as the dow
 #### `POST /api/system/backup/restore/{filename}` — admin only
 Rolls this **live** server back to a full backup. Only `type: "full"` backups are accepted (`400` for a legacy DB-only filename or anything not matching the naming scheme). **Body:** `{ "confirm": "RESTORE" }` — any other value is a `400` no-op, nothing is touched.
 
-Sequence: (1) creates a fresh full backup of the *current* state first, so the restore itself can be undone if it turns out to be a mistake — if this safety backup fails, the request aborts here and nothing else is touched; (2) stops every running app; (3) extracts the target archive to a staging directory, rejecting any entry whose path would land outside it (defends against a crafted or corrupted archive attempting path traversal on extraction); (4) swaps `apps/`, `data.db`, and `.venvy_key` into place; (5) restarts the whole Venvy process (`os.execv` — same PID, fresh process image) so every piece of in-memory state (DB connections, the encryption-key cache, active-process tracking, background tasks) reinitializes cleanly against the restored files.
+Sequence: (1) creates a fresh full backup of the *current* state first, so the restore itself can be undone if it turns out to be a mistake — if this safety backup fails, the request aborts here and nothing else is touched; (2) stops every running app; (3) extracts the target archive to a staging directory, rejecting any entry whose path would land outside it — including writes through symlinks extracted earlier (symlinks themselves are allowed: every venv has one to the system Python); (4) closes all database connections, removes the old `data.db-wal`/`-shm` (SQLite would otherwise replay them onto the restored database) and swaps `apps/`, `data.db`, and `.venvy_key` into place; (5) restarts the whole Venvy process (`os.execv` — same PID, fresh process image) so every piece of in-memory state (DB connections, the encryption-key cache, active-process tracking, background tasks) reinitializes cleanly against the restored files.
 
-```json
-{ "ok": true, "restarting": true }
-```
-The response is sent *before* the process restarts (with a ~1s delay to let it flush), so a `200` here means the restore itself succeeded even though the connection will drop moments later as Venvy comes back up. Apps that were running are stopped and stay stopped — start them again manually after reconnecting.
+Steps 1–5 run as a **background job** (§4.4a); its `result` is `{ "ok": true, "restarting": true }`. The process restarts ~3 s after the job reports `done`, so a polling client sees the result before the connection drops. Apps that were running are stopped and stay stopped — start them again manually after reconnecting.
 
 #### `GET /api/system/info`
 Any role. Returns the server's LAN IPv4 address: `{ "ipv4": "192.168.1.20" }`.
 
 #### `GET /api/system/ports`
-Any role. Lists currently listening TCP ports plus recommended free ports for new apps.
+`require_operator`. Lists currently listening TCP ports plus recommended free ports for new apps.
 
 #### `GET /api/system/settings/{key}` / `PUT /api/system/settings/{key}` — admin only
 Generic key-value store for instance settings. Keys prefixed `cf_` (Cloudflare credentials) are transparently encrypted at rest with a local Fernet key (`.venvy_key`) and decrypted on read.
@@ -412,7 +457,7 @@ Updates the Cloudflare Tunnel's ingress config and upserts a DNS `CNAME` record;
 ### 5.9 Terminal — WebSocket
 
 #### `WS /api/apps/{app_id}/terminal`
-Authenticates via the `session` cookie (read directly from the WebSocket handshake — no separate token, and no CSRF check since WS isn't covered by `CSRFMiddleware`). Subject to the IP allowlist (§2.7) — checked explicitly and first, since this route is registered directly on the app rather than on `api_router` and so doesn't pick up its `check_ip_allowlist` dependency automatically. Requires `operator` or `admin` role. Opens an interactive PTY (`bash --rcfile`, with the app's venv on `PATH` and its decrypted env vars injected) inside the app's sandboxed directory. Closes with code `1008` and a `reason` string if: IP not allowlisted, unauthenticated, session invalid/expired, user not found, app not found, or role is `viewer`.
+Checks, in order: the IP allowlist (§2.7); that the handshake's `Origin` matches the `Host` (or is in `ALLOWED_ORIGINS`) — WebSockets aren't covered by CORS, and pages on other ports of the same host (hosted apps) count as same-site; then authentication, from the `session` cookie plus a **first text frame** of `"\x01" + auth_key` (browsers can't set headers on a WebSocket handshake), which must arrive within 10 s. The shell inherits no file descriptors from Venvy beyond its PTY, and with per-app users (§7) it runs as the app's user. Subject to the IP allowlist (§2.7) — checked explicitly and first, since this route is registered directly on the app rather than on `api_router` and so doesn't pick up its `check_ip_allowlist` dependency automatically. Requires `operator` or `admin` role. Opens an interactive PTY (`bash --rcfile`, with the app's venv on `PATH` and its decrypted env vars injected) inside the app's sandboxed directory. Closes with code `1008` and a `reason` string if: IP not allowlisted, unauthenticated, session invalid/expired, user not found, app not found, or role is `viewer`.
 
 **Wire protocol** — all frames are **text frames**, not binary:
 
@@ -527,6 +572,10 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 
 - **Resource isolation:** apps are launched under `systemd-run` when available, applying `memory_limit_mb` / `cpu_limit_percent` as hard caps.
 - **Backups:** `POST /api/system/backup` produces one self-contained archive — `data.db`, the `apps/` directory, and `.venvy_key` — so both backup and restore go entirely through the API/UI now; no shell access to the server is needed for either. `POST /api/system/backup/restore/{filename}` restores a full backup onto a *live* server in place (stops all apps, swaps the files, restarts the process). The old manual "copy three artifacts into a fresh working directory" procedure documented in `main.py`'s top-of-file docstring still applies for the one case an API call fundamentally can't cover: standing Venvy back up on a *new* or *replacement* host where no Venvy instance is running yet to call the API on.
+- **Per-app users (opt-in):** set `VENVY_APP_USERS=1` and run Venvy as root on Linux. Each app then gets a locked system user `venvy-app-<id>` that owns only its own directory (`0700`; `apps/` and `apps/<uid>/` are `0711`). The app's process, its terminal, and every venv/pip/cargo run for it execute as that user, so an app, or a terminal opened on it, can no longer read `data.db`, `.venvy_key` or other apps. Without it, everything runs as Venvy's own OS user and "operator" access is effectively full access to the host account. Rust apps need `cargo` installed system-wide (e.g. `apt install cargo`), not in root's home.
+- **Data files:** `data.db`, `.venvy_key` and backups are created `0600`/`0700`.
+- **Crash loops:** automatic restarts back off 5 s → 10 s → … → 5 min, and reset after an app has stayed up for 60 s. A manual start resets it immediately.
+- **PID reuse:** Venvy records each app process's start time next to its PID and never signals a process whose start time differs (e.g. after a reboot the PID now belongs to something else).
 - **Password hashing:** scrypt (`n=16384, r=8, p=1`); legacy PBKDF2-HMAC-SHA256 hashes are still verifiable for backward compatibility.
 - **Security headers:** every response includes `X-Content-Type-Options`, `X-Frame-Options: DENY`, a restrictive `Content-Security-Policy`, and related hardening headers.
 
@@ -558,6 +607,10 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 | POST | `/api/apps/{id}/files/op` | operator |
 | GET | `/api/apps/{id}/files/download` | operator |
 | POST | `/api/apps/{id}/files/upload` | operator |
+| POST | `/api/apps/{id}/files/upload/chunk` | operator |
+| GET | `/api/jobs/{job_id}` | any (own jobs) |
+| POST | `/api/auth/download-ticket` | any |
+| DELETE | `/api/apps/{id}/files/upload/{upload_id}` | operator |
 | GET | `/api/apps/{id}/packages` | viewer |
 | POST | `/api/apps/{id}/packages` | operator |
 | DELETE | `/api/apps/{id}/packages/{name}` | operator |

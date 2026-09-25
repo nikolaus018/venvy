@@ -262,23 +262,30 @@ IP_ALLOWLIST: Optional[Set[str]] = (
 )
 
 
-def _resolve_client_ip(request: Union[Request, HTTPConnection]) -> str:
-    """Helper to resolve the real client IP.
+# Peers allowed to tell us the real client IP via CF-Connecting-IP — i.e. where
+# cloudflared connects from. Default: cloudflared running on this same host.
+TRUSTED_PROXY_IPS: Set[str] = {
+    ip.strip() for ip in os.getenv("TRUSTED_PROXY_IPS", "127.0.0.1,::1").split(",") if ip.strip()
+}
 
-    Venvy is designed to be reached through a Cloudflare Tunnel, so we trust
-    `CF-Connecting-IP` — a header Cloudflare's edge sets itself and overwrites
-    on the way in, which a client cannot forge. We deliberately do NOT trust
-    `X-Forwarded-For`: Cloudflare's edge only *appends* to that header rather
-    than replacing it, so the first entry can still be whatever a client
-    chose to send, which would let someone bypass the IP allowlist and the
-    login lockout just by setting that header themselves. If a request has
-    no `CF-Connecting-IP` (i.e. it didn't come through the tunnel), fall back
-    to the raw TCP connection IP, which cannot be spoofed either.
+
+def _resolve_client_ip(request: Union[Request, HTTPConnection]) -> str:
+    """Resolve the real client IP.
+
+    The TCP peer address is the only thing a client can't forge (uvicorn runs
+    with proxy_headers=False, so X-Forwarded-For never rewrites it). When that
+    peer is a trusted proxy — cloudflared on this host, by default — the
+    request came through the tunnel and `CF-Connecting-IP`, which Cloudflare's
+    edge sets and overwrites, names the actual client. From any other peer the
+    header is ignored: a direct LAN/internet client could otherwise pick any
+    IP it liked and walk past the IP allowlist and the login lockout.
     """
-    ip = (request.headers.get("cf-connecting-ip", "") or "").strip()
-    if not ip and request.client:
-        ip = (request.client.host or "").strip()
-    return ip or "unknown"
+    peer = (request.client.host if request.client else "") or ""
+    if peer in TRUSTED_PROXY_IPS:
+        cf_ip = (request.headers.get("cf-connecting-ip", "") or "").strip()
+        if cf_ip:
+            return cf_ip
+    return peer or "unknown"
 
 
 def check_ip_allowlist(request: HTTPConnection) -> None:
@@ -286,8 +293,6 @@ def check_ip_allowlist(request: HTTPConnection) -> None:
     if IP_ALLOWLIST is None:
         return
     ip = _resolve_client_ip(request)
-    if ip == "unknown":
-        return  # can't determine IP — allow (likely internal/Unix socket)
     if ip not in IP_ALLOWLIST:
         raise HTTPException(status_code=403, detail="Access from this IP is not allowed.")
 
@@ -327,10 +332,15 @@ class User(SQLModel, table=True):
 
 
 class UserSession(SQLModel, table=True):
+    # SHA-256 of the session cookie, never the cookie itself — a leaked
+    # data.db must not hand out live sessions.
     token: str = Field(primary_key=True)
     user_id: int = Field(index=True)
     created_at: datetime.datetime = Field(default_factory=utc_now)
     expires_at: datetime.datetime
+    # SHA-256 of the per-session auth key the browser keeps in localStorage
+    # and sends as X-Venvy-Key. See _authenticate().
+    key_hash: Optional[str] = Field(default=None)
 
 
 class App(SQLModel, table=True):
@@ -377,6 +387,10 @@ class App(SQLModel, table=True):
     # Set when the app is launched under a systemd scope, so stop/kill logic knows
     # to use `systemctl stop` instead of (or in addition to) signal-based teardown.
     systemd_scope: Optional[str] = Field(default=None)
+    # Start-time fingerprint of `pid` (see _proc_start_id). A PID alone can be
+    # reused by an unrelated process after a crash or reboot; this lets Venvy
+    # tell "our app is still running" from "something else got that number".
+    pid_start: Optional[str] = Field(default=None)
 
 
 class SystemSetting(SQLModel, table=True):
@@ -423,6 +437,8 @@ def create_db_and_tables() -> None:
         "ALTER TABLE app ADD COLUMN memory_limit_mb INTEGER DEFAULT 512",
         "ALTER TABLE app ADD COLUMN cpu_limit_percent INTEGER DEFAULT 50",
         "ALTER TABLE app ADD COLUMN systemd_scope VARCHAR",
+        "ALTER TABLE app ADD COLUMN pid_start VARCHAR",
+        "ALTER TABLE usersession ADD COLUMN key_hash VARCHAR",
     ]
     
     with engine.begin() as conn:
@@ -462,7 +478,28 @@ def create_db_and_tables() -> None:
             except Exception as e:
                 logging.warning(f"Role backfill from legacy is_admin failed (existing users default to 'operator'): {e}")
 
+        # Sessions from before hashed tokens + auth keys can never validate
+        # again; drop them rather than let them sit until expiry.
+        conn.exec_driver_sql("DELETE FROM usersession WHERE key_hash IS NULL")
+
     APPS_BASE_DIR.mkdir(exist_ok=True)
+    _lock_down_data_files()
+
+
+def _lock_down_data_files() -> None:
+    """Make Venvy's own state readable by the Venvy user only."""
+    for path, mode in ((DB_FILE, 0o600), (_VENVY_KEY_FILE, 0o600), (BACKUP_DIR, 0o700),
+                       (APP_LOGS_DIR, 0o700), (_UPLOAD_TMP_DIR, 0o700)):
+        try:
+            if path.exists():
+                path.chmod(mode)
+        except OSError:
+            pass
+    for suffix in ("-wal", "-shm"):
+        try:
+            Path(str(DB_FILE) + suffix).chmod(0o600)
+        except OSError:
+            pass
 
 
 def _psutil_net_connections(kind: str = "tcp"):
@@ -594,31 +631,95 @@ def _make_tz_aware(dt: datetime.datetime) -> datetime.datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=datetime.timezone.utc)
 
 
-def get_current_user(request: Request, session: Session = Depends(get_session)) -> User:
-    token = request.cookies.get("session")
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated.")
+def _hash_token(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-    db_session = session.get(UserSession, token)
+
+def _new_session(session: Session, response: Response, user: User) -> str:
+    """Create a session for *user*: set the HttpOnly cookie and return the
+    auth key the client must send back as X-Venvy-Key on every request.
+
+    Why two secrets: browsers send cookies to every port on a host, so the
+    session cookie also reaches each hosted app on http://<same-host>:<port>
+    the moment you open it. The auth key lives in localStorage, which is
+    scoped per origin (port included) and never sent automatically — a
+    cookie captured by a hosted app is useless without it."""
+    token = secrets.token_urlsafe(32)
+    auth_key = secrets.token_urlsafe(32)
+    session.add(UserSession(
+        token=_hash_token(token),
+        user_id=user.id,
+        expires_at=utc_now() + datetime.timedelta(seconds=SESSION_TTL_SECONDS),
+        key_hash=_hash_token(auth_key),
+    ))
+    session.commit()
+    response.set_cookie(
+        "session", token, httponly=True, path="/",
+        max_age=SESSION_TTL_SECONDS, samesite="strict", secure=SESSION_COOKIE_SECURE,
+    )
+    return auth_key
+
+
+def _load_session(session: Session, cookie_token: Optional[str]) -> Optional[UserSession]:
+    """Return the live UserSession for a cookie value, sliding its expiry."""
+    if not cookie_token:
+        return None
+    db_session = session.get(UserSession, _hash_token(cookie_token))
     if not db_session:
-        raise HTTPException(status_code=401, detail="Session invalid.")
-
+        return None
     now = utc_now()
     if now > _make_tz_aware(db_session.expires_at):
         session.delete(db_session)
         session.commit()
-        raise HTTPException(status_code=401, detail="Session expired.")
-
+        return None
     # Slide expiry window if less than 7 days remain.
     remaining = (_make_tz_aware(db_session.expires_at) - now).total_seconds()
     if remaining < 60 * 60 * 24 * 7:
         db_session.expires_at = now + datetime.timedelta(seconds=SESSION_TTL_SECONDS)
         session.add(db_session)
         session.commit()
+    return db_session
 
-    user = session.get(User, db_session.user_id)
+
+def _authenticate(session: Session, cookie_token: Optional[str], auth_key: Optional[str]) -> Optional[User]:
+    db_session = _load_session(session, cookie_token)
+    if not db_session or not db_session.key_hash or not auth_key:
+        return None
+    if not secrets.compare_digest(db_session.key_hash, _hash_token(auth_key)):
+        return None
+    return session.get(User, db_session.user_id)
+
+
+def get_current_user(request: Request, session: Session = Depends(get_session)) -> User:
+    user = _authenticate(session, request.cookies.get("session"), request.headers.get("x-venvy-key"))
     if not user:
-        raise HTTPException(status_code=401, detail="User not found.")
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    return user
+
+
+# One-time download tickets: a plain <a href download> link can't carry the
+# X-Venvy-Key header, so the page trades its key for a ticket that works for
+# one GET within a minute. {ticket_hash: (user_id, expires_monotonic)}
+_download_tickets: Dict[str, tuple] = {}
+_download_tickets_lock = threading.Lock()
+_DOWNLOAD_TICKET_TTL = 60
+
+
+def get_download_user(request: Request, session: Session = Depends(get_session)) -> User:
+    """get_current_user for download endpoints: also accepts ?ticket=."""
+    ticket = request.query_params.get("ticket")
+    if not ticket:
+        return get_current_user(request, session)
+    now = time.monotonic()
+    with _download_tickets_lock:
+        for k in [k for k, (_, exp) in _download_tickets.items() if exp < now]:
+            _download_tickets.pop(k, None)
+        entry = _download_tickets.pop(_hash_token(ticket), None)
+    user = session.get(User, entry[0]) if entry else None
+    # The ticket must also come with this browser's session cookie.
+    db_session = _load_session(session, request.cookies.get("session"))
+    if not user or not db_session or db_session.user_id != user.id:
+        raise HTTPException(status_code=401, detail="Download link expired — try again.")
     return user
 
 
@@ -674,6 +775,34 @@ def is_safe_path(root: Path, target: Path) -> bool:
         return target_r == root_r or root_r in target_r.parents
     except (ValueError, OSError):
         return False
+
+
+# Files Venvy itself writes into an app directory. Users must not be able to
+# overwrite or delete them through the file manager.
+_PROTECTED_APP_FILE_PREFIXES = (".jailrc", ".jailsh", ".bashrc-venvy")
+
+
+def _is_protected_app_file(name: str) -> bool:
+    return name.startswith(_PROTECTED_APP_FILE_PREFIXES)
+
+
+def _upload_rel_path_error(rel_path: str) -> Optional[str]:
+    """Return why *rel_path* (a browser-supplied relative upload path, possibly
+    containing folders) is unacceptable, or None if it's fine. Containment
+    inside the app dir is still checked separately with is_safe_path()."""
+    if not rel_path or rel_path.startswith("/") or "\\" in rel_path:
+        return "invalid path"
+    parts = rel_path.split("/")
+    for part in parts:
+        if part in ("", ".", ".."):
+            return "invalid path"
+        if any(ord(c) < 32 or ord(c) == 127 for c in part):
+            return "name contains control characters"
+        if len(part.encode("utf-8")) > 255:
+            return "name is too long"
+    if _is_protected_app_file(parts[-1]):
+        return "reserved filename"
+    return None
 
 
 def get_server_ipv4() -> str:
@@ -736,6 +865,187 @@ def _build_app_env(db_app: App) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Per-app Unix users (opt-in: VENVY_APP_USERS=1, Linux, Venvy running as root)
+# ---------------------------------------------------------------------------
+# Without this, every hosted app, terminal and pip run shares Venvy's own OS
+# user and can read data.db, .venvy_key and every other app. With it, each
+# app gets a locked system user `venvy-app-<id>` that owns only its own app
+# directory; its process, terminal and package installs run as that user.
+# Anything Venvy itself writes as root on an app's behalf (logs, the terminal
+# rc file) lives outside the app directory, so an app can't redirect those
+# writes with a symlink.
+_APP_USERS_REQUESTED = os.getenv("VENVY_APP_USERS", "0") == "1"
+_APP_USERS_ACTIVE: Optional[bool] = None
+TERMINAL_RC_DIR = DATA_DIR / ".terminal"
+APP_LOGS_DIR = DATA_DIR / "app-logs"
+
+
+def _isolation_active() -> bool:
+    global _APP_USERS_ACTIVE
+    if _APP_USERS_ACTIVE is None:
+        ok = _APP_USERS_REQUESTED
+        if ok and not sys.platform.startswith("linux"):
+            logging.error("VENVY_APP_USERS=1 is only supported on Linux — running without per-app users.")
+            ok = False
+        if ok and os.geteuid() != 0:
+            logging.error("VENVY_APP_USERS=1 needs Venvy to run as root — running without per-app users.")
+            ok = False
+        if ok and not (shutil.which("useradd") and shutil.which("userdel")):
+            logging.error("VENVY_APP_USERS=1 needs useradd/userdel — running without per-app users.")
+            ok = False
+        _APP_USERS_ACTIVE = ok
+        if ok:
+            logging.info("Per-app Unix users: ON")
+    return _APP_USERS_ACTIVE
+
+
+def _app_username(app_id: int) -> str:
+    return f"venvy-app-{app_id}"
+
+
+def _app_ids(app_row: "App") -> Optional[tuple]:
+    """(uid, gid) of the app's user, or None when isolation is off."""
+    if not _isolation_active() or app_row.id is None:
+        return None
+    import pwd
+    try:
+        pw = pwd.getpwnam(_app_username(app_row.id))
+    except KeyError:
+        return None
+    return pw.pw_uid, pw.pw_gid
+
+
+def _chown_tree(path: Path, uid: int, gid: int) -> None:
+    os.lchown(path, uid, gid)
+    if path.is_dir() and not path.is_symlink():
+        for root, dirs, files in os.walk(path):
+            for n in dirs + files:
+                with contextlib.suppress(FileNotFoundError):
+                    os.lchown(os.path.join(root, n), uid, gid)
+
+
+def _ensure_app_user(app_row: "App") -> Optional[tuple]:
+    """Create the app's user if needed and make sure it owns its directory.
+    Blocking; returns (uid, gid) or None when isolation is off."""
+    if not _isolation_active():
+        return None
+    name = _app_username(app_row.id)
+    ids = _app_ids(app_row)
+    if ids is None:
+        subprocess.run(
+            ["useradd", "--system", "--user-group", "--no-create-home",
+             "--home-dir", app_row.app_dir, "--shell", "/usr/sbin/nologin", name],
+            check=True, capture_output=True, timeout=30,
+        )
+        ids = _app_ids(app_row)
+        if ids is None:
+            raise RuntimeError(f"Could not create user {name}")
+    uid, gid = ids
+    app_dir = Path(app_row.app_dir)
+    # Parents: traversable, not listable, so apps can't enumerate each other.
+    for parent in (APPS_BASE_DIR, app_dir.parent):
+        with contextlib.suppress(OSError):
+            parent.chmod(0o711)
+    if app_dir.exists() and app_dir.stat().st_uid != uid:
+        _chown_tree(app_dir, uid, gid)
+    with contextlib.suppress(OSError):
+        app_dir.chmod(0o700)
+    return ids
+
+
+def _delete_app_user(app_id: int) -> None:
+    if not _isolation_active():
+        return
+    with contextlib.suppress(Exception):
+        subprocess.run(["userdel", _app_username(app_id)], capture_output=True, timeout=30)
+
+
+def _chown_for_app(app_row: "App", path: Path) -> None:
+    """Hand a path Venvy just wrote inside an app dir over to the app's user."""
+    ids = _app_ids(app_row)
+    if ids and path.exists():
+        _chown_tree(path, *ids)
+
+
+def _first_missing_ancestor(root: Path, target: Path) -> Optional[Path]:
+    """The top-most directory between root and target that doesn't exist yet
+    (what a mkdir(parents=True) is about to create), or None."""
+    missing = None
+    p = target
+    while p != root and root in p.parents:
+        if not p.exists():
+            missing = p
+        p = p.parent
+    return missing
+
+
+def _app_proc_kwargs(app_row: "App") -> dict:
+    """subprocess kwargs that run a command as the app's user (or nothing)."""
+    ids = _app_ids(app_row)
+    if not ids:
+        return {}
+    return {"user": ids[0], "group": ids[1], "extra_groups": []}
+
+
+def _app_tool_env(app_row: "App") -> Dict[str, str]:
+    """Environment for venv/pip/cargo runs on an app's behalf."""
+    env = os.environ.copy()
+    env["VIRTUAL_ENV"] = str(app_row.venv_path)
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    if _app_ids(app_row):
+        env.update(HOME=app_row.app_dir, USER=_app_username(app_row.id), LOGNAME=_app_username(app_row.id))
+    return env
+
+
+def _app_log_file(app_row: "App") -> Path:
+    """Where the app's log lives. Under isolation it's outside the app dir —
+    Venvy writes it as root, and the app owns everything under app_dir."""
+    if _isolation_active():
+        return APP_LOGS_DIR / str(app_row.id) / "app.log"
+    return Path(app_row.app_dir) / "logs" / "app.log"
+
+
+# ---------------------------------------------------------------------------
+# Background jobs
+# ---------------------------------------------------------------------------
+# Creating an app (venv + pip), installing packages and building/restoring
+# backups can take minutes. Cloudflare cuts proxied requests off at 100 s, so
+# these endpoints start a job and answer {"job_id"} at once; the client polls
+# GET /api/jobs/{id}.
+_jobs: Dict[str, dict] = {}
+_JOB_TTL_SEC = 3600
+
+
+def _start_job(user: "User", kind: str, fn) -> dict:
+    """Run coroutine function *fn* in the background; return {"job_id"}."""
+    now = time.time()
+    for jid in [j for j, v in _jobs.items() if v["status"] != "running" and now - v["updated"] > _JOB_TTL_SEC]:
+        _jobs.pop(jid, None)
+    job_id = secrets.token_hex(16)
+    job = {"id": job_id, "kind": kind, "user_id": user.id, "status": "running",
+           "result": None, "error": None, "code": None, "created": now, "updated": now}
+    _jobs[job_id] = job
+
+    async def _run():
+        try:
+            job["result"] = await fn()
+            job["status"] = "done"
+        except HTTPException as exc:
+            job.update(status="error", error=exc.detail, code=exc.status_code)
+        except Exception as exc:
+            logging.error(f"Job {kind} failed: {exc}")
+            job.update(status="error", error=str(exc) or exc.__class__.__name__, code=500)
+        finally:
+            job["updated"] = time.time()
+            _running_tasks.discard(asyncio.current_task())
+
+    t = asyncio.create_task(_run())
+    _running_tasks.add(t)
+    return {"job_id": job_id}
+
+
+# ---------------------------------------------------------------------------
 # Process management
 # ---------------------------------------------------------------------------
 
@@ -755,21 +1065,76 @@ def _cancel_log_task(app_id: int) -> None:
         task.cancel()
 
 
+_LOG_MAX_BYTES = int(os.getenv("VENVY_LOG_MAX_MB", "20")) * 1024 * 1024
+_LOG_KEEP_ROTATED = 5
+_LOG_MAX_LINE = 64 * 1024
+
+
+def _rotate_log(log_file: Path) -> None:
+    """Move app.log aside as app.log.<ts> and keep only the newest few."""
+    target = log_file.with_name(f"{log_file.name}.{time.time_ns()}")
+    shutil.move(str(log_file), str(target))
+    rotated = sorted(log_file.parent.glob(f"{log_file.name}.*"), key=lambda x: x.stat().st_mtime, reverse=True)
+    for old_log in rotated[_LOG_KEEP_ROTATED:]:
+        try:
+            old_log.unlink()
+        except OSError:
+            pass
+
+
 async def log_streamer(stream, log_file: Path) -> None:
-    """Read lines from *stream* and append timestamped entries to *log_file*."""
+    """Copy *stream* into *log_file* line by line with timestamps, rotating
+    the file whenever it passes _LOG_MAX_BYTES.
+
+    Reads raw chunks instead of StreamReader.readline(): readline() raises on
+    any line over 64 KB, and if this loop dies nothing drains the app's stdout
+    pipe any more — the app then blocks forever on its next print(). Over-long
+    lines are split instead."""
+    pending = b""
+    f = None
     try:
-        async with aiofiles.open(log_file, "a") as f:
-            while True:
-                line = await stream.readline()
-                if not line:
-                    break
-                ts = utc_now().strftime("%Y-%m-%d %H:%M:%S")
-                await f.write(f"[{ts}] {line.decode('utf-8', errors='replace')}")
+        f = await aiofiles.open(log_file, "ab")
+        while True:
+            chunk = await stream.read(65536)
+            if chunk:
+                pending += chunk
+                lines = pending.split(b"\n")
+                pending = lines.pop()
+                while len(pending) > _LOG_MAX_LINE:
+                    lines.append(pending[:_LOG_MAX_LINE])
+                    pending = pending[_LOG_MAX_LINE:]
+            else:
+                lines = [pending] if pending else []
+                pending = b""
+            if lines:
+                ts = utc_now().strftime("%Y-%m-%d %H:%M:%S").encode()
+                await f.write(b"".join(b"[" + ts + b"] " + ln + b"\n" for ln in lines))
                 await f.flush()
+                try:
+                    too_big = os.stat(log_file).st_size > _LOG_MAX_BYTES
+                except OSError:
+                    too_big = False
+                if too_big:
+                    await f.close()
+                    try:
+                        await asyncio.to_thread(_rotate_log, log_file)
+                    except Exception as exc:
+                        logging.warning(f"Log rotation failed: {exc}")
+                    f = await aiofiles.open(log_file, "ab")
+            if not chunk:
+                break
     except asyncio.CancelledError:
         pass
     except Exception as exc:
         logging.error(f"Log streamer error: {exc}")
+        # Keep draining so the app never blocks on a full pipe.
+        with contextlib.suppress(Exception):
+            while await stream.read(65536):
+                pass
+    finally:
+        if f is not None:
+            with contextlib.suppress(Exception):
+                await f.close()
 
 
 def _pid_alive(pid: int) -> bool:
@@ -800,6 +1165,31 @@ async def _pid_alive_async(pid: int) -> bool:
     return await loop.run_in_executor(None, _pid_alive, pid)
 
 
+def _proc_start_id(pid: int) -> Optional[str]:
+    """A fingerprint of when *pid* started, or None if unknown. Two processes
+    that happen to share a PID (one exited, the number was reused) differ."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        return "proc:" + stat.rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        pass
+    if psutil:
+        try:
+            return f"ps:{psutil.Process(pid).create_time():.2f}"
+        except Exception:
+            pass
+    return None
+
+
+def _app_pid_alive(app_row: "App") -> bool:
+    """True only if app_row.pid is alive AND is still the process Venvy started."""
+    if not app_row.pid or not _pid_alive(app_row.pid):
+        return False
+    if app_row.pid_start:
+        return _proc_start_id(app_row.pid) == app_row.pid_start
+    return True  # recorded before fingerprints existed — can't tell
+
+
 _SYSTEMD_AVAILABLE: Optional[bool] = None
 
 
@@ -827,7 +1217,7 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
     if not db_app:
         raise ValueError("App not found.")
 
-    if db_app.pid and await _pid_alive_async(db_app.pid):
+    if db_app.pid and await asyncio.to_thread(_app_pid_alive, db_app):
         db_app.status = "running"
         session.add(db_app)
         session.commit()
@@ -835,6 +1225,7 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
         return db_app
 
     db_app.pid = None
+    db_app.pid_start = None
 
     if not db_app.entrypoint and db_app.runtime != "rust":
         db_app.status = "error"
@@ -851,20 +1242,17 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
             raise RuntimeError("Virtual environment python not found.")
 
     app_dir = Path(db_app.app_dir)
-    logs_dir = app_dir / "logs"
-    logs_dir.mkdir(exist_ok=True)
-    log_file = logs_dir / "app.log"
+    ids = await asyncio.to_thread(_ensure_app_user, db_app)
+    log_file = _app_log_file(db_app)
+    if ids:
+        # Venvy-only: apps must not read each other's logs.
+        APP_LOGS_DIR.mkdir(mode=0o700, exist_ok=True)
+        APP_LOGS_DIR.chmod(0o700)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
 
     if log_file.exists() and log_file.stat().st_size > 5 * 1024 * 1024:
         try:
-            target = logs_dir / f"app.log.{int(time.time())}"
-            await asyncio.to_thread(shutil.move, str(log_file), str(target))
-            rotated = sorted(logs_dir.glob("app.log.*"), key=lambda x: x.stat().st_mtime, reverse=True)
-            for old_log in rotated[5:]:
-                try:
-                    await asyncio.to_thread(old_log.unlink)
-                except Exception:
-                    pass
+            await asyncio.to_thread(_rotate_log, log_file)
         except Exception as exc:
             logging.warning(f"Log rotation failed: {exc}")
 
@@ -872,6 +1260,8 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
         await asyncio.to_thread(log_file.touch)
 
     env = _build_app_env(db_app)
+    if ids:
+        env.update(HOME=str(app_dir), USER=_app_username(app_id), LOGNAME=_app_username(app_id))
     _cancel_log_task(app_id)
 
     try:
@@ -914,6 +1304,8 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
                 scope_cmd += ["-p", f"MemoryMax={db_app.memory_limit_mb}M"]
             if db_app.cpu_limit_percent:
                 scope_cmd += ["-p", f"CPUQuota={db_app.cpu_limit_percent}%"]
+            if ids:
+                scope_cmd += [f"--uid={ids[0]}", f"--gid={ids[1]}"]
             scope_cmd += ["--"] + cmd
             launch_cmd = scope_cmd
             used_systemd_scope = True
@@ -926,6 +1318,9 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
             stderr=asyncio.subprocess.STDOUT,
             env=env,
             start_new_session=True,
+            # Under systemd-run, --uid/--gid above does the switch (it must
+            # start as root to create the scope); otherwise switch here.
+            **({} if used_systemd_scope else _app_proc_kwargs(db_app)),
         )
 
         if process.stdout:
@@ -933,6 +1328,7 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
             _log_tasks[app_id] = task
 
         db_app.pid = process.pid
+        db_app.pid_start = await asyncio.to_thread(_proc_start_id, process.pid)
         _active_app_pids[app_id] = process.pid
         db_app.status = "running"
         db_app.last_start_time = utc_now()
@@ -955,6 +1351,7 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
                         if app_to_reap and app_to_reap.pid == proc.pid:
                             app_to_reap.status = "stopped"
                             app_to_reap.pid = None
+                            app_to_reap.pid_start = None
                             app_to_reap.systemd_scope = None
                             app_to_reap.last_exit_code = rc
                             app_to_reap.last_stop_time = utc_now()
@@ -1076,6 +1473,18 @@ async def stop_app_process_logic(app_id: int, session: Session, manual: bool = F
         db_app.last_manually_stopped_at = utc_now()
 
     pid = db_app.pid
+    if not await asyncio.to_thread(_app_pid_alive, db_app):
+        # Already gone — or the PID now belongs to an unrelated process,
+        # which must not be killed. Just record the app as stopped.
+        logging.info(f"App '{db_app.name}' is not running (PID {pid} gone or reused)")
+        db_app.status = "stopped"
+        db_app.pid = None
+        db_app.pid_start = None
+        db_app.systemd_scope = None
+        db_app.last_stop_time = utc_now()
+        session.add(db_app)
+        session.commit()
+        return
     logging.info(f"Stopping app '{db_app.name}' (PID {pid})")
 
     if db_app.systemd_scope:
@@ -1104,12 +1513,33 @@ async def stop_app_process_logic(app_id: int, session: Session, manual: bool = F
 
     db_app.status = "stopped"
     db_app.pid = None
+    db_app.pid_start = None
     db_app.systemd_scope = None
     db_app.last_stop_time = utc_now()
     db_app.last_exit_code = -15
 
     session.add(db_app)
     session.commit()
+
+
+# Crash-loop back-off for automatic restarts: 5s, 10s, 20s … capped at 5 min,
+# reset once an app has stayed up for _RESTART_STABLE_SEC. {app_id: (failures, not_before)}
+_restart_backoff: Dict[int, tuple] = {}
+_RESTART_STABLE_SEC = 60
+_RESTART_MAX_DELAY = 300
+
+
+def _restart_allowed(app_id: int) -> bool:
+    """Return True (and book the attempt) if an automatic restart may run now."""
+    failures, not_before = _restart_backoff.get(app_id, (0, 0.0))
+    now = time.monotonic()
+    if now < not_before:
+        return False
+    delay = min(5 * (2 ** failures), _RESTART_MAX_DELAY)
+    _restart_backoff[app_id] = (failures + 1, now + delay)
+    if failures >= 3:
+        logging.warning(f"App {app_id} keeps crashing — next automatic restart in {delay}s at the earliest.")
+    return True
 
 
 async def supervisor_task() -> None:
@@ -1162,7 +1592,7 @@ async def supervisor_task() -> None:
                 continue
 
             for app_row in apps_to_check:
-                is_alive = bool(app_row.pid and _pid_alive(app_row.pid))
+                is_alive = _app_pid_alive(app_row)
 
                 if app_row.status == "running" and not is_alive:
                     logging.warning(f"App '{app_row.name}' (PID {app_row.pid}) died unexpectedly.")
@@ -1171,6 +1601,7 @@ async def supervisor_task() -> None:
                             refreshed = update_session.get(App, app_row.id)
                             if refreshed:
                                 refreshed.pid = None
+                                refreshed.pid_start = None
                                 refreshed.status = "stopped"
                                 refreshed.last_stop_time = utc_now()
                                 if refreshed.last_exit_code is None:
@@ -1194,7 +1625,7 @@ async def supervisor_task() -> None:
                             and _make_tz_aware(app_row.last_manually_stopped_at)
                                 >= _make_tz_aware(app_row.last_start_time)
                         )
-                        if not was_manual:
+                        if not was_manual and _restart_allowed(app_row.id):
                             logging.info(f"Restarting '{app_row.name}' (policy: {app_row.restart_policy})")
                             try:
                                 with Session(engine) as restart_session:
@@ -1203,6 +1634,9 @@ async def supervisor_task() -> None:
                                 logging.error(f"Restart failed for '{app_row.name}': {exc}")
 
                 elif app_row.status == "running" and is_alive:
+                    if (app_row.last_start_time is not None
+                            and (utc_now() - _make_tz_aware(app_row.last_start_time)).total_seconds() > _RESTART_STABLE_SEC):
+                        _restart_backoff.pop(app_row.id, None)
                     try:
                         detected_ports = await asyncio.to_thread(_detect_ports_sync, app_row.pid)
                         manual_list = []
@@ -1255,7 +1689,7 @@ async def supervisor_task() -> None:
                             and _make_tz_aware(app_row.last_manually_stopped_at)
                                 >= _make_tz_aware(app_row.last_start_time)
                         )
-                        if not was_manual:
+                        if not was_manual and _restart_allowed(app_row.id):
                             try:
                                 with Session(engine) as restart_session:
                                     await start_app_process_logic(app_row.id, restart_session)
@@ -1270,9 +1704,13 @@ async def supervisor_task() -> None:
 # PTY Terminal
 # ---------------------------------------------------------------------------
 
-def _write_bashrc(jail_root: Path, venv_bin: Path, app_name_safe: str) -> Path:
-    """Write a .bashrc for the app terminal with directory jail enforcement."""
-    bashrc_path = jail_root / ".bashrc-venvy"
+def _write_bashrc(app_id: int, jail_root: Path, venv_bin: Path, app_name_safe: str) -> Path:
+    """Write the terminal's rc file. It lives in Venvy's own directory, not the
+    app's: the app can't tamper with it, and Venvy never writes (as root,
+    under per-app users) to a path the app controls. The cd "jail" in it is a
+    convenience only — the real boundary is the per-app user, when enabled."""
+    TERMINAL_RC_DIR.mkdir(mode=0o755, exist_ok=True)
+    bashrc_path = TERMINAL_RC_DIR / f"app-{app_id}.bashrc"
     activate_script = venv_bin / "activate"
     jail_dir = str(jail_root)
 
@@ -1430,7 +1868,8 @@ class TerminalManager:
         _app_name_safe = re.sub(r"[^A-Za-z0-9_.+\-]", "-", db_app.name)[:24].strip("-") or "app"
 
         try:
-            bashrc_script = _write_bashrc(jail_root, venv_bin, _app_name_safe)
+            bashrc_script = _write_bashrc(app_id, jail_root, venv_bin, _app_name_safe)
+            term_ids = await asyncio.to_thread(_ensure_app_user, db_app)
         except Exception as exc:
             logging.error(f"Failed to create bashrc: {exc}")
             await websocket.close()
@@ -1447,6 +1886,8 @@ class TerminalManager:
             "VIRTUAL_ENV":      db_app.venv_path,
             "PYTHONUNBUFFERED": "1",
         }
+        if term_ids:
+            _raw_env.update(HOME=str(jail_root), USER=_app_username(app_id), LOGNAME=_app_username(app_id))
         env: Dict[str, str] = {k: v for k, v in _raw_env.items() if v}
         try:
             _extra = json.loads(_decrypt_secret(db_app.env_json) or "{}")
@@ -1484,59 +1925,21 @@ class TerminalManager:
                     os.dup2(slave_fd, 1)
                     os.dup2(slave_fd, 2)
 
-                    _keep_fds: Set[int] = set()
-                    try:
-                        _my_pid = os.getpid()
-                        _loopback_inodes: Set[int] = set()
-                        for _tcp_file in ("/proc/net/tcp", "/proc/net/tcp6"):
-                            try:
-                                with open(_tcp_file) as _tf:
-                                    for _line in _tf:
-                                        _parts = _line.split()
-                                        if len(_parts) < 10:
-                                            continue
-                                        _local = _parts[1]
-                                        _hex_ip = _local.split(":")[0]
-                                        if _hex_ip in ("7F000001", "0100007F", "00000001",
-                                                       "00000000000000000000000001000000"):
-                                            try:
-                                                _loopback_inodes.add(int(_parts[9]))
-                                            except (ValueError, IndexError):
-                                                pass
-                            except OSError:
-                                pass
-
-                        if _loopback_inodes:
-                            _fd_dir = f"/proc/{_my_pid}/fd"
-                            for _entry in os.listdir(_fd_dir):
-                                try:
-                                    _fd_int = int(_entry)
-                                    if _fd_int < 3:
-                                        continue
-                                    _link = os.readlink(f"{_fd_dir}/{_entry}")
-                                    if _link.startswith("socket:["):
-                                        _inode = int(_link[8:-1])
-                                        if _inode in _loopback_inodes:
-                                            _keep_fds.add(_fd_int)
-                                except (ValueError, OSError):
-                                    pass
-                    except Exception:
-                        pass
-                        
+                    # Close everything else inherited from Venvy — its listening
+                    # socket, other users' HTTP connections, the DB. A shell (or
+                    # anything started from it) must not be able to accept()
+                    # Venvy's traffic or keep its port bound after it exits.
                     try:
                         max_fd = os.sysconf("SC_OPEN_MAX")
                     except Exception:
                         max_fd = 4096
-                    if not _keep_fds:
-                        os.closerange(3, max_fd)
-                    else:
-                        _prev = 3
-                        for _kfd in sorted(_keep_fds):
-                            if _kfd > _prev:
-                                os.closerange(_prev, _kfd)
-                            _prev = _kfd + 1
-                        if _prev < max_fd:
-                            os.closerange(_prev, max_fd)
+                    os.closerange(3, max_fd)
+
+                    if term_ids:
+                        # Drop to the app's own user before anything runs.
+                        os.setgroups([])
+                        os.setgid(term_ids[1])
+                        os.setuid(term_ids[0])
 
                     os.chdir(str(jail_root))
                     bash_exe = env.get("SHELL", "/bin/bash")
@@ -1804,12 +2207,18 @@ async def lifespan(app: FastAPI):
             if not app_row.start_on_boot:
                 app_row.last_manually_stopped_at = _boot_reset_time
                 modified = True
+            if app_row.status == "installing":
+                # Venvy restarted mid-install; the venv may be incomplete.
+                logging.warning(f"Install of '{app_row.name}' was interrupted — marking it as error.")
+                app_row.status = "error"
+                modified = True
 
             if app_row.status == "running" and app_row.pid:
-                if not _pid_alive(app_row.pid):
+                if not _app_pid_alive(app_row):
                     logging.info(f"Clearing stale status for '{app_row.name}'")
                     app_row.status = "stopped"
                     app_row.pid = None
+                    app_row.pid_start = None
                     app_row.last_manually_stopped_at = _boot_reset_time
                     modified = True
             
@@ -1841,7 +2250,7 @@ async def lifespan(app: FastAPI):
     pids_to_kill: Dict[int, Set[int]] = {}
     with Session(engine) as session:
         for app_row in session.exec(select(App).where(App.status == "running")).all():
-            if app_row.pid and _pid_alive(app_row.pid):
+            if _app_pid_alive(app_row):
                 try:
                     pgid = os.getpgid(app_row.pid)
                     # SECURITY CRITICAL: Ensure we do not target Venvy's own PGID
@@ -1884,6 +2293,7 @@ async def lifespan(app: FastAPI):
         for app_row in session.exec(select(App).where(App.status == "running")).all():
             app_row.status = "stopped"
             app_row.pid = None
+            app_row.pid_start = None
             if app_row.last_stop_time is None:
                 app_row.last_stop_time = utc_now()
             session.add(app_row)
@@ -1940,8 +2350,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "Content-Security-Policy",
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' "
-            "https://cdn.tailwindcss.com https://cdnjs.cloudflare.com "
-            "https://cdn.jsdelivr.net https://unpkg.com; "
+            "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
             "https://cdn.jsdelivr.net; "
             "font-src 'self' https://fonts.gstatic.com; "
@@ -2144,13 +2553,7 @@ class UserLoginReq(BaseModel):
 @auth_router.get("/status")
 def auth_status(request: Request, session: Session = Depends(get_session)):
     user_exists = session.exec(select(User)).first() is not None
-    user = None
-    try:
-        user = get_current_user(request, session)
-    except HTTPException as e:
-        if e.status_code not in (401, 403):
-            raise
-        pass
+    user = _authenticate(session, request.cookies.get("session"), request.headers.get("x-venvy-key"))
     return {
         "user_exists": user_exists,
         "authenticated": user is not None,
@@ -2173,19 +2576,9 @@ def auth_setup(payload: UserReq, request: Request, response: Response, session: 
     session.add(user)
     session.commit()
     session.refresh(user)
-    token = secrets.token_urlsafe(32)
-    session.add(UserSession(
-        token=token,
-        user_id=user.id,
-        expires_at=utc_now() + datetime.timedelta(seconds=SESSION_TTL_SECONDS),
-    ))
-    session.commit()
-    response.set_cookie(
-        "session", token, httponly=True, path="/",
-        max_age=SESSION_TTL_SECONDS, samesite="lax", secure=SESSION_COOKIE_SECURE,
-    )
+    auth_key = _new_session(session, response, user)
     audit_log(user.username, "user_setup", "initial admin account created")
-    return {"ok": True, "username": user.username, "role": user.role}
+    return {"ok": True, "username": user.username, "role": user.role, "auth_key": auth_key}
 
 
 @auth_router.post("/login")
@@ -2220,23 +2613,9 @@ def login(
             raise HTTPException(401, "Invalid authenticator code.")
 
     _clear_login_rate(rate_key)
-    token = secrets.token_urlsafe(32)
-    session.add(UserSession(
-        token=token,
-        user_id=user.id,
-        expires_at=utc_now() + datetime.timedelta(seconds=SESSION_TTL_SECONDS),
-    ))
-    session.commit()
-    response.set_cookie(
-        "session",
-        token,
-        httponly=True,
-        path="/",
-        max_age=SESSION_TTL_SECONDS,
-        samesite="lax",
-        secure=SESSION_COOKIE_SECURE,
-    )
-    return {"ok": True, "username": user.username, "role": user.role}
+    auth_key = _new_session(session, response, user)
+    audit_log(user.username, "login", f"from {rate_key}")
+    return {"ok": True, "username": user.username, "role": user.role, "auth_key": auth_key}
 
 
 @auth_router.post("/logout")
@@ -2247,7 +2626,7 @@ def logout(
 ):
     token = request.cookies.get("session")
     if token:
-        db_session = session.get(UserSession, token)
+        db_session = session.get(UserSession, _hash_token(token))
         if db_session:
             session.delete(db_session)
             session.commit()
@@ -2258,6 +2637,7 @@ def logout(
 @auth_router.put("/password")
 def change_own_password(
     req: PwdReq,
+    request: Request,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
@@ -2268,8 +2648,25 @@ def change_own_password(
     _validate_password_strength(req.password)
     user.password_hash = hash_password(req.password)
     session.add(user)
+    # A password change is usually "someone may know the old one" — sign out
+    # every other session of this user, keep only the one making the change.
+    current = _hash_token(request.cookies.get("session") or "")
+    for row in session.exec(select(UserSession).where(UserSession.user_id == user.id)).all():
+        if row.token != current:
+            session.delete(row)
     session.commit()
+    audit_log(user.username, "password_change", "other sessions revoked")
     return {"ok": True}
+
+
+@auth_router.post("/download-ticket")
+def create_download_ticket(user: User = Depends(get_current_user)):
+    """Trade the X-Venvy-Key header for a one-time, 60-second ticket usable as
+    ?ticket= on a download URL (see get_download_user)."""
+    ticket = secrets.token_urlsafe(24)
+    with _download_tickets_lock:
+        _download_tickets[_hash_token(ticket)] = (user.id, time.monotonic() + _DOWNLOAD_TICKET_TTL)
+    return {"ticket": ticket}
 
 
 # ---------------------------------------------------------------------------
@@ -2407,9 +2804,10 @@ def list_apps(
         if app_row.status in ("starting", "stopping"):
             continue
         if app_row.status == "running" and app_row.pid:
-            if not _pid_alive(app_row.pid):
+            if not _app_pid_alive(app_row):
                 app_row.status = "stopped"
                 app_row.pid = None
+                app_row.pid_start = None
                 app_row.last_stop_time = utc_now()
                 session.add(app_row)
                 changed = True
@@ -2451,7 +2849,7 @@ def get_system_metrics(user: User = Depends(check_admin)):
     }
 
 
-def _create_full_backup_archive() -> Path:
+def _create_full_backup_archive(protect: Optional[Path] = None) -> Path:
     """Build a complete disaster-recovery backup — a consistent data.db
     snapshot (via SQLite's VACUUM INTO, safe on a live WAL-mode database),
     the .venvy_key encryption key, and the entire apps/ directory (code,
@@ -2465,7 +2863,17 @@ def _create_full_backup_archive() -> Path:
     the event loop should run this via asyncio.to_thread; sync route
     handlers already run off the event loop via Starlette's threadpool.
     """
-    BACKUP_DIR.mkdir(exist_ok=True)
+    BACKUP_DIR.mkdir(mode=0o700, exist_ok=True)
+    # Rough space check: gzip typically halves this; refuse clearly instead
+    # of filling the disk halfway through.
+    raw = DB_FILE.stat().st_size if DB_FILE.exists() else 0
+    for root, _dirs, files in os.walk(APPS_BASE_DIR):
+        for n in files:
+            with contextlib.suppress(OSError):
+                raw += os.lstat(os.path.join(root, n)).st_size
+    free = shutil.disk_usage(BACKUP_DIR).free
+    if raw // 2 + 256 * 1024 * 1024 > free:
+        raise HTTPException(507, f"Not enough free disk space for a backup (≈{raw // 2 // (1024 * 1024)} MB needed, {free // (1024 * 1024)} MB free).")
     timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
     dest = BACKUP_DIR / f"full-{timestamp}.tar.gz"
 
@@ -2503,19 +2911,34 @@ def _create_full_backup_archive() -> Path:
         raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
     finally:
         tmp_archive.unlink(missing_ok=True)
+    dest.chmod(0o600)
 
+    # Retention: keep the newest _BACKUP_KEEP full backups.
+    fulls = sorted(BACKUP_DIR.glob("full-*.tar.gz"), key=lambda f: f.stat().st_mtime, reverse=True)
+    for old in fulls[_BACKUP_KEEP:]:
+        if protect is not None and old.name == protect.name:
+            continue  # e.g. the backup a restore is about to read
+        with contextlib.suppress(OSError):
+            old.unlink()
+            logging.info(f"Pruned old backup {old.name}")
     return dest
 
 
+_BACKUP_KEEP = max(1, int(os.getenv("VENVY_BACKUP_KEEP", "10")))
+
+
 @api_router.post("/system/backup")
-def create_backup(
+async def create_backup(
     admin: User = Depends(check_admin),
     _rl: None = Depends(rate_limit_mutations),
 ):
-    """Create a full disaster-recovery backup — see _create_full_backup_archive()."""
-    dest = _create_full_backup_archive()
-    audit_log(admin.username, "system_full_backup", f"path={dest}")
-    return {"ok": True, "path": str(dest), "size_bytes": dest.stat().st_size}
+    """Create a full disaster-recovery backup — see _create_full_backup_archive().
+    Answers {"job_id"}; tarring every app can take well over a minute."""
+    async def _job() -> dict:
+        dest = await asyncio.to_thread(_create_full_backup_archive)
+        audit_log(admin.username, "system_full_backup", f"path={dest}")
+        return {"ok": True, "path": str(dest), "size_bytes": dest.stat().st_size}
+    return _start_job(admin, "backup", _job)
 
 
 # (pattern, type label) — "database" is a legacy DB-only snapshot from an
@@ -2565,7 +2988,9 @@ def _resolve_backup_path(filename: str) -> Path:
 
 
 @api_router.get("/system/backups/{filename}/download")
-def download_backup(filename: str, admin: User = Depends(check_admin)):
+def download_backup(filename: str, admin: User = Depends(get_download_user)):
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required.")
     """Download a previously created backup."""
     path = _resolve_backup_path(filename)
     audit_log(admin.username, "system_backup_download", f"path={path}")
@@ -2595,6 +3020,18 @@ def delete_backup(
 
 class RestoreBackupReq(BaseModel):
     confirm: str
+
+
+def _restore_tar_filter(member, dest_path):
+    """tarfile's "data" filter, except for symlinks: every venv links
+    bin/python3 to the system interpreter (and other names to that link),
+    which "data" rejects as pointing outside the archive — so restoring any
+    Python app used to fail. A symlink by itself writes nothing; the "tar"
+    filter still refuses any later member whose real path (following links
+    extracted earlier) would land outside the staging directory."""
+    if member.issym():
+        return tarfile.tar_filter(member, dest_path)
+    return tarfile.data_filter(member, dest_path)
 
 
 def _self_restart():
@@ -2635,22 +3072,28 @@ async def restore_backup(
         raise HTTPException(404, "Backup not found.")
 
     audit_log(admin.username, "system_restore_started", f"path={archive_path}")
+    session.close()
+    return _start_job(admin, "restore", lambda: _restore_job(admin, archive_path))
+
+
+async def _restore_job(admin: User, archive_path: Path) -> dict:
 
     # Safety net: back up the CURRENT state before touching anything, so a
     # restore that turns out to be a mistake can itself be undone. If this
     # fails, abort here — nothing has been touched yet.
     try:
-        pre_restore = await asyncio.to_thread(_create_full_backup_archive)
+        pre_restore = await asyncio.to_thread(_create_full_backup_archive, archive_path)
     except HTTPException as e:
         raise HTTPException(500, f"Could not create a safety backup before restoring — aborted, nothing was touched: {e.detail}")
     audit_log(admin.username, "system_restore_safety_backup", f"path={pre_restore}")
 
     # Stop every running app before touching apps/ or data.db out from under them.
-    for a in session.exec(select(App)).all():
-        try:
-            await stop_app_process_logic(a.id, session, manual=True)
-        except Exception as e:
-            logging.warning(f"Failed to stop app {a.id} before restore: {e}")
+    with Session(engine) as session:
+        for a in session.exec(select(App)).all():
+            try:
+                await stop_app_process_logic(a.id, session, manual=True)
+            except Exception as e:
+                logging.warning(f"Failed to stop app {a.id} before restore: {e}")
 
     staging = BACKUP_DIR / f".restore-staging-{secrets.token_hex(4)}"
     staging.mkdir()
@@ -2667,16 +3110,26 @@ async def restore_backup(
                 if not is_safe_path(staging, target):
                     raise ValueError(f"Backup archive contains an unsafe path: {member.name}")
             try:
-                tar.extractall(staging, filter="data")
+                tar.extractall(staging, filter=_restore_tar_filter)
             except TypeError:
                 tar.extractall(staging)  # Python < 3.12 has no `filter` kwarg
 
     def _swap():
+        # SQLite would replay the *old* database's -wal file onto the
+        # restored data.db on next open, corrupting it. Close every pooled
+        # connection first, then remove the old WAL/SHM with the old DB.
+        engine.dispose()
+        for suffix in ("-wal", "-shm"):
+            Path(str(DB_FILE) + suffix).unlink(missing_ok=True)
         if (staging / "apps").is_dir():
             if APPS_BASE_DIR.exists():
                 shutil.rmtree(APPS_BASE_DIR)
             shutil.move(str(staging / "apps"), str(APPS_BASE_DIR))
         shutil.move(str(staging / "data.db"), str(DB_FILE))
+        # Again, in case a concurrent request reopened the old DB in between.
+        engine.dispose()
+        for suffix in ("-wal", "-shm"):
+            Path(str(DB_FILE) + suffix).unlink(missing_ok=True)
         restored_key = staging / _VENVY_KEY_FILE.name
         if restored_key.is_file():
             shutil.move(str(restored_key), str(_VENVY_KEY_FILE))
@@ -2697,8 +3150,60 @@ async def restore_backup(
     # Venvy's in-memory state is now stale relative to what's on disk —
     # restart so everything reinitializes cleanly. Delay briefly so this
     # response actually reaches the client before the process image swaps.
-    asyncio.get_event_loop().call_later(1.0, _self_restart)
+    # Give the client a few polls to see "done" before the process swaps.
+    asyncio.get_running_loop().call_later(3.0, _self_restart)
     return {"ok": True, "restarting": True}
+
+
+# Uploads. The UI sends every file through the chunked endpoints below, so
+# neither a proxy's request-body cap (Cloudflare: 100 MB) nor the multipart
+# parser's per-request file-count limit applies. The single-request endpoints
+# (/apps/upload with files, /files/upload) remain for API clients.
+_SINGLE_REQUEST_UPLOAD_MAX = 50 * 1024 * 1024
+_UPLOAD_CHUNK_MAX = 16 * 1024 * 1024
+_UPLOAD_FILE_MAX = int(os.getenv("VENVY_MAX_UPLOAD_MB", "10240")) * 1024 * 1024
+_UPLOAD_TMP_DIR = DATA_DIR / ".upload-tmp"
+_UPLOAD_STALE_SEC = 24 * 3600
+_UPLOAD_ID_RE = re.compile(r"[0-9a-f]{32}")
+_UPLOAD_COPY_BUF = 1024 * 1024
+
+
+def _save_upload_file(file: UploadFile, dest: Path, limit: int) -> bool:
+    """Stream *file* to *dest* without holding it in memory. Returns False (and
+    removes the partial file) if it is larger than *limit* bytes."""
+    written = 0
+    file.file.seek(0)
+    with open(dest, "wb") as out:
+        while True:
+            buf = file.file.read(_UPLOAD_COPY_BUF)
+            if not buf:
+                break
+            written += len(buf)
+            if written > limit:
+                out.close()
+                dest.unlink(missing_ok=True)
+                return False
+            out.write(buf)
+    return True
+
+
+def _purge_stale_upload_parts() -> None:
+    cutoff = time.time() - _UPLOAD_STALE_SEC
+    try:
+        for part in _UPLOAD_TMP_DIR.glob("*.part"):
+            try:
+                if part.stat().st_mtime < cutoff:
+                    part.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _upload_part_path(app_id: int, user_id: int, upload_id: str) -> Path:
+    if not _UPLOAD_ID_RE.fullmatch(upload_id):
+        raise HTTPException(400, "Invalid upload_id.")
+    return _UPLOAD_TMP_DIR / f"{app_id}-{user_id}-{upload_id}.part"
 
 
 @api_router.post("/apps/upload")
@@ -2739,78 +3244,26 @@ async def upload_app(
         slug = f"{slug}-{int(time.time())}"
         app_dir = user_apps_dir / slug
     await asyncio.to_thread(app_dir.mkdir, parents=True, mode=0o750)
-    await asyncio.to_thread((app_dir / "logs").mkdir, mode=0o750)
+    if not _isolation_active():
+        await asyncio.to_thread((app_dir / "logs").mkdir, mode=0o750)
 
-    _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+    skipped_files: List[Dict[str, str]] = []
     for file in (files or []):
         rel_path = file.filename or "upload"
-        if "\0" in rel_path or ".." in rel_path or rel_path.startswith("/"):
-            continue
-            
-        safe_name = Path(rel_path).name
-        if not safe_name or safe_name.startswith(".") or safe_name.startswith(".jail"):
-            continue
-        if not re.fullmatch(r"[A-Za-z0-9_.+\-\s()[\]@#!~]+", safe_name):
-            continue
-            
+        reason = _upload_rel_path_error(rel_path)
         dest = (app_dir / rel_path).resolve()
-        if not is_safe_path(app_dir, dest):
+        if not reason and not is_safe_path(app_dir, dest):
+            reason = "path escapes app directory"
+        if reason:
+            skipped_files.append({"path": rel_path, "reason": reason})
             continue
-            
         await asyncio.to_thread(dest.parent.mkdir, parents=True, exist_ok=True)
-        
-        data = await file.read(_MAX_UPLOAD_BYTES + 1)
-        if len(data) > _MAX_UPLOAD_BYTES:
+        if not await asyncio.to_thread(_save_upload_file, file, dest, _SINGLE_REQUEST_UPLOAD_MAX):
             await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
-            raise HTTPException(413, f"File '{safe_name}' exceeds 50 MB limit.")
-        async with aiofiles.open(dest, "wb") as f:
-            await f.write(data)
+            raise HTTPException(413, f"File '{rel_path}' exceeds the {_SINGLE_REQUEST_UPLOAD_MAX // (1024 * 1024)} MB single-request limit.")
+    req_bytes = await requirements.read() if requirements and requirements.filename else None
 
     venv_path = app_dir / "venv"
-    if runtime == "python":
-        proc = await asyncio.create_subprocess_exec(
-            "python3", "-m", "venv", str(venv_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            _, venv_err = await asyncio.wait_for(proc.communicate(), timeout=120)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
-            raise HTTPException(500, "venv creation timed out.")
-        if proc.returncode != 0:
-            await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
-            err_msg = venv_err.decode(errors="replace")
-            hint = ""
-            if "ensurepip" in err_msg or "venv" in err_msg.lower():
-                hint = f" Hint: python3-venv may not be installed — run: sudo apt-get install -y python3.{sys.version_info.minor}-venv"
-            raise HTTPException(500, f"venv creation failed: {err_msg}{hint}")
-
-    if requirements and requirements.filename:
-        if runtime == "python":
-            req_path = app_dir / "requirements.txt"
-            async with aiofiles.open(req_path, "wb") as f:
-                await f.write(await requirements.read())
-            pip_bin = venv_path / "bin" / "pip"
-            if not await asyncio.to_thread(pip_bin.exists):
-                await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
-                raise HTTPException(500, "pip not found in the new virtual environment.")
-            proc = await asyncio.create_subprocess_exec(
-                str(pip_bin), "install", "--no-input", "-r", str(req_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                _, pip_err = await asyncio.wait_for(proc.communicate(), timeout=600)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
-                raise HTTPException(500, "pip install timed out after 10 minutes.")
-            if proc.returncode != 0:
-                await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
-                raise HTTPException(500, f"pip install failed: {pip_err.decode()}")
-
     new_app = App(
         user_id=user.id,
         name=name,
@@ -2822,12 +3275,79 @@ async def upload_app(
         start_on_boot=start_on_boot,
         restart_policy=restart_policy,
         port=None,
+        status="installing",
     )
     session.add(new_app)
     session.commit()
     session.refresh(new_app)
-    audit_log(user.username, "app_create", f"created app '{new_app.name}' (id={new_app.id})")
-    return _app_safe(new_app)
+    app_id = new_app.id
+    audit_log(user.username, "app_create", f"created app '{new_app.name}' (id={app_id})")
+
+    async def _finish() -> dict:
+        """venv + pip install, which can take minutes — runs as a job."""
+        try:
+            with Session(engine) as s2:
+                row = s2.get(App, app_id)
+            await asyncio.to_thread(_ensure_app_user, row)
+            kw = _app_proc_kwargs(row)
+            env = _app_tool_env(row)
+            if runtime == "python":
+                proc = await asyncio.create_subprocess_exec(
+                    "python3", "-m", "venv", str(venv_path),
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, **kw,
+                )
+                try:
+                    _, venv_err = await asyncio.wait_for(proc.communicate(), timeout=120)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    raise HTTPException(500, "venv creation timed out.")
+                if proc.returncode != 0:
+                    err_msg = venv_err.decode(errors="replace")
+                    hint = ""
+                    if "ensurepip" in err_msg or "venv" in err_msg.lower():
+                        hint = f" Hint: python3-venv may not be installed — run: sudo apt-get install -y python3.{sys.version_info.minor}-venv"
+                    raise HTTPException(500, f"venv creation failed: {err_msg}{hint}")
+
+            if req_bytes is not None and runtime == "python":
+                req_path = app_dir / "requirements.txt"
+                await asyncio.to_thread(req_path.write_bytes, req_bytes)
+                await asyncio.to_thread(_chown_for_app, row, req_path)
+                pip_bin = venv_path / "bin" / "pip"
+                if not await asyncio.to_thread(pip_bin.exists):
+                    raise HTTPException(500, "pip not found in the new virtual environment.")
+                proc = await asyncio.create_subprocess_exec(
+                    str(pip_bin), "install", "--no-input", "-r", str(req_path),
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, **kw,
+                )
+                try:
+                    _, pip_err = await asyncio.wait_for(proc.communicate(), timeout=600)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    raise HTTPException(500, "pip install timed out after 10 minutes.")
+                if proc.returncode != 0:
+                    raise HTTPException(500, f"pip install failed: {pip_err.decode(errors='replace')}")
+
+            with Session(engine) as s2:
+                row = s2.get(App, app_id)
+                row.status = "stopped"
+                s2.add(row)
+                s2.commit()
+                s2.refresh(row)
+                result = _app_safe(row)
+            result["skipped_files"] = skipped_files
+            return result
+        except BaseException:
+            # Failed or cancelled: remove the half-created app entirely.
+            await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
+            with Session(engine) as s2:
+                row = s2.get(App, app_id)
+                if row:
+                    s2.delete(row)
+                    s2.commit()
+            await asyncio.to_thread(_delete_app_user, app_id)
+            raise
+
+    return {**_start_job(user, "app_create", _finish), "app_id": app_id, "skipped_files": skipped_files}
 
 
 @api_router.post("/apps/{app_id}/control")
@@ -2843,6 +3363,8 @@ async def control_app(
         raise HTTPException(404)
     if action not in ("start", "stop", "restart"):
         raise HTTPException(400, "Invalid action. Use: start | stop | restart")
+    if app_row.status == "installing":
+        raise HTTPException(409, "This app is still being set up — wait for its install to finish.")
     audit_log(user.username, f"app_{action}", f"app '{app_row.name}' (id={app_id})")
 
     async def _do_start():
@@ -2878,8 +3400,9 @@ async def control_app(
             await asyncio.sleep(0.1)
             with Session(engine) as s:
                 refreshed = s.get(App, app_id)
-                if refreshed and refreshed.pid and _pid_alive(refreshed.pid):
+                if refreshed and refreshed.pid and _app_pid_alive(refreshed):
                     refreshed.pid = None
+                    refreshed.pid_start = None
                     refreshed.status = "stopped"
                     s.add(refreshed)
                     s.commit()
@@ -2897,6 +3420,7 @@ async def control_app(
         finally:
             _running_tasks.discard(asyncio.current_task())
 
+    _restart_backoff.pop(app_id, None)
     if action == "start":
         if app_row.status != "running":
             app_row.status = "starting"
@@ -3035,6 +3559,8 @@ async def delete_app(
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
+    if app_row.status == "installing":
+        raise HTTPException(409, "This app is still being set up — wait for its install to finish.")
     app_name = app_row.name
     _cancel_log_task(app_id)
     await stop_app_process_logic(app_id, session)
@@ -3070,6 +3596,10 @@ async def delete_app(
     app_dir_path = Path(app_row.app_dir)
     if await asyncio.to_thread(app_dir_path.exists):
         await asyncio.to_thread(shutil.rmtree, app_row.app_dir, ignore_errors=True)
+    await asyncio.to_thread(shutil.rmtree, APP_LOGS_DIR / str(app_id), True)
+    (TERMINAL_RC_DIR / f"app-{app_id}.bashrc").unlink(missing_ok=True)
+    await asyncio.to_thread(_delete_app_user, app_id)
+    _restart_backoff.pop(app_id, None)
     session.delete(app_row)
     session.commit()
     audit_log(user.username, "app_delete", f"deleted app '{app_name}' (id={app_id})")
@@ -3121,7 +3651,7 @@ def file_tree(
     _SKIP_NAMES = {"venv", "__pycache__", "logs", "node_modules", ".git", ".mypy_cache", ".pytest_cache"}
     if target.is_dir():
         for item in target.iterdir():
-            if item.name.startswith(".") or item.name in _SKIP_NAMES:
+            if item.name in _SKIP_NAMES or _is_protected_app_file(item.name):
                 continue
             try:
                 size = item.stat().st_size
@@ -3134,6 +3664,30 @@ def file_tree(
                 "size": size,
             })
     return sorted(results, key=lambda x: (not x["is_dir"], x["name"].lower()))
+
+
+def _atomic_save(app_row: App, target: Path, content: str) -> None:
+    """Write via a temp file + rename, so a crash or full disk mid-save never
+    leaves a truncated file behind. Keeps the file's mode (and, under per-app
+    users, gives it to the app's user)."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = target.stat().st_mode & 0o7777
+    except FileNotFoundError:
+        mode = 0o644
+    tmp = target.with_name(f".{target.name}.venvy-{secrets.token_hex(4)}.tmp")
+    try:
+        with open(tmp, "x", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        ids = _app_ids(app_row)
+        if ids:
+            os.lchown(tmp, *ids)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 @api_router.post("/apps/{app_id}/files/op")
@@ -3151,15 +3705,21 @@ async def file_operations(
     target = (root / req.path).resolve()
     if not is_safe_path(root, target):
         raise HTTPException(403)
-    if target.name.startswith(".jailrc") or target.name.startswith(".jailsh"):
+    if _is_protected_app_file(target.name):
         raise HTTPException(403, "Operation not permitted on this path.")
 
     try:
+        if target == root.resolve() and req.operation not in ("create_folder",):
+            raise HTTPException(400, "That operation isn't allowed on the app's root folder.")
+        created: Optional[Path] = None   # what to hand to the app's user afterwards
+
         if req.operation == "create_file":
+            created = _first_missing_ancestor(root.resolve(), target.parent) or target
             await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
             await asyncio.to_thread(target.touch)
 
         elif req.operation == "create_folder":
+            created = _first_missing_ancestor(root.resolve(), target)
             await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
 
         elif req.operation == "delete":
@@ -3168,35 +3728,36 @@ async def file_operations(
             else:
                 await asyncio.to_thread(target.unlink, missing_ok=True)
 
-        elif req.operation == "rename":
+        elif req.operation in ("rename", "copy"):
             new_target = (root / (req.new_path or "")).resolve()
-            if not is_safe_path(root, new_target):
+            if not is_safe_path(root, new_target) or new_target == root.resolve():
                 raise HTTPException(403)
-            if new_target.name.startswith(".jailrc") or new_target.name.startswith(".jailsh"):
+            if _is_protected_app_file(new_target.name):
                 raise HTTPException(403, "Operation not permitted on this path.")
+            if await asyncio.to_thread(new_target.exists) and not (
+                    req.operation == "rename" and await asyncio.to_thread(os.path.samefile, target, new_target)):
+                raise HTTPException(409, f"'{req.new_path}' already exists.")
+            created = _first_missing_ancestor(root.resolve(), new_target.parent) or new_target
             await asyncio.to_thread(new_target.parent.mkdir, parents=True, exist_ok=True)
-            await asyncio.to_thread(target.rename, new_target)
-
-        elif req.operation == "copy":
-            new_target = (root / (req.new_path or "")).resolve()
-            if not is_safe_path(root, new_target):
-                raise HTTPException(403)
-            if new_target.name.startswith(".jailrc") or new_target.name.startswith(".jailsh"):
-                raise HTTPException(403, "Operation not permitted on this path.")
-            if target.is_dir():
-                await asyncio.to_thread(shutil.copytree, target, new_target)
+            if req.operation == "rename":
+                await asyncio.to_thread(target.rename, new_target)
+            elif await asyncio.to_thread(target.is_dir):
+                await asyncio.to_thread(shutil.copytree, target, new_target, True)
             else:
-                await asyncio.to_thread(new_target.parent.mkdir, parents=True, exist_ok=True)
                 await asyncio.to_thread(shutil.copy2, target, new_target)
 
         elif req.operation == "save":
             if req.content is None:
                 raise HTTPException(400, "No content provided for save.")
-            await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
-            async with aiofiles.open(target, "w", encoding="utf-8") as _f:
-                await _f.write(req.content)
+            if await asyncio.to_thread(target.is_dir):
+                raise HTTPException(409, "That path is a folder.")
+            created = _first_missing_ancestor(root.resolve(), target.parent)
+            await asyncio.to_thread(_atomic_save, app_row, target, req.content)
         else:
             raise HTTPException(400, f"Unknown operation: {req.operation}")
+
+        if created is not None:
+            await asyncio.to_thread(_chown_for_app, app_row, created)
     except HTTPException:
         raise
     except Exception as exc:
@@ -3210,8 +3771,10 @@ async def download_file(
     path: str,
     session: Session = Depends(get_session),
     # See file_tree() above — same reasoning, viewers don't get file contents.
-    user: User = Depends(require_operator),
+    user: User = Depends(get_download_user),
 ):
+    if user.role not in ("admin", "operator"):
+        raise HTTPException(status_code=403, detail="Operator or admin privileges required.")
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
@@ -3249,29 +3812,129 @@ async def upload_file_to_path(
         raise HTTPException(403)
     if not target_dir.is_dir():
         raise HTTPException(404, "Target directory does not exist.")
-    _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+    skipped: List[Dict[str, str]] = []
     for file in files:
         rel_path = file.filename or "upload"
-        if "\0" in rel_path or ".." in rel_path or rel_path.startswith("/"):
-            continue
-            
-        safe_name = Path(rel_path).name
-        if not safe_name or safe_name.startswith(".") or safe_name.startswith(".jail"):
-            continue
-        if not re.fullmatch(r"[A-Za-z0-9_.+\-\s()[\]@#!~]+", safe_name) or "\0" in path:
-            raise HTTPException(400, f"Filename '{safe_name}' contains invalid characters.")
-            
+        reason = _upload_rel_path_error(rel_path)
         dest = (target_dir / rel_path).resolve()
-        if not is_safe_path(root, dest):
-            raise HTTPException(403, "Upload path escapes app directory.")
-            
+        if not reason and not is_safe_path(root, dest):
+            reason = "path escapes app directory"
+        if reason:
+            skipped.append({"path": rel_path, "reason": reason})
+            continue
+        created = _first_missing_ancestor(root.resolve(), dest.parent) or dest
         await asyncio.to_thread(dest.parent.mkdir, parents=True, exist_ok=True)
-        
-        data = await file.read(_MAX_UPLOAD_BYTES + 1)
-        if len(data) > _MAX_UPLOAD_BYTES:
-            raise HTTPException(413, f"File '{safe_name}' exceeds 50 MB limit.")
-        async with aiofiles.open(dest, "wb") as f:
-            await f.write(data)
+        if not await asyncio.to_thread(_save_upload_file, file, dest, _SINGLE_REQUEST_UPLOAD_MAX):
+            skipped.append({"path": rel_path, "reason": f"exceeds the {_SINGLE_REQUEST_UPLOAD_MAX // (1024 * 1024)} MB single-request limit"})
+            continue
+        await asyncio.to_thread(_chown_for_app, app_row, created)
+    return {"ok": True, "skipped": skipped}
+
+
+@api_router.post("/apps/{app_id}/files/upload/chunk")
+async def upload_file_chunk(
+    app_id: int,
+    upload_id: str = Form(...),
+    path: str = Form(""),
+    rel_path: str = Form(...),
+    offset: int = Form(...),
+    total: int = Form(...),
+    chunk: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_operator),
+    # Deliberately not rate_limit_mutations: one large file is hundreds of
+    # chunk requests. Access still requires an operator session + CSRF.
+):
+    """Append one chunk of a file upload. The client sends a file's chunks in
+    order; offset must equal the bytes received so far (a mismatch answers
+    409 with the server's count, so the client can resume from there). When
+    the part reaches *total* bytes it is moved into place atomically."""
+    app_row = session.get(App, app_id)
+    if not app_row:
+        raise HTTPException(404)
+    root = Path(app_row.app_dir)
+    target_dir = (root / path).resolve()
+    if not is_safe_path(root, target_dir):
+        raise HTTPException(403)
+    if not await asyncio.to_thread(target_dir.is_dir):
+        raise HTTPException(404, "Target directory does not exist.")
+    reason = _upload_rel_path_error(rel_path)
+    if reason:
+        raise HTTPException(400, f"'{rel_path}': {reason}.")
+    dest = (target_dir / rel_path).resolve()
+    if not is_safe_path(root, dest):
+        raise HTTPException(403, "Upload path escapes app directory.")
+    if total < 0 or offset < 0 or offset > total:
+        raise HTTPException(400, "Invalid offset/total.")
+    if total > _UPLOAD_FILE_MAX:
+        raise HTTPException(413, f"File exceeds the {_UPLOAD_FILE_MAX // (1024 * 1024)} MB upload limit.")
+
+    part = _upload_part_path(app_id, user.id, upload_id)
+
+    def _append() -> int:
+        _UPLOAD_TMP_DIR.mkdir(mode=0o700, exist_ok=True)
+        if offset == 0:
+            _purge_stale_upload_parts()
+            free = shutil.disk_usage(_UPLOAD_TMP_DIR).free
+            if total + 256 * 1024 * 1024 > free:
+                raise HTTPException(507, "Not enough free disk space for this upload.")
+            mode = "wb"
+        else:
+            try:
+                have = part.stat().st_size
+            except FileNotFoundError:
+                have = 0
+            if have != offset:
+                raise HTTPException(409, {"message": "Offset mismatch.", "received": have})
+            mode = "ab"
+        written = 0
+        with open(part, mode) as out:
+            while True:
+                buf = chunk.file.read(_UPLOAD_COPY_BUF)
+                if not buf:
+                    break
+                written += len(buf)
+                if written > _UPLOAD_CHUNK_MAX or offset + written > total:
+                    out.close()
+                    part.unlink(missing_ok=True)
+                    raise HTTPException(400, "Chunk is larger than allowed.")
+                out.write(buf)
+        return offset + written
+
+    received = await asyncio.to_thread(_append)
+    if received < total:
+        return {"ok": True, "received": received, "done": False}
+
+    def _finalize() -> None:
+        if dest.is_dir():
+            part.unlink(missing_ok=True)
+            raise HTTPException(409, f"'{rel_path}' already exists as a folder.")
+        created = _first_missing_ancestor(root.resolve(), dest.parent)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        ids = _app_ids(app_row)
+        if ids:
+            os.lchown(part, *ids)
+        try:
+            os.replace(part, dest)
+        except OSError:
+            # Different filesystem (e.g. DATA_DIR/apps is a mount) — copy instead.
+            shutil.move(str(part), str(dest))
+        if created is not None:
+            _chown_for_app(app_row, created)
+
+    await asyncio.to_thread(_finalize)
+    return {"ok": True, "received": received, "done": True}
+
+
+@api_router.delete("/apps/{app_id}/files/upload/{upload_id}")
+async def abort_file_upload(
+    app_id: int,
+    upload_id: str,
+    user: User = Depends(require_operator),
+):
+    """Discard a partially uploaded file (e.g. after the user cancels)."""
+    part = _upload_part_path(app_id, user.id, upload_id)
+    await asyncio.to_thread(part.unlink, missing_ok=True)
     return {"ok": True}
 
 
@@ -3313,16 +3976,14 @@ async def list_packages(
     if not venv_python.exists():
         raise HTTPException(500, "Virtual environment python not found.")
     
-    env = os.environ.copy()
-    env["VIRTUAL_ENV"] = str(app_row.venv_path)
-    env.pop("PYTHONHOME", None)
-    env.pop("PYTHONPATH", None)
-    
+    # The venv's python runs app-controlled code (.pth files, sitecustomize),
+    # so it runs as the app's user, never as Venvy's.
     proc = await asyncio.create_subprocess_exec(
         str(venv_python), "-m", "pip", "list", "--format=json",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
-        env=env,
+        env=_app_tool_env(app_row),
+        **_app_proc_kwargs(app_row),
     )
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
@@ -3335,6 +3996,25 @@ async def list_packages(
         return []
 
 
+async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str) -> None:
+    """Run a package-manager command for an app (as the app's user); raise
+    HTTPException with its stderr on failure or timeout."""
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=_app_tool_env(app_row),
+        **_app_proc_kwargs(app_row),
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise HTTPException(500, f"{what} timed out after {timeout} seconds.")
+    if proc.returncode != 0:
+        raise HTTPException(500, f"{what} failed: {stderr.decode(errors='replace')}")
+
+
 @api_router.post("/apps/{app_id}/packages")
 async def install_package(
     app_id: int,
@@ -3343,63 +4023,36 @@ async def install_package(
     user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
 ):
+    """Install a package. Answers {"job_id"} — poll GET /api/jobs/{id}."""
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
-        
     pkg_name = req.name.strip()
-    
+
     if app_row.runtime == "rust":
-        # Same allow-list style as the Python path below — `cargo add` has no shell,
-        # so this is defense-in-depth rather than a shell-injection fix, but it keeps
-        # the validation consistent across runtimes and rejects obviously bogus input.
-        if not re.fullmatch(r"[A-Za-z0-9_.+\-]+(@[A-Za-z0-9_.+\-]+)?", pkg_name):
+        if not re.fullmatch(r"[A-Za-z0-9_.+\-]+(@[A-Za-z0-9_.+\-]+)?", pkg_name) or pkg_name.startswith("-"):
             raise HTTPException(400, "Invalid package name.")
-        manifest_path = Path(app_row.app_dir) / "Cargo.toml"
-        proc = await asyncio.create_subprocess_exec(
-            "cargo", "add", pkg_name, "--manifest-path", str(manifest_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise HTTPException(500, "Cargo add timed out.")
-        if proc.returncode != 0:
-            raise HTTPException(500, f"Cargo add failed: {stderr.decode()}")
+        argv = ["cargo", "add", pkg_name, "--manifest-path", str(Path(app_row.app_dir) / "Cargo.toml")]
+        timeout, what = 300, "cargo add"
+    elif app_row.runtime == "python":
+        venv_python = Path(app_row.venv_path) / "bin" / "python"
+        if not venv_python.exists():
+            raise HTTPException(500, "Virtual environment python not found.")
+        # No leading "-": the name must never be read as a pip option.
+        if pkg_name.startswith("-") or not re.fullmatch(
+                r"[A-Za-z0-9_.+\-]+(\[[\w,]+\])?([\s]*(==|>=|<=|~=|!=|>|<)[^\s]*)?", pkg_name):
+            raise HTTPException(400, "Invalid package name.")
+        argv = [str(venv_python), "-m", "pip", "install", "--no-input", pkg_name]
+        timeout, what = 600, "pip install"
+    else:
+        raise HTTPException(400, "Packages tab is only supported for Python/Rust.")
+
+    async def _job() -> dict:
+        await _run_app_tool(app_row, argv, timeout, what)
         audit_log(user.username, "package_install", f"app '{app_row.name}' (id={app_id}): {pkg_name}")
         return {"ok": True}
 
-    if app_row.runtime != "python":
-        raise HTTPException(400, "Packages tab is only supported for Python/Rust.")
-        
-    venv_python = Path(app_row.venv_path) / "bin" / "python"
-    if not venv_python.exists():
-        raise HTTPException(500, "Virtual environment python not found.")
-    if not re.fullmatch(r"[A-Za-z0-9_.+\-]+(\[[\w,]+\])?([\s]*(==|>=|<=|~=|!=|>|<)[^\s]*)?", pkg_name):
-        raise HTTPException(400, "Invalid package name.")
-        
-    env = os.environ.copy()
-    env["VIRTUAL_ENV"] = str(app_row.venv_path)
-    env.pop("PYTHONHOME", None)
-    env.pop("PYTHONPATH", None)
-
-    proc = await asyncio.create_subprocess_exec(
-        str(venv_python), "-m", "pip", "install", "--no-input", pkg_name,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
-    try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-    except asyncio.TimeoutError:
-        proc.kill()
-        raise HTTPException(500, "Install timed out after 5 minutes.")
-    if proc.returncode != 0:
-        raise HTTPException(500, f"Install failed: {stderr.decode()}")
-    audit_log(user.username, "package_install", f"app '{app_row.name}' (id={app_id}): {pkg_name}")
-    return {"ok": True}
+    return _start_job(user, "package_install", _job)
 
 
 @api_router.delete("/apps/{app_id}/packages/{name}")
@@ -3410,56 +4063,40 @@ async def uninstall_package(
     user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
 ):
+    """Uninstall a package. Answers {"job_id"} — poll GET /api/jobs/{id}."""
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
-        
+    if not re.fullmatch(r"[A-Za-z0-9_.+\-]+", name) or name.startswith("-"):
+        raise HTTPException(400, "Invalid package name.")
+
     if app_row.runtime == "rust":
-        if not re.fullmatch(r"[A-Za-z0-9_.+\-]+", name):
-            raise HTTPException(400, "Invalid package name.")
-        manifest_path = Path(app_row.app_dir) / "Cargo.toml"
-        proc = await asyncio.create_subprocess_exec(
-            "cargo", "remove", name, "--manifest-path", str(manifest_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise HTTPException(502, f"Cargo remove failed: {stderr.decode()}")
+        argv = ["cargo", "remove", name, "--manifest-path", str(Path(app_row.app_dir) / "Cargo.toml")]
+        timeout, what = 120, "cargo remove"
+    elif app_row.runtime == "python":
+        venv_python = Path(app_row.venv_path) / "bin" / "python"
+        if not venv_python.exists():
+            raise HTTPException(500, "Virtual environment python not found.")
+        argv = [str(venv_python), "-m", "pip", "uninstall", "-y", name]
+        timeout, what = 300, "pip uninstall"
+    else:
+        raise HTTPException(400, "Packages tab is only supported for Python/Rust.")
+
+    async def _job() -> dict:
+        await _run_app_tool(app_row, argv, timeout, what)
         audit_log(user.username, "package_uninstall", f"app '{app_row.name}' (id={app_id}): {name}")
         return {"ok": True}
 
-    if app_row.runtime != "python":
-        raise HTTPException(400, "Packages tab is only supported for Python/Rust.")
-        
-    venv_python = Path(app_row.venv_path) / "bin" / "python"
-    if not venv_python.exists():
-        raise HTTPException(500, "Virtual environment python not found.")
-    if not re.fullmatch(r"[A-Za-z0-9_.+\-]+", name):
-        raise HTTPException(400, "Invalid package name.")
-        
-    env = os.environ.copy()
-    env["VIRTUAL_ENV"] = str(app_row.venv_path)
-    env.pop("PYTHONHOME", None)
-    env.pop("PYTHONPATH", None)
+    return _start_job(user, "package_uninstall", _job)
 
-    proc = await asyncio.create_subprocess_exec(
-        str(venv_python), "-m", "pip", "uninstall", "-y", name,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
-    try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-    except asyncio.TimeoutError:
-        proc.kill()
-        raise HTTPException(500, "Uninstall timed out.")
-    if proc.returncode != 0:
-        raise HTTPException(500, f"Uninstall failed: {stderr.decode()}")
-    audit_log(user.username, "package_uninstall", f"app '{app_row.name}' (id={app_id}): {name}")
-    return {"ok": True}
+
+@api_router.get("/jobs/{job_id}")
+def get_job(job_id: str, user: User = Depends(get_current_user)):
+    """Status of a background job: {status: running|done|error, result, error}."""
+    job = _jobs.get(job_id)
+    if not job or (job["user_id"] != user.id and user.role != "admin"):
+        raise HTTPException(404, "Job not found (finished jobs are kept for an hour).")
+    return {k: job[k] for k in ("id", "kind", "status", "result", "error", "code")}
 
 
 @api_router.get("/apps/{app_id}/logs")
@@ -3473,7 +4110,7 @@ async def get_app_logs(
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
-    log_file = Path(app_row.app_dir) / "logs" / "app.log"
+    log_file = _app_log_file(app_row)
     if not log_file.exists():
         return {"content": ""}
 
@@ -3509,7 +4146,7 @@ async def clear_app_logs(
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
-    log_file = Path(app_row.app_dir) / "logs" / "app.log"
+    log_file = _app_log_file(app_row)
     if log_file.exists():
         await asyncio.to_thread(log_file.write_text, "", encoding="utf-8")
     return {"ok": True}
@@ -3533,16 +4170,12 @@ async def scan_imports(
 
     installed: Set[str] = set()
     if venv_python.exists():
-        env = os.environ.copy()
-        env["VIRTUAL_ENV"] = str(app_row.venv_path)
-        env.pop("PYTHONHOME", None)
-        env.pop("PYTHONPATH", None)
-
         proc = await asyncio.create_subprocess_exec(
             str(venv_python), "-m", "pip", "list", "--format=json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-            env=env,
+            env=_app_tool_env(app_row),
+            **_app_proc_kwargs(app_row),
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
@@ -3598,7 +4231,7 @@ async def system_info(_: User = Depends(get_current_user)):
 
 @api_router.get("/system/ports")
 async def system_ports(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_operator),
     session: Session = Depends(get_session),
 ):
     """Return all currently listening TCP ports plus recommended free ports."""
@@ -4126,7 +4759,7 @@ async def check_cf_hostname(
     hostname: str = Query(...),
     local_port: Optional[int] = Query(None),
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     """Pre-flight check before publishing a hostname."""
     app_row = session.get(App, app_id)
@@ -4427,30 +5060,32 @@ async def terminal_ws(
         await websocket.close(code=1008, reason="Access from this IP is not allowed.")
         return
 
-    token = websocket.cookies.get("session")
-    if not token:
+    # WebSockets aren't covered by CORS, and a page on any sibling port of
+    # this host (i.e. a hosted app) is "same-site" — so check that the
+    # handshake really comes from the Venvy UI itself.
+    origin = websocket.headers.get("origin", "")
+    host = websocket.headers.get("host", "")
+    origin_host = urllib.parse.urlsplit(origin).netloc if origin else ""
+    if not origin_host or (origin_host != host and origin not in _ALLOWED_ORIGINS):
+        await websocket.close(code=1008, reason="Cross-origin terminal connections are not allowed.")
+        return
+
+    # Browsers can't put custom headers on a WebSocket handshake, so the page
+    # sends its X-Venvy-Key as the first message: "\x01" + key.
+    try:
+        first = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+    except Exception:
         await websocket.close(code=1008, reason="Not authenticated.")
         return
-
-    db_session = session.get(UserSession, token)
-    if not db_session:
-        await websocket.close(code=1008, reason="Session invalid.")
-        return
-
-    if utc_now() > _make_tz_aware(db_session.expires_at):
-        session.delete(db_session)
-        session.commit()
-        await websocket.close(code=1008, reason="Session expired.")
-        return
-
-    ws_user = session.get(User, db_session.user_id)
+    auth_key = first[1:] if first.startswith("\x01") else None
+    ws_user = _authenticate(session, websocket.cookies.get("session"), auth_key)
     if not ws_user:
-        await websocket.close(code=1008, reason="User not found.")
+        await websocket.close(code=1008, reason="Not authenticated.")
         return
 
     try:
         await terminal_manager.start_terminal(
-            websocket, app_id, session, db_session.user_id, ws_user.role
+            websocket, app_id, session, ws_user.id, ws_user.role
         )
     except Exception as exc:
         logging.error(f"WS terminal error: {exc}")
@@ -4494,6 +5129,20 @@ def health_check():
     )
 
 
+_VENDOR_FILE_RE = re.compile(r"\A[A-Za-z0-9_.\-]+\.js\Z")
+
+
+@app.get("/vendor/{name}")
+async def serve_vendor(name: str):
+    """Third-party scripts shipped with Venvy (see vendor/) — served from
+    here instead of a CDN, so nobody else can change them."""
+    path = ASSETS_DIR / "vendor" / name
+    if not _VENDOR_FILE_RE.match(name) or not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="text/javascript",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
 @app.get("/")
 async def serve_spa():
     html = ASSETS_DIR / "index.html"
@@ -4533,12 +5182,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     _print_banner(args.host if args.host != "0.0.0.0" else get_server_ipv4(), args.port)
+    if args.host not in ("127.0.0.1", "localhost", "::1") and not SESSION_COOKIE_SECURE:
+        logging.warning(
+            "Venvy is listening on %s over plain HTTP: passwords and session cookies "
+            "cross the network unencrypted. Prefer binding to 127.0.0.1 and reaching it "
+            "through the Cloudflare tunnel (HTTPS), then set SESSION_COOKIE_SECURE=1.", args.host)
     uvicorn.run(
         app,
         host=args.host,
         port=args.port,
         log_level=args.log_level.lower(),
-        proxy_headers=True,
-        forwarded_allow_ips="*",
+        # Never let X-Forwarded-For rewrite the client address — see
+        # _resolve_client_ip() for how tunnel traffic is attributed instead.
+        proxy_headers=False,
         access_log=True,
     )

@@ -256,6 +256,27 @@ def _check_auth(request: Request):
     if not token:
         raise HTTPException(401, "Not authenticated.")
 
+FAKE_AUTH_KEY = "emulator-auth-key"
+FAKE_JOBS: Dict[str, dict] = {}
+
+def _job(result: Any) -> dict:
+    """Mimic the real server's background jobs: return {job_id}, already done."""
+    job_id = secrets.token_hex(16)
+    FAKE_JOBS[job_id] = {"id": job_id, "kind": "emulated", "status": "done", "result": result, "error": None, "code": None}
+    return {"job_id": job_id}
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str, request: Request):
+    _check_auth(request)
+    if job_id not in FAKE_JOBS:
+        raise HTTPException(404, "Job not found.")
+    return FAKE_JOBS[job_id]
+
+@app.post("/api/auth/download-ticket")
+def download_ticket(request: Request):
+    _check_auth(request)
+    return {"ticket": secrets.token_urlsafe(24)}
+
 def _app_or_404(app_id: int) -> dict:
     if app_id not in FAKE_APPS:
         raise HTTPException(404, "App not found.")
@@ -267,6 +288,13 @@ def _now_iso():
 # ---------------------------------------------------------------------------
 # Static — serve index.html
 # ---------------------------------------------------------------------------
+
+@app.get("/vendor/{name}")
+def serve_vendor(name: str):
+    path = ASSETS_DIR / "vendor" / Path(name).name
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="text/javascript")
 
 @app.get("/")
 async def serve_spa():
@@ -294,7 +322,7 @@ async def license_activate(request: Request):
 @app.get("/api/auth/status")
 def auth_status(request: Request):
     token = request.cookies.get("session")
-    authenticated = token == FAKE_SESSION_TOKEN
+    authenticated = token == FAKE_SESSION_TOKEN and request.headers.get("x-venvy-key") == FAKE_AUTH_KEY
     return {
         "user_exists": True,
         "authenticated": authenticated,
@@ -313,8 +341,8 @@ class LoginReq(BaseModel):
 def login(payload: LoginReq, response: Response):
     if payload.username != FAKE_USER["username"] or payload.password != FAKE_USER["password"]:
         raise HTTPException(401, "Invalid credentials.")
-    response.set_cookie("session", FAKE_SESSION_TOKEN, httponly=True, path="/", samesite="lax")
-    return {"ok": True, "username": FAKE_USER["username"], "is_admin": FAKE_USER["is_admin"]}
+    response.set_cookie("session", FAKE_SESSION_TOKEN, httponly=True, path="/", samesite="strict")
+    return {"ok": True, "username": FAKE_USER["username"], "is_admin": FAKE_USER["is_admin"], "auth_key": FAKE_AUTH_KEY}
 
 class SetupReq(BaseModel):
     username: str
@@ -322,8 +350,8 @@ class SetupReq(BaseModel):
 
 @app.post("/api/auth/setup")
 def auth_setup(payload: SetupReq, response: Response):
-    response.set_cookie("session", FAKE_SESSION_TOKEN, httponly=True, path="/", samesite="lax")
-    return {"ok": True, "username": payload.username, "is_admin": True}
+    response.set_cookie("session", FAKE_SESSION_TOKEN, httponly=True, path="/", samesite="strict")
+    return {"ok": True, "username": payload.username, "is_admin": True, "auth_key": FAKE_AUTH_KEY}
 
 @app.post("/api/auth/logout")
 def logout(response: Response):
@@ -468,7 +496,7 @@ async def upload_app(
         {"name": entrypoint or "main.py", "path": entrypoint or "main.py", "is_dir": False, "size": 0},
         {"name": "requirements.txt", "path": "requirements.txt", "is_dir": False, "size": 0},
     ]
-    return new_app
+    return {**_job({**new_app, "skipped_files": []}), "app_id": app_id, "skipped_files": []}
 
 @app.post("/api/apps/{app_id}/control")
 async def control_app(app_id: int, action: str = Query(...), request: Request = None):
@@ -654,6 +682,37 @@ async def upload_file_to_path(
 ):
     _check_auth(request)
     _app_or_404(app_id)
+    return {"ok": True, "skipped": []}
+
+_FAKE_UPLOAD_PARTS: Dict[str, int] = {}
+
+@app.post("/api/apps/{app_id}/files/upload/chunk")
+async def upload_file_chunk(
+    app_id: int,
+    request: Request,
+    upload_id: str = Form(...),
+    path: str = Form(""),
+    rel_path: str = Form(...),
+    offset: int = Form(...),
+    total: int = Form(...),
+    chunk: UploadFile = File(...),
+):
+    _check_auth(request)
+    _app_or_404(app_id)
+    have = _FAKE_UPLOAD_PARTS.get(upload_id, 0)
+    if offset != 0 and offset != have:
+        raise HTTPException(409, {"message": "Offset mismatch.", "received": have})
+    received = offset + len(await chunk.read())
+    if received >= total:
+        _FAKE_UPLOAD_PARTS.pop(upload_id, None)
+        return {"ok": True, "received": received, "done": True}
+    _FAKE_UPLOAD_PARTS[upload_id] = received
+    return {"ok": True, "received": received, "done": False}
+
+@app.delete("/api/apps/{app_id}/files/upload/{upload_id}")
+async def abort_file_upload(app_id: int, upload_id: str, request: Request):
+    _check_auth(request)
+    _FAKE_UPLOAD_PARTS.pop(upload_id, None)
     return {"ok": True}
 
 # ---------------------------------------------------------------------------
@@ -679,14 +738,14 @@ async def install_package(app_id: int, req: PackageReq, request: Request):
     pkgs = FAKE_PACKAGES.setdefault(app_id, [])
     if not any(p["name"] == req.name for p in pkgs):
         pkgs.append({"name": req.name, "version": "latest"})
-    return {"ok": True}
+    return _job({"ok": True})
 
 @app.delete("/api/apps/{app_id}/packages/{name}")
 async def uninstall_package(app_id: int, name: str, request: Request):
     _check_auth(request)
     _app_or_404(app_id)
     FAKE_PACKAGES[app_id] = [p for p in FAKE_PACKAGES.get(app_id, []) if p["name"] != name]
-    return {"ok": True}
+    return _job({"ok": True})
 
 @app.get("/api/apps/{app_id}/scan-imports")
 async def scan_imports(app_id: int, request: Request):
@@ -809,7 +868,7 @@ def create_backup(request: Request):
         "type": "full",
     }
     FAKE_BACKUPS.insert(0, entry)
-    return {"ok": True, "path": f"backups/{filename}", "size_bytes": entry["size_bytes"]}
+    return _job({"ok": True, "path": f"backups/{filename}", "size_bytes": entry["size_bytes"]})
 
 @app.get("/api/system/backups")
 def list_backups(request: Request):
@@ -852,7 +911,7 @@ def restore_backup(filename: str, req: RestoreBackupReq, request: Request):
     # The emulator has no real files/process to restart — just report success
     # so the UI's restore flow (confirm modal, in-progress overlay, then
     # polling until the server answers again) can be exercised end to end.
-    return {"ok": True, "restarting": True}
+    return _job({"ok": True, "restarting": True})
 
 @app.get("/api/system/settings/{key}")
 def get_system_setting(key: str, request: Request):
