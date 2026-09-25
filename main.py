@@ -5182,6 +5182,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     _print_banner(args.host if args.host != "0.0.0.0" else get_server_ipv4(), args.port)
+    import importlib.util as _ilu
+    if not (_ilu.find_spec("websockets") or _ilu.find_spec("wsproto")):
+        logging.warning(
+            "No WebSocket library installed — the in-browser terminal won't connect. "
+            "Install it with: %s -m pip install 'uvicorn[standard]'", sys.executable)
     if args.host not in ("127.0.0.1", "localhost", "::1") and not SESSION_COOKIE_SECURE:
         logging.warning(
             "Venvy is listening on %s over plain HTTP: passwords and session cookies "

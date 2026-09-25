@@ -48,8 +48,10 @@ APT_PACKAGES = [
     "python3", "python3-venv", "python3-pip", "ca-certificates",
 ]
 # What main.py needs to run (see _REQUIRED at its top) plus psutil for metrics.
+# uvicorn[standard], not plain uvicorn: the plain package has no WebSocket
+# library, so the terminal can't connect.
 PY_PACKAGES = [
-    "fastapi", "uvicorn", "sqlmodel", "aiofiles", "aiohttp",
+    "fastapi", "uvicorn[standard]", "sqlmodel", "aiofiles", "aiohttp",
     "cryptography", "python-multipart", "psutil",
 ]
 
@@ -170,7 +172,7 @@ if [ ! -x "$RUNTIME/bin/python" ] || ! "$RUNTIME/bin/python" -c "import sys" >/d
   $SUDO python3 -m venv "$RUNTIME"
 fi
 echo "[*] Ensuring Python packages..."
-$SUDO "$RUNTIME/bin/pip" install -q --disable-pip-version-check {" ".join(PY_PACKAGES)}
+$SUDO "$RUNTIME/bin/pip" install -q --disable-pip-version-check {" ".join(shlex.quote(p) for p in PY_PACKAGES)}
 
 # ── 4. Stop, back up, swap files in ─────────────────────────────────────────
 if systemctl list-unit-files venvy.service >/dev/null 2>&1 && [ -f /etc/systemd/system/venvy.service ]; then
