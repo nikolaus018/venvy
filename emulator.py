@@ -969,6 +969,149 @@ async def list_cf_zones(request: Request):
     }
 
 # ---------------------------------------------------------------------------
+# GitHub (fake device flow + per-app git state)
+# ---------------------------------------------------------------------------
+
+FAKE_GH_CONNECTED = False
+FAKE_GIT_REPOS: Dict[int, dict] = {}  # app_id -> {branch, remote_url, dirty_count, ahead, behind, last_commit}
+
+class GhClientIdReq(BaseModel):
+    client_id: str
+
+@app.put("/api/system/github/client-id")
+def set_gh_client_id(req: GhClientIdReq, request: Request):
+    _check_auth(request)
+    FAKE_SETTINGS["gh_client_id"] = req.client_id
+    return {"ok": True}
+
+@app.post("/api/system/github/device/start")
+def gh_device_start(request: Request):
+    _check_auth(request)
+    return {
+        "flow_id": secrets.token_hex(8),
+        "user_code": "WXYZ-1234",
+        "verification_uri": "https://github.com/login/device",
+        "expires_in": 900,
+        "interval": 1,
+    }
+
+@app.post("/api/system/github/device/poll")
+def gh_device_poll(request: Request):
+    global FAKE_GH_CONNECTED
+    _check_auth(request)
+    FAKE_GH_CONNECTED = True
+    return {"status": "complete", "username": "octocat", "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4"}
+
+@app.get("/api/system/github/status")
+def gh_status(request: Request):
+    _check_auth(request)
+    if not FAKE_GH_CONNECTED:
+        return {"connected": False, "client_id_set": bool(FAKE_SETTINGS.get("gh_client_id"))}
+    return {"connected": True, "client_id_set": True, "username": "octocat", "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4"}
+
+@app.get("/api/system/github/repos")
+def gh_list_repos(request: Request):
+    _check_auth(request)
+    if not FAKE_GH_CONNECTED:
+        raise HTTPException(400, "Not signed in to GitHub.")
+    return {"repos": [
+        {"full_name": "octocat/Hello-World", "clone_url": "https://github.com/octocat/Hello-World.git", "private": False, "default_branch": "master"},
+        {"full_name": "octocat/Spoon-Knife", "clone_url": "https://github.com/octocat/Spoon-Knife.git", "private": False, "default_branch": "main"},
+        {"full_name": "octocat/private-notes", "clone_url": "https://github.com/octocat/private-notes.git", "private": True, "default_branch": "main"},
+    ]}
+
+@app.post("/api/system/github/disconnect")
+def gh_disconnect(request: Request):
+    global FAKE_GH_CONNECTED
+    _check_auth(request)
+    FAKE_GH_CONNECTED = False
+    return {"ok": True}
+
+def _git_status_for(app_id: int) -> dict:
+    repo = FAKE_GIT_REPOS.get(app_id)
+    if not repo:
+        return {"is_repo": False}
+    return {"is_repo": True, **repo}
+
+@app.get("/api/apps/{app_id}/git/status")
+def git_status(app_id: int, request: Request):
+    _check_auth(request)
+    _app_or_404(app_id)
+    return _git_status_for(app_id)
+
+class GitCloneReq(BaseModel):
+    url: str
+    branch: Optional[str] = None
+
+@app.post("/api/apps/{app_id}/git/clone")
+def git_clone(app_id: int, req: GitCloneReq, request: Request):
+    _check_auth(request)
+    _app_or_404(app_id)
+    if app_id in FAKE_GIT_REPOS:
+        raise HTTPException(400, "This app is already connected to a repository.")
+    FAKE_GIT_REPOS[app_id] = {
+        "branch": req.branch or "main",
+        "remote_url": req.url,
+        "dirty_count": 0, "ahead": 0, "behind": 0,
+        "last_commit": "a1b2c3d Initial commit (2 minutes ago)",
+    }
+    return _job(_git_status_for(app_id))
+
+@app.post("/api/apps/{app_id}/git/fetch")
+def git_fetch(app_id: int, request: Request):
+    _check_auth(request)
+    _app_or_404(app_id)
+    if app_id not in FAKE_GIT_REPOS:
+        raise HTTPException(400, "Not a git repository.")
+    FAKE_GIT_REPOS[app_id]["behind"] = 2
+    return _job(_git_status_for(app_id))
+
+@app.post("/api/apps/{app_id}/git/pull")
+def git_pull(app_id: int, request: Request):
+    _check_auth(request)
+    _app_or_404(app_id)
+    if app_id not in FAKE_GIT_REPOS:
+        raise HTTPException(400, "Not a git repository.")
+    FAKE_GIT_REPOS[app_id]["behind"] = 0
+    return _job(_git_status_for(app_id))
+
+class GitPushReq(BaseModel):
+    force: bool = False
+
+@app.post("/api/apps/{app_id}/git/push")
+def git_push(app_id: int, req: GitPushReq, request: Request):
+    _check_auth(request)
+    _app_or_404(app_id)
+    if app_id not in FAKE_GIT_REPOS:
+        raise HTTPException(400, "Not a git repository.")
+    FAKE_GIT_REPOS[app_id]["ahead"] = 0
+    return _job(_git_status_for(app_id))
+
+class GitCommitReq(BaseModel):
+    message: str
+
+@app.post("/api/apps/{app_id}/git/commit")
+def git_commit(app_id: int, req: GitCommitReq, request: Request):
+    _check_auth(request)
+    _app_or_404(app_id)
+    if app_id not in FAKE_GIT_REPOS:
+        raise HTTPException(400, "Not a git repository.")
+    repo = FAKE_GIT_REPOS[app_id]
+    repo["dirty_count"] = 0
+    repo["ahead"] = repo.get("ahead", 0) + 1
+    repo["last_commit"] = f"e5f6a7b {req.message[:50]} (just now)"
+    return _job(_git_status_for(app_id))
+
+@app.delete("/api/apps/{app_id}/git")
+def git_disconnect(app_id: int, request: Request):
+    _check_auth(request)
+    _app_or_404(app_id)
+    if app_id not in FAKE_GIT_REPOS:
+        raise HTTPException(400, "Not a git repository.")
+    del FAKE_GIT_REPOS[app_id]
+    return {"ok": True}
+
+# ---------------------------------------------------------------------------
 # WebSocket terminal — send fake shell output
 # ---------------------------------------------------------------------------
 

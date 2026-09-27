@@ -2445,8 +2445,109 @@
                             </div>
                         </div>
 
+                        <!-- GitHub -->
+                        <div class="card overflow-hidden">
+                            <div class="px-5 py-4 flex items-center gap-3"
+                                style="border-bottom:1px solid var(--border)">
+                                <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="var(--text)">
+                                    <path fill-rule="evenodd" clip-rule="evenodd"
+                                        d="M12 2C6.48 2 2 6.58 2 12.22C2 16.74 4.87 20.57 8.84 21.92C9.34 22.02 9.5 21.7 9.5 21.42C9.5 21.18 9.49 20.31 9.49 19.39C6.73 20 6.14 18.14 6.14 18.14C5.68 16.94 5.03 16.62 5.03 16.62C4.12 15.98 5.1 16 5.1 16C6.1 16.07 6.63 17.05 6.63 17.05C7.5 18.58 8.97 18.13 9.54 17.88C9.63 17.23 9.89 16.79 10.17 16.54C7.95 16.29 5.62 15.42 5.62 11.5C5.62 10.39 6 9.49 6.65 8.78C6.55 8.53 6.2 7.5 6.75 6.15C6.75 6.15 7.59 5.88 9.48 7.17C10.29 6.95 11.15 6.84 12 6.84C12.85 6.84 13.71 6.95 14.52 7.17C16.41 5.88 17.25 6.15 17.25 6.15C17.8 7.5 17.45 8.53 17.35 8.78C18 9.49 18.38 10.39 18.38 11.5C18.38 15.43 16.04 16.29 13.81 16.54C14.17 16.85 14.49 17.46 14.49 18.39C14.49 19.72 14.48 20.79 14.48 21.42C14.48 21.7 14.64 22.03 15.15 21.92C19.12 20.56 22 16.74 22 12.22C22 6.58 17.52 2 12 2Z" />
+                                </svg>
+                                <div>
+                                    <h3 class="text-sm font-semibold" style="color:var(--text)">GitHub</h3>
+                                    <p class="text-xs mt-0.5" style="color:var(--text3)">Sign in once — clone, pull
+                                        and push per app</p>
+                                </div>
+                                <div id="gh-connected-badge"
+                                    class="ml-auto hidden items-center gap-2 px-2.5 py-1 rounded-full text-xs font-bold"
+                                    style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);color:var(--green)">
+                                    <img id="gh-avatar" src="" class="w-4 h-4 rounded-full hidden">
+                                    <span id="gh-username-label"></span>
+                                </div>
+                            </div>
 
+                            <div class="p-5 space-y-5">
+                                <!-- Signed-out state -->
+                                <div id="gh-signed-out">
+                                    <div class="rounded-xl overflow-hidden mb-4" style="border:1px solid var(--ov-border)">
+                                        <div class="w-full flex items-center gap-2.5 px-4 py-3" style="background:var(--ov-soft)">
+                                            <svg class="w-4 h-4 shrink-0" fill="none" stroke="var(--text)" viewBox="0 0 24 24" stroke-width="2">
+                                                <circle cx="12" cy="12" r="10" />
+                                                <path d="M12 16v-4m0-4h.01" />
+                                            </svg>
+                                            <span class="text-xs font-bold flex-1" style="color:var(--text)">One-time setup — register a free GitHub OAuth App</span>
+                                        </div>
+                                        <div class="p-4 space-y-2 text-xs" style="background:var(--surface2);border-top:1px solid var(--ov-strong);color:var(--text2)">
+                                            <p>Go to <a href="https://github.com/settings/applications/new" target="_blank"
+                                                    class="font-semibold hover:underline" style="color:var(--text)">github.com/settings/applications/new</a>
+                                                and create an OAuth App (any name/homepage URL works — no callback needed).</p>
+                                            <p>Open the app, click <strong style="color:var(--text)">Enable Device Flow</strong>, then paste its
+                                                <strong style="color:var(--text)">Client ID</strong> below.</p>
+                                        </div>
+                                    </div>
 
+                                    <label class="block section-label mb-2">OAuth App Client ID</label>
+                                    <div class="flex gap-3 mb-4">
+                                        <input type="text" id="gh-client-id" placeholder="Iv1.xxxxxxxxxxxxxxxx"
+                                            autocomplete="off" spellcheck="false" class="inp flex-1 px-4 py-2.5 text-xs mono">
+                                        <button onclick="saveGhClientId()" id="gh-client-id-save-btn"
+                                            class="btn-secondary px-4 py-2.5 text-sm shrink-0">Save</button>
+                                    </div>
+
+                                    <button onclick="startGhDeviceFlow()" id="gh-connect-btn"
+                                        class="w-full py-2.5 text-sm font-bold rounded-xl flex items-center justify-center gap-2 transition active:scale-95"
+                                        style="background:#1f2328;color:#fff;">
+                                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                            <path fill-rule="evenodd" clip-rule="evenodd"
+                                                d="M12 2C6.48 2 2 6.58 2 12.22C2 16.74 4.87 20.57 8.84 21.92C9.34 22.02 9.5 21.7 9.5 21.42C9.5 21.18 9.49 20.31 9.49 19.39C6.73 20 6.14 18.14 6.14 18.14C5.68 16.94 5.03 16.62 5.03 16.62C4.12 15.98 5.1 16 5.1 16C6.1 16.07 6.63 17.05 6.63 17.05C7.5 18.58 8.97 18.13 9.54 17.88C9.63 17.23 9.89 16.79 10.17 16.54C7.95 16.29 5.62 15.42 5.62 11.5C5.62 10.39 6 9.49 6.65 8.78C6.55 8.53 6.2 7.5 6.75 6.15C6.75 6.15 7.59 5.88 9.48 7.17C10.29 6.95 11.15 6.84 12 6.84C12.85 6.84 13.71 6.95 14.52 7.17C16.41 5.88 17.25 6.15 17.25 6.15C17.8 7.5 17.45 8.53 17.35 8.78C18 9.49 18.38 10.39 18.38 11.5C18.38 15.43 16.04 16.29 13.81 16.54C14.17 16.85 14.49 17.46 14.49 18.39C14.49 19.72 14.48 20.79 14.48 21.42C14.48 21.7 14.64 22.03 15.15 21.92C19.12 20.56 22 16.74 22 12.22C22 6.58 17.52 2 12 2Z" />
+                                        </svg>
+                                        Connect GitHub
+                                    </button>
+
+                                    <!-- Device flow in progress -->
+                                    <div id="gh-device-panel" class="hidden mt-4 rounded-xl p-4 text-center"
+                                        style="background:var(--surface2);border:1px solid var(--border2)">
+                                        <p class="text-xs font-semibold mb-2" style="color:var(--text2)">Enter this
+                                            code at <a id="gh-device-uri" href="https://github.com/login/device"
+                                                target="_blank" class="hover:underline" style="color:var(--text)">github.com/login/device</a>
+                                        </p>
+                                        <div class="flex items-center justify-center gap-2 mb-2">
+                                            <span id="gh-device-code" class="text-2xl font-black mono tracking-widest"
+                                                style="color:var(--text)">····-····</span>
+                                            <button onclick="copyGhDeviceCode()" title="Copy code"
+                                                class="p-1.5 rounded-lg transition" style="color:var(--text3)">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                                                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                                                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                                                </svg>
+                                            </button>
+                                        </div>
+                                        <p class="text-xs flex items-center justify-center gap-2" style="color:var(--text3)">
+                                            <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M21 12a9 9 0 11-6.219-8.56" />
+                                            </svg>
+                                            Waiting for you to approve in the browser…
+                                        </p>
+                                        <button onclick="cancelGhDeviceFlow()" class="mt-3 text-xs font-semibold hover:underline" style="color:var(--text3)">Cancel</button>
+                                    </div>
+                                </div>
+
+                                <!-- Signed-in state -->
+                                <div id="gh-signed-in" class="hidden">
+                                    <div class="flex items-center gap-3 px-4 py-3 rounded-xl"
+                                        style="background:var(--surface2);border:1px solid var(--border2)">
+                                        <img id="gh-avatar-big" src="" class="w-9 h-9 rounded-full">
+                                        <div class="flex-1 min-w-0">
+                                            <p class="text-sm font-semibold truncate" style="color:var(--text)">Signed in as <span id="gh-username-big"></span></p>
+                                            <p class="text-xs" style="color:var(--text3)">Used to clone, pull and push per-app repositories</p>
+                                        </div>
+                                        <button onclick="disconnectGh()" id="gh-disconnect-btn"
+                                            class="shrink-0 text-xs font-bold px-3 py-2 rounded-xl transition active:scale-95"
+                                            style="background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)">Sign out</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
 
                     </div>
                 </div>
@@ -2517,9 +2618,12 @@
                         <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-packages"
                             aria-controls="tab-packages" aria-selected="false" data-tab="packages" tabindex="-1"
                             title="Packages (4)" onclick="switchTab('packages')">Packages</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-git"
+                            aria-controls="tab-git" aria-selected="false" data-tab="git" tabindex="-1"
+                            title="Git (5)" onclick="switchTab('git')">Git</button>
                         <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-settings"
                             aria-controls="tab-settings" aria-selected="false" data-tab="settings" tabindex="-1"
-                            title="Settings (5)" onclick="switchTab('settings')">Settings</button>
+                            title="Settings (6)" onclick="switchTab('settings')">Settings</button>
                     </div>
 
                     <!-- Save Settings Button (Visible only on Settings tab) — outside scroll so always reachable -->
@@ -2934,6 +3038,98 @@
                                     </tbody>
                                 </table>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- GIT -->
+                    <div id="tab-git"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-2xl mx-auto space-y-5 pb-10">
+
+                            <!-- Not connected: clone form -->
+                            <div id="git-clone-card" class="card p-5 hidden">
+                                <h3 class="text-sm font-semibold mb-1 flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="git-branch" class="w-4 h-4"></i> Connect a repository
+                                </h3>
+                                <p class="text-xs mb-4" style="color:var(--text3)">Clones into this app's directory.
+                                    Existing files (like <code class="mono">logs/</code> or <code class="mono">venv/</code>)
+                                    are left alone unless the repo itself has a file with the same name.</p>
+
+                                <div id="git-gh-hint" class="hidden mb-4 px-3 py-2.5 rounded-xl text-xs flex items-start gap-2"
+                                    style="background:var(--ov-soft);border:1px solid var(--ov-border-soft);color:var(--text2)">
+                                    <i data-feather="info" class="w-3.5 h-3.5 shrink-0 mt-0.5"></i>
+                                    <span>Not signed in to GitHub — only public repositories will clone. <button
+                                            onclick="openSystemView(true)" class="underline font-semibold" style="color:var(--text)">Connect
+                                            in Settings</button></span>
+                                </div>
+
+                                <div id="git-repo-picker" class="hidden mb-4">
+                                    <label class="block section-label mb-2">Your repositories</label>
+                                    <select id="git-repo-select" onchange="onGitRepoPicked()"
+                                        class="inp w-full px-4 py-3 text-sm mono mb-1">
+                                        <option value="">Loading…</option>
+                                    </select>
+                                    <p class="text-xs" style="color:var(--text3)">Or paste any URL below (e.g. a repo you don't own).</p>
+                                </div>
+
+                                <label class="block section-label mb-2">Repository URL</label>
+                                <input type="text" id="git-clone-url" placeholder="https://github.com/owner/repo.git"
+                                    autocomplete="off" spellcheck="false" class="inp w-full px-4 py-3 text-sm mono mb-5">
+
+                                <button onclick="gitClone()" id="git-clone-btn" class="btn-primary w-full py-3 text-sm">Clone into this app</button>
+                            </div>
+
+                            <!-- Connected: status + actions -->
+                            <div id="git-repo-card" class="hidden space-y-5">
+                                <div class="card overflow-hidden">
+                                    <div class="px-5 py-4 flex items-center gap-3" style="border-bottom:1px solid var(--border)">
+                                        <i data-feather="git-branch" class="w-4 h-4" style="color:var(--text)"></i>
+                                        <div class="min-w-0 flex-1">
+                                            <p class="text-sm font-semibold truncate" style="color:var(--text)" id="git-branch-name">—</p>
+                                            <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="git-remote-url">—</p>
+                                        </div>
+                                        <button onclick="loadGitStatus()" title="Refresh" class="shrink-0 p-2 rounded-lg" style="color:var(--text3)">
+                                            <i data-feather="refresh-cw" class="w-3.5 h-3.5"></i>
+                                        </button>
+                                    </div>
+                                    <div class="px-5 py-3 flex flex-wrap items-center gap-2 text-xs" style="background:var(--surface2)">
+                                        <span id="git-ahead-pill" class="hidden px-2 py-1 rounded-full font-bold" style="background:var(--green-dim);color:var(--green);border:1px solid var(--green-border)"></span>
+                                        <span id="git-behind-pill" class="hidden px-2 py-1 rounded-full font-bold" style="background:var(--amber-dim);color:var(--amber);border:1px solid var(--amber-border)"></span>
+                                        <span id="git-dirty-pill" class="hidden px-2 py-1 rounded-full font-bold" style="background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)"></span>
+                                        <span id="git-clean-pill" class="hidden px-2 py-1 rounded-full font-bold" style="background:var(--surface3);color:var(--text3)">Up to date</span>
+                                        <span id="git-last-commit" class="ml-auto mono truncate" style="color:var(--text3)"></span>
+                                    </div>
+                                </div>
+
+                                <div class="card p-5">
+                                    <h3 class="text-sm font-semibold mb-4 flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="download" class="w-4 h-4"></i> Sync
+                                    </h3>
+                                    <div class="grid grid-cols-3 gap-3">
+                                        <button onclick="gitFetch()" id="git-fetch-btn" class="btn-secondary py-2.5 text-sm">Fetch</button>
+                                        <button onclick="gitPull()" id="git-pull-btn" class="btn-secondary py-2.5 text-sm">Pull</button>
+                                        <button onclick="gitPush()" id="git-push-btn" class="btn-secondary py-2.5 text-sm">Push</button>
+                                    </div>
+                                </div>
+
+                                <div class="card p-5">
+                                    <h3 class="text-sm font-semibold mb-4 flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="edit-3" class="w-4 h-4"></i> Commit
+                                    </h3>
+                                    <textarea id="git-commit-msg" rows="2" placeholder="Commit message…"
+                                        class="inp w-full px-4 py-3 text-sm mb-3" style="resize:vertical"></textarea>
+                                    <button onclick="gitCommit()" id="git-commit-btn" class="btn-primary w-full py-2.5 text-sm">Commit all changes</button>
+                                </div>
+
+                                <div class="card p-5">
+                                    <h3 class="text-sm font-semibold mb-1" style="color:var(--text2)">Danger zone</h3>
+                                    <p class="text-xs mb-4" style="color:var(--text3)">Removes the <code class="mono">.git</code> folder only — your files are kept.</p>
+                                    <button onclick="gitDisconnect()" id="git-disconnect-btn"
+                                        class="w-full py-2.5 text-sm font-bold rounded-xl transition active:scale-95"
+                                        style="background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)">Disconnect repository</button>
+                                </div>
+                            </div>
+
                         </div>
                     </div>
 
@@ -5236,6 +5432,10 @@
             _logRaw = ''; _logRenderedKey = ''; _logFollow = true;
             clearLogSearch();
 
+            // Reset the git clone form so a URL typed for one app never carries over.
+            const gitUrlInput = document.getElementById('git-clone-url');
+            if (gitUrlInput) gitUrlInput.value = '';
+
             activeAppId = id;
             if (logInterval) { clearInterval(logInterval); logInterval = null; }
             document.getElementById('system-view').classList.add('hidden');
@@ -7288,7 +7488,7 @@
             if (userTriggered && window.innerWidth < 768) closeSidebar();
             document.title = 'System · Venvy';
             if (userTriggered) syncHash();
-            loadSystemView(); loadCfCredsStatus(); loadBackups();
+            loadSystemView(); loadCfCredsStatus(); loadBackups(); loadGhCardStatus();
         }
         function closeSystemView() {
             document.getElementById('system-view').classList.add('hidden');
@@ -8229,6 +8429,287 @@
             showToast(`Port ${port} copied!`, 'success', 1500);
         }
 
+        // ── GitHub (system-level sign-in) ────────────────────────────────────────
+        let _ghConnected = false;
+        let _ghDevicePollTimer = null;
+        let _ghDeviceFlowId = null;
+
+        async function loadGhCardStatus() {
+            try {
+                const res = await fetch(`${API}/system/github/status`);
+                const data = await res.json();
+                _ghConnected = !!data.connected;
+                const signedOut = document.getElementById('gh-signed-out');
+                const signedIn = document.getElementById('gh-signed-in');
+                const badge = document.getElementById('gh-connected-badge');
+                if (data.connected) {
+                    signedOut.classList.add('hidden');
+                    signedIn.classList.remove('hidden');
+                    document.getElementById('gh-username-big').textContent = data.username || '';
+                    document.getElementById('gh-username-label').textContent = data.username || '';
+                    if (data.avatar_url) {
+                        document.getElementById('gh-avatar-big').src = data.avatar_url;
+                        const av = document.getElementById('gh-avatar');
+                        av.src = data.avatar_url; av.classList.remove('hidden');
+                    }
+                    badge.classList.remove('hidden'); badge.classList.add('flex');
+                } else {
+                    signedOut.classList.remove('hidden');
+                    signedIn.classList.add('hidden');
+                    badge.classList.add('hidden'); badge.classList.remove('flex');
+                    if (data.client_id_set) document.getElementById('gh-client-id').placeholder = 'Saved — paste to replace';
+                }
+            } catch (e) { }
+        }
+
+        async function saveGhClientId() {
+            const input = document.getElementById('gh-client-id');
+            const clientId = input.value.trim();
+            if (!clientId) { showToast('Enter a Client ID first.', 'warn'); return; }
+            const btn = document.getElementById('gh-client-id-save-btn');
+            btn.disabled = true; btn.textContent = 'Saving…';
+            try {
+                const res = await fetch(`${API}/system/github/client-id`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ client_id: clientId }),
+                });
+                if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+                input.value = '';
+                showToast('Client ID saved.', 'success');
+                await loadGhCardStatus();
+            } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
+            finally { btn.disabled = false; btn.textContent = 'Save'; }
+        }
+
+        async function startGhDeviceFlow() {
+            const btn = document.getElementById('gh-connect-btn');
+            btn.disabled = true;
+            try {
+                const res = await fetch(`${API}/system/github/device/start`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                _ghDeviceFlowId = data.flow_id;
+                document.getElementById('gh-device-code').textContent = data.user_code;
+                document.getElementById('gh-device-uri').href = data.verification_uri;
+                document.getElementById('gh-device-uri').textContent = data.verification_uri.replace(/^https?:\/\//, '');
+                document.getElementById('gh-device-panel').classList.remove('hidden');
+                window.open(data.verification_uri, '_blank');
+                _ghPollDevice(Math.max(data.interval || 5, 5) * 1000);
+            } catch (e) {
+                showToast('Could not start GitHub sign-in: ' + e.message, 'error', 6000);
+            } finally { btn.disabled = false; }
+        }
+
+        function _ghPollDevice(intervalMs) {
+            clearTimeout(_ghDevicePollTimer);
+            if (!_ghDeviceFlowId) return;
+            _ghDevicePollTimer = setTimeout(async () => {
+                try {
+                    const res = await fetch(`${API}/system/github/device/poll`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ flow_id: _ghDeviceFlowId }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                    if (data.status === 'complete') {
+                        _ghDeviceFlowId = null;
+                        document.getElementById('gh-device-panel').classList.add('hidden');
+                        showToast(`Signed in to GitHub as ${data.username}`, 'success');
+                        await loadGhCardStatus();
+                        return;
+                    }
+                    _ghPollDevice((data.interval || 5) * 1000);
+                } catch (e) {
+                    _ghDeviceFlowId = null;
+                    document.getElementById('gh-device-panel').classList.add('hidden');
+                    showToast('GitHub sign-in failed: ' + e.message, 'error', 6000);
+                }
+            }, intervalMs);
+        }
+
+        function cancelGhDeviceFlow() {
+            _ghDeviceFlowId = null;
+            clearTimeout(_ghDevicePollTimer);
+            document.getElementById('gh-device-panel').classList.add('hidden');
+        }
+
+        function copyGhDeviceCode() {
+            const code = document.getElementById('gh-device-code').textContent;
+            navigator.clipboard.writeText(code).catch(() => { });
+            showToast('Code copied!', 'success', 1500);
+        }
+
+        async function disconnectGh() {
+            const ok = await confirmDialog({
+                title: 'Sign out of GitHub?',
+                body: 'Apps already cloned keep working, but private repos won\'t fetch/push until you sign in again.',
+                confirmLabel: 'Sign out', danger: true,
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`${API}/system/github/disconnect`, { method: 'POST' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                showToast('Signed out of GitHub.', 'success');
+                await loadGhCardStatus();
+            } catch (e) { showToast('Sign-out failed: ' + e.message, 'error'); }
+        }
+
+        // ── Git (per-app) ─────────────────────────────────────────────────────────
+        let _ghRepoCache = null; // {ts, repos} — shared across apps for the session
+        async function loadGitRepoPicker() {
+            const picker = document.getElementById('git-repo-picker');
+            try {
+                const statusRes = await fetch(`${API}/system/github/status`);
+                const status = await statusRes.json();
+                _ghConnected = !!status.connected;
+            } catch (e) { }
+            document.getElementById('git-gh-hint').classList.toggle('hidden', _ghConnected);
+            if (!_ghConnected) { picker.classList.add('hidden'); return; }
+            picker.classList.remove('hidden');
+            const select = document.getElementById('git-repo-select');
+            try {
+                if (!_ghRepoCache || Date.now() - _ghRepoCache.ts > 60000) {
+                    const res = await fetch(`${API}/system/github/repos`);
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                    _ghRepoCache = { ts: Date.now(), repos: data.repos || [] };
+                }
+                const repos = _ghRepoCache.repos;
+                select.innerHTML = '<option value="">Choose a repository…</option>' + repos.map(r =>
+                    `<option value="${escapeHtml(r.clone_url)}" data-branch="${escapeHtml(r.default_branch)}">${escapeHtml(r.full_name)}${r.private ? ' 🔒' : ''}</option>`
+                ).join('');
+            } catch (e) {
+                select.innerHTML = '<option value="">Could not load repos</option>';
+            }
+        }
+        function onGitRepoPicked() {
+            const select = document.getElementById('git-repo-select');
+            const opt = select.options[select.selectedIndex];
+            if (!opt || !opt.value) return;
+            document.getElementById('git-clone-url').value = opt.value;
+        }
+
+        async function loadGitStatus() {
+            if (!activeAppId) return;
+            loadGitRepoPicker();
+            try {
+                const res = await fetch(`${API}/apps/${activeAppId}/git/status`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                document.getElementById('git-clone-card').classList.toggle('hidden', data.is_repo);
+                document.getElementById('git-repo-card').classList.toggle('hidden', !data.is_repo);
+                if (!data.is_repo) return;
+
+                document.getElementById('git-branch-name').textContent = data.branch || '(detached)';
+                document.getElementById('git-remote-url').textContent = data.remote_url || 'no remote';
+                document.getElementById('git-last-commit').textContent = data.last_commit || '';
+
+                const aheadPill = document.getElementById('git-ahead-pill');
+                const behindPill = document.getElementById('git-behind-pill');
+                const dirtyPill = document.getElementById('git-dirty-pill');
+                const cleanPill = document.getElementById('git-clean-pill');
+                aheadPill.classList.toggle('hidden', !data.ahead);
+                if (data.ahead) aheadPill.textContent = `↑ ${data.ahead} ahead`;
+                behindPill.classList.toggle('hidden', !data.behind);
+                if (data.behind) behindPill.textContent = `↓ ${data.behind} behind`;
+                dirtyPill.classList.toggle('hidden', !data.dirty_count);
+                if (data.dirty_count) dirtyPill.textContent = `${data.dirty_count} uncommitted`;
+                cleanPill.classList.toggle('hidden', !!(data.ahead || data.behind || data.dirty_count));
+            } catch (e) {
+                showToast('Could not load git status: ' + e.message, 'error');
+            }
+        }
+
+        async function gitClone() {
+            const url = document.getElementById('git-clone-url').value.trim();
+            if (!url) { showToast('Enter a repository URL.', 'warn'); return; }
+            const btn = document.getElementById('git-clone-btn');
+            btn.disabled = true; btn.textContent = 'Cloning…';
+            try {
+                const res = await fetch(`${API}/apps/${activeAppId}/git/clone`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url }),
+                });
+                await waitForJob(res);
+                showToast('Repository connected.', 'success');
+                await loadGitStatus();
+            } catch (e) { showToast('Clone failed: ' + e.message, 'error', 6000); }
+            finally { btn.disabled = false; btn.textContent = 'Clone into this app'; }
+        }
+
+        async function gitFetch() {
+            const btn = document.getElementById('git-fetch-btn');
+            btn.disabled = true; btn.textContent = 'Fetching…';
+            try {
+                const res = await fetch(`${API}/apps/${activeAppId}/git/fetch`, { method: 'POST' });
+                await waitForJob(res);
+                showToast('Fetched.', 'success');
+                await loadGitStatus();
+            } catch (e) { showToast('Fetch failed: ' + e.message, 'error', 6000); }
+            finally { btn.disabled = false; btn.textContent = 'Fetch'; }
+        }
+
+        async function gitPull() {
+            const btn = document.getElementById('git-pull-btn');
+            btn.disabled = true; btn.textContent = 'Pulling…';
+            try {
+                const res = await fetch(`${API}/apps/${activeAppId}/git/pull`, { method: 'POST' });
+                await waitForJob(res);
+                showToast('Pulled latest changes.', 'success');
+                await loadGitStatus();
+            } catch (e) { showToast('Pull failed: ' + e.message, 'error', 6000); }
+            finally { btn.disabled = false; btn.textContent = 'Pull'; }
+        }
+
+        async function gitPush() {
+            const btn = document.getElementById('git-push-btn');
+            btn.disabled = true; btn.textContent = 'Pushing…';
+            try {
+                const res = await fetch(`${API}/apps/${activeAppId}/git/push`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force: false }),
+                });
+                await waitForJob(res);
+                showToast('Pushed.', 'success');
+                await loadGitStatus();
+            } catch (e) { showToast('Push failed: ' + e.message, 'error', 6000); }
+            finally { btn.disabled = false; btn.textContent = 'Push'; }
+        }
+
+        async function gitCommit() {
+            const input = document.getElementById('git-commit-msg');
+            const message = input.value.trim();
+            if (!message) { showToast('Enter a commit message.', 'warn'); return; }
+            const btn = document.getElementById('git-commit-btn');
+            btn.disabled = true; btn.textContent = 'Committing…';
+            try {
+                const res = await fetch(`${API}/apps/${activeAppId}/git/commit`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message }),
+                });
+                await waitForJob(res);
+                input.value = '';
+                showToast('Committed.', 'success');
+                await loadGitStatus();
+            } catch (e) { showToast('Commit failed: ' + e.message, 'error', 6000); }
+            finally { btn.disabled = false; btn.textContent = 'Commit all changes'; }
+        }
+
+        async function gitDisconnect() {
+            const ok = await confirmDialog({
+                title: 'Disconnect this repository?',
+                body: 'The .git folder is removed but your files stay.',
+                confirmLabel: 'Disconnect', danger: true,
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`${API}/apps/${activeAppId}/git`, { method: 'DELETE' });
+                if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+                showToast('Repository disconnected.', 'success');
+                await loadGitStatus();
+            } catch (e) { showToast('Disconnect failed: ' + e.message, 'error'); }
+        }
+
         // ── Settings ──────────────────────────────────────────────────────────────
         // ── Resource-limit sliders ───────────────────────────────────────────────
         // The backend stores memory as MB and CPU as a systemd-style percent
@@ -8700,7 +9181,7 @@
         }
 
         // ── Tab Switching ─────────────────────────────────────────────────────────
-        const TABS = ['terminal', 'files', 'logs', 'packages', 'settings'];
+        const TABS = ['terminal', 'files', 'logs', 'packages', 'git', 'settings'];
         let currentTab = 'terminal';
 
         function switchTab(tab, opts = {}) {
@@ -8738,6 +9219,7 @@
             else if (tab === 'logs') loadLogs();
             if (tab === 'files') loadFiles(currentBrowserPath);
             if (tab === 'packages') loadPackages();
+            if (tab === 'git') loadGitStatus();
             if (tab === 'terminal' && window.term && window.fitAddon) setTimeout(_termFit, 100);
             if (tab === 'settings') {
                 loadCfRouteStatus();
@@ -9420,7 +9902,8 @@
                     [['2'], 'Files'],
                     [['3'], 'Logs'],
                     [['4'], 'Packages'],
-                    [['5'], 'Settings'],
+                    [['5'], 'Git'],
+                    [['6'], 'Settings'],
                     [['['], 'Previous application'],
                     [[']'], 'Next application'],
                     [['←', '→'], 'Move between tabs (when a tab is focused)'],
@@ -9498,7 +9981,7 @@
                         document.getElementById('app-search')?.focus();
                     }
                     return;
-                case '1': case '2': case '3': case '4': case '5':
+                case '1': case '2': case '3': case '4': case '5': case '6':
                     if (!activeAppId) return;
                     e.preventDefault(); switchTab(TABS[Number(e.key) - 1]); return;
                 case '[': case ']':
