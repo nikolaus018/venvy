@@ -109,6 +109,17 @@ from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 # venvy imports
+from venvy.uploads import (
+    _SINGLE_REQUEST_UPLOAD_MAX,
+    _UPLOAD_CHUNK_MAX,
+    _UPLOAD_FILE_MAX,
+    _UPLOAD_STALE_SEC,
+    _UPLOAD_ID_RE,
+    _UPLOAD_COPY_BUF,
+    _save_upload_file,
+    _purge_stale_upload_parts,
+    _upload_part_path,
+)
 from venvy.github import (
     _GH_DEVICE_CODE_URL,
     _GH_TOKEN_URL,
@@ -1174,56 +1185,6 @@ async def restore_backup(
     session.close()
     set_restore_in_progress(True)
     return _start_job(admin, "restore", lambda: _restore_job(admin, archive_path))
-
-
-# Uploads. The UI sends every file through the chunked endpoints below, so
-# neither a proxy's request-body cap (Cloudflare: 100 MB) nor the multipart
-# parser's per-request file-count limit applies. The single-request endpoints
-# (/apps/upload with files, /files/upload) remain for API clients.
-_SINGLE_REQUEST_UPLOAD_MAX = 50 * 1024 * 1024
-_UPLOAD_CHUNK_MAX = 16 * 1024 * 1024
-_UPLOAD_FILE_MAX = int(os.getenv("VENVY_MAX_UPLOAD_MB", "10240")) * 1024 * 1024
-_UPLOAD_STALE_SEC = 24 * 3600
-_UPLOAD_ID_RE = re.compile(r"[0-9a-f]{32}")
-_UPLOAD_COPY_BUF = 1024 * 1024
-
-
-def _save_upload_file(file: UploadFile, dest: Path, limit: int) -> bool:
-    """Stream *file* to *dest* without holding it in memory. Returns False (and
-    removes the partial file) if it is larger than *limit* bytes."""
-    written = 0
-    file.file.seek(0)
-    with open(dest, "wb") as out:
-        while True:
-            buf = file.file.read(_UPLOAD_COPY_BUF)
-            if not buf:
-                break
-            written += len(buf)
-            if written > limit:
-                out.close()
-                dest.unlink(missing_ok=True)
-                return False
-            out.write(buf)
-    return True
-
-
-def _purge_stale_upload_parts() -> None:
-    cutoff = time.time() - _UPLOAD_STALE_SEC
-    try:
-        for part in _UPLOAD_TMP_DIR.glob("*.part"):
-            try:
-                if part.stat().st_mtime < cutoff:
-                    part.unlink()
-            except OSError:
-                pass
-    except OSError:
-        pass
-
-
-def _upload_part_path(app_id: int, user_id: int, upload_id: str) -> Path:
-    if not _UPLOAD_ID_RE.fullmatch(upload_id):
-        raise HTTPException(400, "Invalid upload_id.")
-    return _UPLOAD_TMP_DIR / f"{app_id}-{user_id}-{upload_id}.part"
 
 
 @api_router.post("/apps/upload")
