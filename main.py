@@ -2492,7 +2492,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
             "https://cdn.jsdelivr.net; "
             "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data: blob:; "
+            "img-src 'self' data: blob: https://avatars.githubusercontent.com; "
             "connect-src 'self' ws: wss: "
             "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
             "worker-src blob:; "
