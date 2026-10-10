@@ -4844,7 +4844,14 @@
                 submitBtn.disabled = false; submitBtn.textContent = origText;
             }
         };
-        async function logout() { await fetch(`${API}/auth/logout`, { method: 'POST' }); setAuthKey(null); window.location.reload(); }
+        async function logout() {
+            // Drop the local key even if the request fails (offline, server
+            // down): otherwise "Sign out" threw, did nothing, and left the
+            // browser signed in.
+            try { await fetch(`${API}/auth/logout`, { method: 'POST' }); }
+            catch (e) { }
+            finally { setAuthKey(null); window.location.reload(); }
+        }
 
         // ── Login / TOTP step ─────────────────────────────────────────────────────
 
