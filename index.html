@@ -6405,8 +6405,12 @@
             const restorePrev = () => { filenameEl.innerText = prevName; filenameEl.dataset.path = prevPath || ''; _openFilePath = prevOpen; };
             filenameEl.innerText = 'Loading…'; filenameEl.dataset.path = ''; _openFilePath = null;
             const ctrl = new AbortController();
-            const res = await fetch(`${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(path)}`, { signal: ctrl.signal });
-            if (!res.ok) { showToast("File not found or unreadable", 'error'); filenameEl.innerText = 'Error'; return; }
+            // On any failure put the header back the way it was: the editor
+            // still holds the previous file, and it must stay saveable.
+            let res;
+            try { res = await fetch(`${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(path)}`, { signal: ctrl.signal }); }
+            catch (e) { restorePrev(); showToast('Network error opening file.', 'error'); return; }
+            if (!res.ok) { restorePrev(); showToast("File not found or unreadable", 'error'); return; }
             // Don't pull huge files into the editor — Ace freezes the tab on them.
             const size = parseInt(res.headers.get('content-length') || '0', 10);
             if (size > EDITOR_MAX_BYTES) {
@@ -6414,7 +6418,9 @@
                 _offerDownloadInstead(path, name, `${name} is ${formatBytes(size)} — too large to open in the editor.`);
                 return;
             }
-            const buf = new Uint8Array(await res.arrayBuffer());
+            let buf;
+            try { buf = new Uint8Array(await res.arrayBuffer()); }
+            catch (e) { restorePrev(); showToast('Network error opening file.', 'error'); return; }
             // A NUL byte in the first 8 KB is the usual "this is binary" heuristic.
             if (buf.subarray(0, 8192).includes(0)) {
                 restorePrev();
