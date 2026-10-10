@@ -20,6 +20,7 @@ The package is laid out by concern, lowest layer first:
     github      GitHub sign-in state and git helpers
     uploads     upload limits and chunk temp files
     startup     host tool checks run at boot
+    webui       assembles the HTML document from web/index.html + web/partials/
     api/        HTTP route handlers, one router per resource:
                 auth, users, apps, files, system, cloudflare, github, terminal
     app         the FastAPI application: lifespan, middleware, static routes

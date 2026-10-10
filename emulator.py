@@ -312,7 +312,9 @@ def serve_service_worker():
 async def serve_spa():
     html = WEB_DIR / "index.html"
     if html.exists():
-        return FileResponse(html)
+        from fastapi.responses import HTMLResponse
+        from venvy.webui import render_index   # stdlib-only; expands web/partials includes
+        return HTMLResponse(render_index(WEB_DIR))
     return PlainTextResponse("web/index.html not found next to emulator.py.", status_code=404)
 
 # ---------------------------------------------------------------------------

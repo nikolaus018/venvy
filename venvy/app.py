@@ -12,7 +12,7 @@ from typing import Dict, Set
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from sqlmodel import select, Session
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
@@ -37,6 +37,7 @@ from venvy.process import (
     supervisor_task,
 )
 from venvy.startup import _ensure_python3_venv, _ensure_rust
+from venvy.webui import render_index
 from venvy.api import apps as api_apps
 from venvy.api import auth as api_auth
 from venvy.api import cloudflare as api_cloudflare
@@ -309,8 +310,9 @@ async def serve_service_worker():
 
 
 @app.get("/")
-async def serve_spa():
-    html = WEB_DIR / "index.html"
-    if html.exists():
-        return FileResponse(html)
-    return PlainTextResponse("Frontend not found.", status_code=404)
+def serve_spa():
+    if not (WEB_DIR / "index.html").exists():
+        return PlainTextResponse("Frontend not found.", status_code=404)
+    # Assembled per request from web/index.html and web/partials/ (a few
+    # dozen small local reads), so edits show up on reload without a restart.
+    return HTMLResponse(render_index(WEB_DIR))
