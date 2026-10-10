@@ -76,7 +76,7 @@ def _print_banner(host: str, port: int):
     ╚██╗ ██╔╝██╔══╝  ██║╚██╗██║╚██╗ ██╔╝  ╚██╔╝  
      ╚████╔╝ ███████╗██║ ╚████║ ╚████╔╝    ██║   
       ╚═══╝  ╚══════╝╚═╝  ╚═══╝  ╚═══╝     ╚═╝   {reset}
-    {gray}Premium Application Manager — v4.1.0{reset}
+    {gray}Premium Application Manager — v4.1.1{reset}
     
     {indigo}➜{reset}  {bold}Local:{reset}    http://127.0.0.1:{port}
     {indigo}➜{reset}  {bold}Network:{reset}  http://{host}:{port}

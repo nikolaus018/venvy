@@ -6,6 +6,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml"><img src="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/nikolaus018/venvy/releases/latest"><img src="https://img.shields.io/github/v/release/nikolaus018/venvy" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/nikolaus018/venvy" alt="MIT license"></a>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/terminal.png" alt="Venvy dashboard with the in-browser terminal" width="900">
 </p>
 
@@ -160,12 +166,16 @@ tests/run_all.sh
 Pushing a `v*` tag runs the smoke test and publishes `venvy.tar.gz`, its SHA-256 and
 `install.sh` as a GitHub release, which is what the install command downloads.
 
+CI runs on every push: the full suite on Ubuntu, and the installer itself on a real host in
+both modes — fresh install, checks against the running service, update, automatic rollback of
+a release that does not start, rejection of a bad checksum, and uninstall.
+
 ## Status
 
-Venvy is a personal project that I run on my own servers. The test suite runs on macOS and,
-for releases, on Linux in CI. Two things have less coverage than the rest and are worth knowing
-before you depend on them: per-app-user mode (`--app-users`) and resource limits via systemd
-scopes both need root on a real Linux host, which the automated suite does not exercise.
+Venvy is a personal project that I run on my own servers. Everything described above is
+covered by the automated suite, including per-app-user mode and systemd resource limits, which
+CI exercises as root on a real Ubuntu host. Debian 12+ and Ubuntu 22.04+ are the supported
+targets; a frozen single-binary build is not.
 
 ## License
 
