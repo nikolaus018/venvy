@@ -1,0 +1,25 @@
+    <!-- Tunnel Hostname Conflict Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="tunnel-conflict-modal-title" id="tunnel-conflict-modal"
+        class="fixed inset-0 z-[97] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:var(--surface3);border:1px solid var(--border3)">
+                    <svg class="w-5 h-5" fill="none" stroke="var(--yellow)" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" id="tunnel-conflict-modal-title" style="color:var(--text)">Hostname Already In Use</h2>
+                    <p class="text-xs" style="color:var(--text3)">Publishing will overwrite the existing route</p>
+                </div>
+            </div>
+            <p id="tunnel-conflict-msg" class="text-sm mb-6 leading-relaxed" style="color:var(--text2)"></p>
+            <div class="flex gap-3">
+                <button onclick="closeModal('tunnel-conflict-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmPublishOverwrite()" class="btn-warning flex-1 py-2.5 text-sm">Overwrite</button>
+            </div>
+        </div>
+    </div>

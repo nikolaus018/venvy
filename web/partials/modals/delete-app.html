@@ -1,0 +1,30 @@
+    <!-- Delete App Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="delete-app-modal-title" id="delete-app-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2)">
+                    <i data-feather="trash-2" class="w-5 h-5" style="color:var(--red)"></i>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" id="delete-app-modal-title" style="color:var(--text)">Delete
+                        Application</h2>
+                    <p class="text-xs" style="color:var(--text3)">This action cannot be undone</p>
+                </div>
+            </div>
+            <p class="text-sm mb-4" style="color:var(--text2)">All files, packages, and logs for <strong
+                    id="delete-app-name" style="color:var(--text)"></strong> will be permanently deleted.</p>
+            <label for="delete-app-confirm-input" class="block text-xs mb-2" style="color:var(--text3)">
+                Type <strong class="mono" id="delete-app-confirm-hint" style="color:var(--text2)"></strong> to confirm
+            </label>
+            <input type="text" id="delete-app-confirm-input" autocomplete="off" spellcheck="false"
+                class="inp w-full px-3.5 py-2.5 text-sm mono mb-5" placeholder="Application name"
+                oninput="onDeleteAppConfirmInput()" onkeydown="if(event.key==='Enter')confirmDeleteApp()">
+            <div class="flex gap-3">
+                <button onclick="closeModal('delete-app-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmDeleteApp()" id="delete-app-confirm-btn" disabled
+                    class="btn-danger-solid flex-1 py-2.5 text-sm disabled:opacity-40">Delete</button>
+            </div>
+        </div>
+    </div>

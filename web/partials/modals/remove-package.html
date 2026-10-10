@@ -1,0 +1,22 @@
+    <!-- Remove Package Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="remove-pkg-modal-title" id="remove-pkg-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2)">
+                    <i data-feather="package" class="w-5 h-5" style="color:var(--red)"></i>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" id="remove-pkg-modal-title" style="color:var(--text)">Remove Package</h2>
+                    <p class="text-xs" style="color:var(--text3)">Will be uninstalled from the app's venv</p>
+                </div>
+            </div>
+            <p class="text-sm mb-6" style="color:var(--text2)">Remove <strong id="remove-pkg-name" class="mono"
+                    style="color:var(--text)"></strong>?</p>
+            <div class="flex gap-3">
+                <button onclick="closeModal('remove-pkg-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmRemovePackage()" class="btn-danger-solid flex-1 py-2.5 text-sm">Remove</button>
+            </div>
+        </div>
+    </div>

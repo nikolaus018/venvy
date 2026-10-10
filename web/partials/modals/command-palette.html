@@ -1,0 +1,25 @@
+    <!-- ── Command Palette ──────────────────────────────────────────────────── -->
+    <div id="command-palette" role="dialog" aria-modal="true" aria-label="Command palette"
+        class="fixed inset-0 z-[99] modal-overlay hidden flex justify-center p-4">
+        <div class="palette-panel">
+            <div class="flex items-center gap-2.5 px-4 shrink-0" style="border-bottom:1px solid var(--border2)">
+                <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2">
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="M21 21l-4.35-4.35" stroke-linecap="round" />
+                </svg>
+                <input type="text" id="palette-input" placeholder="Search apps and commands…" autocomplete="off"
+                    spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-results"
+                    aria-autocomplete="list"
+                    class="flex-1 bg-transparent border-none outline-none py-3.5 text-sm font-medium"
+                    style="color:var(--text)">
+                <span class="kbd shrink-0">Esc</span>
+            </div>
+            <div id="palette-results" role="listbox" aria-label="Results" class="flex-1 overflow-y-auto py-1.5"></div>
+            <div class="px-4 py-2 flex items-center gap-3 text-[10.5px] shrink-0"
+                style="border-top:1px solid var(--border2);color:var(--text3)">
+                <span class="flex items-center gap-1"><span class="kbd">↑</span><span class="kbd">↓</span> navigate</span>
+                <span class="flex items-center gap-1"><span class="kbd">↵</span> open</span>
+                <span class="ml-auto flex items-center gap-1"><span class="kbd">?</span> shortcuts</span>
+            </div>
+        </div>
+    </div>

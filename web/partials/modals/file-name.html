@@ -1,0 +1,13 @@
+    <!-- File Name Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="file-name-modal-title" id="file-name-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <h2 class="text-base font-bold mb-4" id="file-name-modal-title" style="color:var(--text)">New File</h2>
+            <input type="text" id="file-name-input" class="inp w-full px-4 py-3 text-sm mb-5" placeholder="filename.py">
+            <div class="flex gap-3">
+                <button onclick="closeModal('file-name-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
+                <button onclick="confirmFileNameOp()" id="file-name-confirm-btn"
+                    class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Create</button>
+            </div>
+        </div>
+    </div>

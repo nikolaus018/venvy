@@ -1,0 +1,55 @@
+    <!-- Create App Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="create-app-modal-title" id="create-app-modal"
+        class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-0 md:p-4">
+        <div class="modal-panel-sheet md:modal-panel p-5 w-full max-w-lg shadow-lg max-h-[92vh] flex flex-col">
+            <div class="flex justify-between items-center mb-5 shrink-0">
+                <h2 class="text-lg font-bold" id="create-app-modal-title" style="color:var(--text)">New Application</h2>
+                <button onclick="closeModal('create-app-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
+                        data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <form id="create-form" class="space-y-4 overflow-y-auto flex-1 pb-2" style="touch-action: pan-y;">
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="col-span-2">
+                        <label class="block section-label mb-2">App Name</label>
+                        <input type="text" name="name" required class="inp w-full px-4 py-3 text-sm">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block section-label mb-2">Runtime</label>
+                        <select name="runtime" class="inp w-full px-4 py-3 text-sm"
+                            onchange="onRuntimeChange('create')">
+                            <option value="python">Python</option>
+                            <option value="rust">Rust</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block section-label mb-2">Entrypoint <span class="font-normal normal-case"
+                            style="color:var(--text3)">(e.g. main.py)</span></label>
+                    <input type="text" name="entrypoint" class="inp w-full px-4 py-3 text-sm mono"
+                        placeholder="main.py">
+                </div>
+                <div id="create-app-dropzone" class="relative group mt-1">
+                    <label class="block section-label mb-2">Source Files or Folders <span
+                            class="font-normal normal-case" style="color:var(--text3)">(drag & drop here, or click to
+                            browse)</span></label>
+                    <div id="create-app-drop-area"
+                        class="relative flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-xl transition-colors cursor-pointer"
+                        style="border-color:var(--border);background:var(--surface2)">
+                        <input id="create-app-file-input" type="file" name="files" multiple
+                            class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                        <div class="flex flex-col items-center pointer-events-none text-center">
+                            <i data-feather="upload-cloud" class="w-6 h-6 mb-2" style="color:var(--text3)"></i>
+                            <span class="text-sm font-medium" style="color:var(--text2)" id="create-app-files-text">Drop
+                                files/folders here<br><span class="text-xs" style="color:var(--text3)">or click to
+                                    browse</span></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex gap-3 pt-2">
+                    <button type="button" onclick="closeModal('create-app-modal')"
+                        class="btn-ghost flex-1 py-3 text-sm font-semibold rounded-xl">Cancel</button>
+                    <button type="submit" class="btn-primary flex-1 py-3 text-sm rounded-xl">Create App</button>
+                </div>
+            </form>
+        </div>
+    </div>

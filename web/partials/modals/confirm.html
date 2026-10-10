@@ -1,0 +1,23 @@
+    <!-- ══════════ JAVASCRIPT (all original logic preserved) ══════════ -->
+    <!-- ── Generic Confirm Modal (replaces native confirm()) ───────────────── -->
+    <div id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title"
+        class="fixed inset-0 z-[98] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" id="confirm-modal-icon">
+                </div>
+                <div class="min-w-0">
+                    <h2 class="text-base font-bold" id="confirm-modal-title" style="color:var(--text)">Are you sure?
+                    </h2>
+                    <p class="text-xs" id="confirm-modal-sub" style="color:var(--text3)"></p>
+                </div>
+            </div>
+            <p class="text-sm mb-6" id="confirm-modal-body" style="color:var(--text2)"></p>
+            <div class="flex gap-3">
+                <button onclick="_confirmResolve(false)" id="confirm-modal-cancel"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="_confirmResolve(true)" id="confirm-modal-ok"
+                    class="flex-1 py-2.5 text-sm rounded-lg">Confirm</button>
+            </div>
+        </div>
+    </div>

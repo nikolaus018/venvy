@@ -1,0 +1,18 @@
+    <!-- Upload Progress Modal/Toast -->
+    <div id="upload-progress-container"
+        class="fixed bottom-4 right-4 z-[100] w-80 rounded-xl shadow-lg p-4 hidden transition-transform translate-y-full"
+        style="background:var(--surface);border:1px solid var(--border)">
+        <div class="flex items-center justify-between mb-2">
+            <span id="upload-progress-title" class="text-sm font-bold" style="color:var(--text)">Uploading...</span>
+            <button id="upload-progress-cancel" class="text-xs px-2 py-1 rounded transition hover:bg-neutral-800"
+                style="color:var(--red)">Cancel</button>
+        </div>
+        <div class="w-full h-1.5 rounded-full overflow-hidden mb-2" style="background:var(--surface2)">
+            <div id="upload-progress-bar" class="h-full transition duration-200"
+                style="background:var(--accent); width:0%"></div>
+        </div>
+        <div class="flex items-center justify-between text-[10px] mono" style="color:var(--text3)">
+            <span id="upload-progress-stats">0% (0 / 0 MB)</span>
+            <span id="upload-progress-speed-time">0 MB/s • 0s left</span>
+        </div>
+    </div>

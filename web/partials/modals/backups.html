@@ -1,0 +1,83 @@
+    <!-- Backups Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="backups-modal-title" id="backups-modal"
+        class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0">
+        <div class="modal-panel p-5 w-full max-w-lg shadow-lg h-[80vh] md:h-[560px] flex flex-col">
+            <div class="flex justify-between items-center mb-2 shrink-0">
+                <h2 class="text-lg font-bold" id="backups-modal-title" style="color:var(--text)">Backups
+                </h2>
+                <button onclick="closeModal('backups-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
+                        data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <p class="text-xs mb-4 leading-relaxed shrink-0" style="color:var(--text3)">
+                Each backup bundles everything — the database, every app's code and venv, and the encryption key —
+                into one file. Safe to create while Venvy is running. Restore rolls this server back to a backup
+                in place; nothing here ever requires touching the server's filesystem directly.
+            </p>
+            <button onclick="createBackup(this)" id="btn-create-backup"
+                class="btn-primary shrink-0 w-full flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-xl mb-4">
+                <i data-feather="plus" class="w-4 h-4"></i> Create Backup
+            </button>
+            <div id="sys-backups-list" class="flex-1 overflow-y-auto space-y-2 min-h-0">
+                <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Restore Backup Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="restore-backup-modal-title" id="restore-backup-modal"
+        class="fixed inset-0 z-[97] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2)">
+                    <svg class="w-5 h-5" fill="none" stroke="var(--red)" viewBox="0 0 24 24" stroke-width="2">
+                        <polyline points="1 4 1 10 7 10" />
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                    </svg>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" id="restore-backup-modal-title" style="color:var(--text)">Restore
+                        This Backup?</h2>
+                    <p class="text-xs" style="color:var(--text3)">Replaces everything on this server</p>
+                </div>
+            </div>
+            <p class="text-sm mb-3" style="color:var(--text2)">
+                <strong id="restore-backup-filename" class="mono" style="color:var(--text)"></strong> will replace
+                the current database, every app's files, and the encryption key. Every running app is stopped
+                first, and Venvy restarts automatically once this finishes.
+            </p>
+            <p class="text-xs mb-4" style="color:var(--text3)">
+                The current state is backed up automatically right before this runs, so the restore itself can be
+                undone — but treat this as a real rollback, not a preview.
+            </p>
+            <label for="restore-backup-confirm-input" class="block text-xs mb-2" style="color:var(--text3)">
+                Type <strong class="mono" style="color:var(--text2)">RESTORE</strong> to confirm
+            </label>
+            <input type="text" id="restore-backup-confirm-input" autocomplete="off" spellcheck="false"
+                class="inp w-full px-3.5 py-2.5 text-sm mono mb-5" placeholder="RESTORE"
+                oninput="onRestoreConfirmInput()" onkeydown="if(event.key==='Enter')confirmRestoreBackup()">
+            <div class="flex gap-3">
+                <button onclick="closeModal('restore-backup-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmRestoreBackup()" id="restore-backup-confirm-btn" disabled
+                    class="btn-danger-solid flex-1 py-2.5 text-sm disabled:opacity-40">Restore &amp; Restart</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Restore In Progress Overlay -->
+    <div id="restore-progress-overlay"
+        class="hidden fixed inset-0 z-[999] flex-col items-center justify-center text-center px-6"
+        style="background:var(--bg)">
+        <div class="w-16 h-16 rounded-2xl flex items-center justify-center mb-6"
+            style="background:var(--ov-soft);border:1px solid var(--ov-border)">
+            <svg class="w-7 h-7 animate-spin" fill="none" stroke="var(--accent)" viewBox="0 0 24 24"
+                stroke-width="2">
+                <polyline points="1 4 1 10 7 10" />
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+            </svg>
+        </div>
+        <h2 class="text-xl font-bold mb-2" style="color:var(--text)">Restoring backup…</h2>
+        <p class="text-sm max-w-sm" id="restore-progress-text" style="color:var(--text3)">Venvy is restarting. This
+            page will reload automatically once it's back.</p>
+    </div>

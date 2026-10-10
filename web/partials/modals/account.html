@@ -1,0 +1,206 @@
+    <!-- Change Password Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="change-pwd-modal-title" id="change-pwd-modal" class="fixed inset-0 z-[90] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg space-y-4">
+            <div>
+                <h2 class="text-base font-bold" id="change-pwd-modal-title" style="color:var(--text)">Change Password</h2>
+                <p class="text-xs mt-1" style="color:var(--text3)">Enter your current password, then choose a new one.
+                </p>
+            </div>
+            <div class="space-y-3">
+                <div>
+                    <label class="block section-label mb-1.5">Current password</label>
+                    <input type="password" id="current-pwd-input" placeholder="Current password"
+                        autocomplete="current-password" class="inp w-full px-4 py-2.5 text-sm"
+                        onkeydown="if(event.key==='Enter')document.getElementById('new-pwd-input').focus()">
+                </div>
+                <div>
+                    <label class="block section-label mb-1.5">New password</label>
+                    <input type="password" id="new-pwd-input" placeholder="New password" autocomplete="new-password"
+                        class="inp w-full px-4 py-2.5 text-sm"
+                        onkeydown="if(event.key==='Enter')document.getElementById('confirm-pwd-input').focus()">
+                </div>
+                <div>
+                    <label class="block section-label mb-1.5">Confirm new password</label>
+                    <input type="password" id="confirm-pwd-input" placeholder="Repeat new password"
+                        autocomplete="new-password" class="inp w-full px-4 py-2.5 text-sm"
+                        onkeydown="if(event.key==='Enter')changePassword()">
+                </div>
+                <div id="pwd-match-hint" class="hidden text-xs px-3 py-2 rounded-lg"
+                    style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)">
+                    Passwords
+                    do not match.</div>
+            </div>
+            <div class="flex gap-3 pt-1">
+                <button onclick="closeModal('change-pwd-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
+                <button onclick="changePassword()" id="change-pwd-btn"
+                    class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Account Menu Modal -->
+    <div role="dialog" aria-modal="true" aria-label="Account menu" id="account-menu-modal"
+        class="fixed inset-0 z-[90] modal-overlay hidden flex items-end md:items-end justify-start p-0 md:p-0">
+        <div class="modal-panel-sheet md:modal-panel p-0 w-full md:w-72 md:mb-4 md:ml-4 shadow-lg overflow-hidden rounded-t-xl md:rounded-xl"
+            style="max-height:90vh">
+            <!-- Header -->
+            <div class="px-5 py-4 flex items-center gap-3" style="border-bottom:1px solid var(--border)">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0"
+                    style="background:var(--ov-strong);color:var(--text);border:1px solid var(--ov-border)"
+                    id="acct-menu-avatar">U</div>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm font-semibold truncate" style="color:var(--text)" id="acct-menu-username">User
+                    </div>
+                    <div class="text-xs" style="color:var(--text3)">Your account</div>
+                </div>
+                <button onclick="closeModal('account-menu-modal')" class="p-1.5 rounded-lg"
+                    style="color:var(--text3)"><i data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <!-- Menu items -->
+            <div class="py-2">
+                <button onclick="closeModal('account-menu-modal');openChangePwdModal()"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
+                    style="color:var(--text2)">
+                    <i data-feather="lock" class="w-4 h-4 shrink-0"></i>
+                    Change Password
+                </button>
+                <button onclick="closeModal('account-menu-modal');openTotpSetup()" id="acct-totp-btn"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
+                    style="color:var(--text2)">
+                    <i data-feather="shield" class="w-4 h-4 shrink-0"></i>
+                    <span id="acct-totp-label">Set up Authenticator (2FA)</span>
+                    <span id="acct-totp-badge" class="hidden ml-auto px-2 py-0.5 rounded text-[10px] font-bold"
+                        style="background:rgba(16,185,129,0.15);color:var(--green);border:1px solid rgba(16,185,129,0.2)">ON</span>
+                </button>
+
+                <button onclick="closeModal('account-menu-modal');openShortcutsModal()"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
+                    style="color:var(--text2)">
+                    <i data-feather="command" class="w-4 h-4 shrink-0"></i>
+                    Keyboard Shortcuts
+                    <span class="kbd ml-auto">?</span>
+                </button>
+            </div>
+
+            <!-- Appearance -->
+            <div style="border-top:1px solid var(--border)" class="px-5 py-3.5 space-y-3">
+                <div class="section-label">Appearance</div>
+                <div>
+                    <div class="text-xs mb-1.5" style="color:var(--text3)">Theme</div>
+                    <div class="segmented w-full" role="radiogroup" aria-label="Theme">
+                        <button type="button" role="radio" aria-checked="false" data-theme-opt="light"
+                            onclick="setTheme('light')">
+                            <i data-feather="sun" class="w-3.5 h-3.5"></i> Light
+                        </button>
+                        <button type="button" role="radio" aria-checked="false" data-theme-opt="dark"
+                            onclick="setTheme('dark')">
+                            <i data-feather="moon" class="w-3.5 h-3.5"></i> Dark
+                        </button>
+                        <button type="button" role="radio" aria-checked="true" data-theme-opt="system"
+                            onclick="setTheme('system')">
+                            <i data-feather="monitor" class="w-3.5 h-3.5"></i> Auto
+                        </button>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-xs font-medium" style="color:var(--text2)">Reduce motion</div>
+                        <div class="text-[11px]" style="color:var(--text3)">Disable animations</div>
+                    </div>
+                    <button type="button" id="motion-toggle" role="switch" aria-checked="false"
+                        aria-label="Reduce motion" onclick="toggleReduceMotion()" class="toggle-track shrink-0">
+                        <span class="toggle-knob"></span>
+                    </button>
+                </div>
+            </div>
+            <!-- Logout -->
+            <div style="border-top:1px solid var(--border)" class="py-2">
+                <button onclick="logout()"
+                    class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
+                    style="color:var(--red)">
+                    <i data-feather="log-out" class="w-4 h-4 shrink-0"></i>
+                    Sign Out
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOTP Setup Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="totp-modal-title" id="totp-setup-modal" class="fixed inset-0 z-[95] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg space-y-5">
+            <!-- Header -->
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:var(--ov-strong);border:1px solid var(--ov-border)">
+                    <i data-feather="shield" class="w-5 h-5" style="color:var(--text)"></i>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" style="color:var(--text)" id="totp-modal-title">Set Up Authenticator
+                    </h2>
+                    <p class="text-xs mt-0.5" style="color:var(--text3)" id="totp-modal-sub">Scan the QR code with your
+                        app</p>
+                </div>
+            </div>
+
+            <!-- Setup flow -->
+            <div id="totp-setup-flow">
+                <!-- QR code display -->
+                <div class="flex flex-col items-center gap-4">
+                    <div id="totp-qr-container" class="w-48 h-48 rounded-xl flex items-center justify-center"
+                        style="background:white">
+                        <span class="text-xs" style="color:#888">Loading…</span>
+                    </div>
+                    <div class="w-full space-y-1.5">
+                        <p class="text-xs text-center" style="color:var(--text3)">Can't scan? Enter this key manually:
+                        </p>
+                        <div class="flex items-center gap-2 px-3 py-2 rounded-xl"
+                            style="background:var(--surface2);border:1px solid var(--border)">
+                            <code class="text-xs mono flex-1 break-all" id="totp-secret-display"
+                                style="color:var(--text2)"></code>
+                            <button onclick="copyTotpSecret()"
+                                class="shrink-0 text-[10px] px-2 py-1 rounded-lg font-semibold transition"
+                                style="background:var(--surface);color:var(--text3)">Copy</button>
+                        </div>
+                    </div>
+                </div>
+                <p class="text-xs text-center mt-3" style="color:var(--text3)">Scan in Google Authenticator, Authy, or
+                    any TOTP app, then enter the 6-digit code below.</p>
+                <div class="mt-4 space-y-3">
+                    <input type="text" id="totp-confirm-code" placeholder="000000" inputmode="numeric" maxlength="6"
+                        class="inp w-full px-4 py-3 text-sm font-medium mono text-center tracking-[0.4em]"
+                        autocomplete="one-time-code" onkeydown="if(event.key==='Enter')confirmTotpSetup()">
+                    <div id="totp-setup-error" class="hidden text-xs px-3 py-2 rounded-lg"
+                        style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)">
+                    </div>
+                </div>
+                <div class="flex gap-3 mt-4">
+                    <button onclick="closeModal('totp-setup-modal')"
+                        class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
+                    <button onclick="confirmTotpSetup()" id="totp-confirm-btn"
+                        class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Verify &amp; Enable</button>
+                </div>
+            </div>
+
+            <!-- Disable flow -->
+            <div id="totp-disable-flow" class="hidden space-y-4">
+                <div class="px-4 py-3 text-xs rounded-xl"
+                    style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.15);color:var(--red)">
+                    ⚠️ This will remove 2FA from your account. Enter your password to confirm.
+                </div>
+                <input type="password" id="totp-disable-pwd" placeholder="Your current password"
+                    autocomplete="current-password" class="inp w-full px-4 py-3 text-sm"
+                    onkeydown="if(event.key==='Enter')disableTotp()">
+                <div id="totp-disable-error" class="hidden text-xs px-3 py-2 rounded-lg"
+                    style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)"></div>
+                <div class="flex gap-3">
+                    <button onclick="closeModal('totp-setup-modal')"
+                        class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
+                    <button onclick="disableTotp()" id="totp-disable-btn"
+                        class="flex-1 py-2.5 text-sm font-bold rounded-xl transition"
+                        style="background:rgba(239,68,68,0.15);color:var(--red);border:1px solid rgba(239,68,68,0.2)">Disable
+                        2FA</button>
+                </div>
+            </div>
+        </div>
+    </div>

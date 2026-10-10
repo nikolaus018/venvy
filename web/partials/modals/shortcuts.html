@@ -1,0 +1,20 @@
+    <!-- ── Keyboard Shortcuts ───────────────────────────────────────────────── -->
+    <div id="shortcuts-modal" role="dialog" aria-modal="true" aria-labelledby="shortcuts-modal-title"
+        class="fixed inset-0 z-[97] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel w-full max-w-lg shadow-lg overflow-hidden flex flex-col" style="max-height:85vh">
+            <div class="px-5 py-4 flex items-center gap-3 shrink-0" style="border-bottom:1px solid var(--border)">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(var(--accent-rgb),0.12);border:1px solid rgba(var(--accent-rgb),0.22)">
+                    <i data-feather="command" class="w-4 h-4" style="color:var(--accent-light)"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <h2 class="text-base font-bold" id="shortcuts-modal-title" style="color:var(--text)">Keyboard
+                        Shortcuts</h2>
+                    <p class="text-xs" style="color:var(--text3)">Shortcuts are ignored while typing in a field</p>
+                </div>
+                <button onclick="closeModal('shortcuts-modal')" class="p-1.5 rounded-lg" aria-label="Close"
+                    style="color:var(--text3)"><i data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <div class="overflow-y-auto p-5" id="shortcuts-body"></div>
+        </div>
+    </div>

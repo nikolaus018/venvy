@@ -1,0 +1,34 @@
+    <div role="dialog" aria-modal="true" aria-labelledby="users-modal-title" id="users-modal"
+        class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0">
+        <div class="modal-panel p-5 w-full max-w-2xl shadow-lg h-[80vh] md:h-[580px] flex flex-col">
+            <div class="flex justify-between items-center mb-5 shrink-0">
+                <h2 class="text-lg font-bold" id="users-modal-title" style="color:var(--text)">Manage Users</h2>
+                <button onclick="closeModal('users-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
+                        data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+            <div class="flex flex-col md:flex-row gap-2.5 mb-5 shrink-0">
+                <input type="text" id="new-user-name" placeholder="Username" class="inp min-w-0 flex-1 px-3.5 py-3 text-sm">
+                <input type="password" id="new-user-pwd" placeholder="Password" class="inp min-w-0 flex-1 px-3.5 py-3 text-sm">
+                <select id="new-user-role" class="inp min-w-0 px-3 py-3 text-sm md:w-28 shrink-0">
+                    <option value="operator" selected>Operator</option>
+                    <option value="admin">Admin</option>
+                    <option value="viewer">Viewer</option>
+                </select>
+                <button onclick="createUser()"
+                    class="btn-primary shrink-0 whitespace-nowrap px-4 py-3 text-sm rounded-xl">Add User</button>
+            </div>
+            <div class="flex-1 overflow-y-auto rounded-xl" style="border:1px solid var(--border)">
+                <table class="w-full text-left text-sm">
+                    <thead class="section-label sticky top-0"
+                        style="background:var(--surface2);border-bottom:1px solid var(--border)">
+                        <tr>
+                            <th class="px-5 py-3 font-bold">User</th>
+                            <th class="px-5 py-3 font-bold">Role</th>
+                            <th class="px-5 py-3 text-right font-bold">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-list" class="divide-y" style="border-color:var(--border)"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>

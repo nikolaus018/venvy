@@ -1,0 +1,30 @@
+    <!-- Delete User Modal -->
+    <div role="dialog" aria-modal="true" aria-labelledby="delete-user-modal-title" id="delete-user-modal" class="fixed inset-0 z-[96] modal-overlay hidden flex items-center justify-center p-4">
+        <div class="modal-panel p-5 w-full max-w-sm shadow-lg">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2)">
+                    <i data-feather="user-x" class="w-5 h-5" style="color:var(--red)"></i>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold" id="delete-user-modal-title" style="color:var(--text)">Delete
+                        User</h2>
+                    <p class="text-xs" style="color:var(--text3)">This action cannot be undone</p>
+                </div>
+            </div>
+            <p class="text-sm mb-2" style="color:var(--text2)">Delete user <strong id="delete-user-name"
+                    style="color:var(--text)"></strong>?</p>
+            <p class="text-xs mb-6 px-3 py-2.5 rounded-xl"
+                style="color:var(--red);background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.15)">
+                ⚠️ Deletion is <strong>permanent</strong>.
+            </p>
+            <div class="flex gap-3">
+                <button onclick="closeModal('delete-user-modal')"
+                    class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
+                <button onclick="confirmDeleteUser()" id="delete-user-confirm-btn"
+                    class="btn-danger-solid flex-1 py-2.5 text-sm flex items-center justify-center gap-2">
+                    <i data-feather="trash-2" class="w-4 h-4"></i> Delete User
+                </button>
+            </div>
+        </div>
+    </div>
