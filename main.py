@@ -2024,13 +2024,45 @@ class TerminalManager:
             loop = asyncio.get_running_loop()
             stop = asyncio.Event()
 
+            # PTY I/O is non-blocking and driven by the event loop. Reading
+            # with a blocking os.read() in the default executor parked one of
+            # its few threads per open terminal for as long as it stayed open;
+            # once they were all taken, every asyncio.to_thread() in Venvy
+            # (app start/stop, uploads, backups) waited forever.
+            os.set_blocking(master_fd, False)
+
+            async def _wait_fd(add, remove) -> None:
+                fut = loop.create_future()
+
+                def _ready() -> None:
+                    remove(master_fd)
+                    if not fut.done():
+                        fut.set_result(None)
+
+                add(master_fd, _ready)
+                try:
+                    await fut
+                finally:
+                    remove(master_fd)
+
+            async def _pty_write(payload: bytes) -> None:
+                view = memoryview(payload)
+                while view:
+                    try:
+                        view = view[os.write(master_fd, view):]
+                    except BlockingIOError:
+                        await _wait_fd(loop.add_writer, loop.remove_writer)
+
             async def reader() -> None:
                 import codecs
                 decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
                 try:
                     while not stop.is_set():
                         try:
-                            data = await loop.run_in_executor(None, os.read, master_fd, 4096)
+                            data = os.read(master_fd, 4096)
+                        except BlockingIOError:
+                            await _wait_fd(loop.add_reader, loop.remove_reader)
+                            continue
                         except OSError:
                             break
                         if not data:
@@ -2076,7 +2108,7 @@ class TerminalManager:
                                 pass
                             continue
                         try:
-                            await loop.run_in_executor(None, os.write, master_fd, data.encode("utf-8"))
+                            await _pty_write(data.encode("utf-8"))
                         except (OSError, Exception):
                             break
                 finally:
