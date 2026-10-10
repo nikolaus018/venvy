@@ -698,6 +698,22 @@ def _validate_password_strength(password: str) -> None:
         raise HTTPException(status_code=400, detail="Password must contain both letters and numbers.")
 
 
+def _clean_username(username: str) -> str:
+    name = username.strip()
+    if not name or len(name) > 64 or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise HTTPException(status_code=400, detail="Username must be 1–64 characters with no control characters.")
+    return name
+
+
+def _clean_app_name(name: str) -> str:
+    name_clean = name.strip()
+    if not name_clean:
+        raise HTTPException(status_code=400, detail="App name cannot be empty.")
+    if len(name_clean) > 50:
+        raise HTTPException(status_code=400, detail="App name must be 50 characters or less.")
+    return name_clean
+
+
 def _make_tz_aware(dt: datetime.datetime) -> datetime.datetime:
     """Return *dt* with UTC tzinfo attached if it is naive."""
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=datetime.timezone.utc)
@@ -3137,18 +3153,22 @@ def auth_status(request: Request, session: Session = Depends(get_session)):
     }
 
 
+_setup_lock = threading.Lock()
+
+
 @auth_router.post("/setup")
 def auth_setup(payload: UserReq, request: Request, response: Response, session: Session = Depends(get_session)):
-    if session.exec(select(User)).first():
-        raise HTTPException(400, "Setup already completed.")
+    username = _clean_username(payload.username)
     _validate_password_strength(payload.password)
-    user = User(
-        username=payload.username,
-        password_hash=hash_password(payload.password),
-        role="admin",
-    )
-    session.add(user)
-    session.commit()
+    password_hash = hash_password(payload.password)
+    # Handlers run in a thread pool: without the lock, two first-run requests
+    # could both see an empty user table and each create an admin account.
+    with _setup_lock:
+        if session.exec(select(User)).first():
+            raise HTTPException(400, "Setup already completed.")
+        user = User(username=username, password_hash=password_hash, role="admin")
+        session.add(user)
+        session.commit()
     session.refresh(user)
     auth_key = _new_session(session, response, user)
     audit_log(user.username, "user_setup", "initial admin account created")
@@ -3336,19 +3356,20 @@ def create_user(
     session: Session = Depends(get_session),
     admin: User = Depends(check_admin),
 ):
-    if session.exec(select(User).where(User.username == req.username)).first():
+    username = _clean_username(req.username)
+    if session.exec(select(User).where(User.username == username)).first():
         raise HTTPException(400, "Username taken.")
     _validate_password_strength(req.password)
     role = req.role or "operator"
     if role not in VALID_ROLES:
         raise HTTPException(400, f"role must be one of: {', '.join(VALID_ROLES)}")
     session.add(User(
-        username=req.username,
+        username=username,
         password_hash=hash_password(req.password),
         role=role,
     ))
     session.commit()
-    audit_log(admin.username, "user_create", f"created user '{req.username}' with role '{role}'")
+    audit_log(admin.username, "user_create", f"created user '{username}' with role '{role}'")
     return {"ok": True}
 
 
@@ -3847,6 +3868,7 @@ async def upload_app(
         raise HTTPException(400, "runtime must be one of: python, rust")
     if restart_policy not in ("never", "on-failure", "always"):
         raise HTTPException(400, "restart_policy must be one of: never, on-failure, always")
+    name = _clean_app_name(name)
 
     entrypoint_clean = ""
     if runtime == "rust":
@@ -4082,12 +4104,7 @@ async def update_app(
     if not app_row:
         raise HTTPException(404)
     if req.name is not None:
-        name_clean = req.name.strip()
-        if not name_clean:
-            raise HTTPException(400, "App name cannot be empty.")
-        if len(name_clean) > 50:
-            raise HTTPException(400, "App name must be 50 characters or less.")
-        app_row.name = name_clean
+        app_row.name = _clean_app_name(req.name)
     if req.start_on_boot is not None:
         app_row.start_on_boot = req.start_on_boot
     if req.restart_policy is not None:
