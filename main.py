@@ -5789,6 +5789,19 @@ async def _cf_request(method: str, url: str, token: str, payload: Optional[dict]
         raise HTTPException(500, f"Internal error during Cloudflare request: {str(exc)}")
 
 
+_CF_HOSTNAME_RE = re.compile(
+    r"\A(?:\*\.)?(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+
+
+def _clean_cf_hostname(raw: str) -> str:
+    """Normalise a user-typed hostname and make sure it is only a hostname.
+    It ends up inside Cloudflare API URLs and tunnel/DNS records."""
+    host = raw.strip().lower().removeprefix("https://").removeprefix("http://").rstrip("/")
+    if len(host) > 253 or not _CF_HOSTNAME_RE.match(host):
+        raise HTTPException(400, "Invalid hostname — use a plain name like app.example.com.")
+    return host
+
+
 class CfPublishReq(BaseModel):
     hostname: str
     local_port: int
@@ -5804,7 +5817,7 @@ async def _cf_find_zone_id(hostname: str, account_id: str, api_token: str) -> Op
     for candidate in candidates:
         url = (
             f"https://api.cloudflare.com/client/v4/zones"
-            f"?name={candidate}&account.id={account_id}&status=active"
+            f"?name={urllib.parse.quote(candidate, safe='')}&account.id={urllib.parse.quote(account_id, safe='')}&status=active"
         )
         try:
             data = await _cf_request("GET", url, api_token)
@@ -5842,12 +5855,12 @@ async def _cf_upsert_dns_cname(
         "proxied": True,
     }
 
-    list_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=CNAME&name={hostname}&per_page=100"
+    list_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=CNAME&name={urllib.parse.quote(hostname, safe='')}&per_page=100"
     existing = await _cf_request("GET", list_url, api_token)
     cname_records = existing.get("result") or []
 
     for rec_type in ("A", "AAAA"):
-        conflict_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type={rec_type}&name={hostname}&per_page=100"
+        conflict_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type={rec_type}&name={urllib.parse.quote(hostname, safe='')}&per_page=100"
         try:
             conflict_data = await _cf_request("GET", conflict_url, api_token)
             for rec in conflict_data.get("result") or []:
@@ -5905,7 +5918,7 @@ async def _cf_delete_dns_cname(
     api_token: str,
 ) -> None:
     """Delete the CNAME DNS record for *hostname* in the given zone, if it exists."""
-    list_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=CNAME&name={hostname}"
+    list_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=CNAME&name={urllib.parse.quote(hostname, safe='')}"
     try:
         existing = await _cf_request("GET", list_url, api_token)
         for rec in existing.get("result", []):
@@ -5933,9 +5946,7 @@ async def check_cf_hostname(
     if not app_row:
         raise HTTPException(404)
 
-    clean = hostname.strip().lower().removeprefix("https://").removeprefix("http://").rstrip("/")
-    if not clean:
-        raise HTTPException(400, "Invalid hostname.")
+    clean = _clean_cf_hostname(hostname)
 
     existing_route = session.exec(
         select(CfRoute).where(CfRoute.hostname == clean)
@@ -5999,10 +6010,10 @@ async def publish_cf_route(
         raise HTTPException(404)
     if not req.local_port:
         raise HTTPException(400, "Local port must be specified for Cloudflare tunnel mapping.")
+    if not (1 <= req.local_port <= 65535):
+        raise HTTPException(400, "Local port must be between 1 and 65535.")
 
-    new_hostname = req.hostname.strip().lower().removeprefix("https://").removeprefix("http://").rstrip("/")
-    if not new_hostname or "." not in new_hostname:
-        raise HTTPException(400, "Invalid hostname — must contain at least one dot (e.g. app.example.com).")
+    new_hostname = _clean_cf_hostname(req.hostname)
 
     creds      = _get_cf_creds(session)
     account_id = creds["cf_account_id"]
