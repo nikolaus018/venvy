@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          grep -v '^playwright' tests/requirements.txt | pip install -r /dev/stdin
+      - name: Run the end-to-end suite
+        run: PYTHON=python tests/run_all.sh
+      - name: Show logs of failed scripts
+        if: failure()
+        run: for f in tests/.out/*.log; do echo "::group::$f"; tail -60 "$f"; echo "::endgroup::"; done
+
+  installer:
+    name: Installer (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [default, app-users]
+    env:
+      VENVY_BASE_URL: http://127.0.0.1:8099
+      BASE: http://127.0.0.1:54783
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build a release archive and serve it locally
+        run: |
+          mkdir -p /tmp/rel /tmp/bad
+          echo "v0.0.0-ci1" > VERSION
+          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION venvy web vendor
+          (cd /tmp/rel && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
+          # A second version that cannot start, to exercise the rollback.
+          cp main.py /tmp/main.good && printf 'import sys\nsys.exit("broken on purpose")\n' > main.py
+          echo "v0.0.0-broken" > VERSION
+          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/bad/venvy.tar.gz main.py requirements.txt VERSION venvy web vendor
+          (cd /tmp/bad && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
+          cp /tmp/main.good main.py && rm VERSION
+          python3 -m http.server 8099 --directory /tmp/rel >/dev/null 2>&1 &
+          python3 -m http.server 8098 --directory /tmp/bad >/dev/null 2>&1 &
+          sleep 1
+
+      - name: Fresh install
+        run: sudo VENVY_BASE_URL=$VENVY_BASE_URL bash install.sh ${{ matrix.mode == 'app-users' && '--app-users' || '' }}
+
+      - name: Python for the checks
+        run: |
+          sudo python3 -m venv /opt/checks
+          sudo /opt/checks/bin/pip install -q httpx websockets psutil
+
+      - name: Check the installed service
+        run: cd tests && sudo /opt/checks/bin/python t_installed.py $BASE ${{ matrix.mode == 'app-users' && '--app-users' || '' }}
+
+      - name: Update by running the installer again
+        run: |
+          sudo VENVY_BASE_URL=$VENVY_BASE_URL bash install.sh
+          sudo ls /var/lib/venvy/backups | grep -q '^data-.*\.db$'
+          cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'app-users' && '--app-users' || '' }}
+
+      - name: A release that does not start is rolled back
+        run: |
+          if sudo VENVY_BASE_URL=http://127.0.0.1:8098 bash install.sh; then echo "installer accepted a broken release"; exit 1; fi
+          test "$(basename "$(readlink -f /opt/venvy/current)")" = "v0.0.0-ci1"
+          curl -fsS $BASE/api/health
+          cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'app-users' && '--app-users' || '' }}
+
+      - name: A corrupted download changes nothing
+        run: |
+          echo "0000000000000000000000000000000000000000000000000000000000000000  venvy.tar.gz" > /tmp/rel/venvy.tar.gz.sha256
+          if sudo VENVY_BASE_URL=$VENVY_BASE_URL bash install.sh; then echo "installer accepted a bad checksum"; exit 1; fi
+          curl -fsS $BASE/api/health
+
+      - name: Uninstall keeps data
+        run: |
+          sudo bash install.sh --uninstall
+          ! systemctl is-active --quiet venvy.service
+          test ! -e /etc/systemd/system/venvy.service
+          sudo test -f /var/lib/venvy/data.db
+          sudo test -f /etc/venvy/venvy.env
+
+      - name: Service log
+        if: always()
+        run: sudo journalctl -u venvy.service --no-pager -n 80 || true
