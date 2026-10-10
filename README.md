@@ -166,3 +166,7 @@ Venvy is a personal project that I run on my own servers. The test suite runs on
 for releases, on Linux in CI. Two things have less coverage than the rest and are worth knowing
 before you depend on them: per-app-user mode (`--app-users`) and resource limits via systemd
 scopes both need root on a real Linux host, which the automated suite does not exercise.
+
+## License
+
+[MIT](LICENSE)
