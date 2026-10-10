@@ -5716,10 +5716,11 @@ async def unpublish_cf_route(
         CfRoute.cf_route_id != None
     )).first()
     
-    if not other_active:
-        app_row.external_url = None
-        session.add(app_row)
-        
+    # external_url may be the hostname that was just removed; point it at a
+    # route that still exists rather than leaving a dead link behind.
+    app_row.external_url = f"https://{other_active.hostname}" if other_active else None
+    session.add(app_row)
+
     session.commit()
     audit_log(user.username, "tunnel_unpublish", f"app '{app_row.name}' (id={app_id})")
     return {"ok": True}
