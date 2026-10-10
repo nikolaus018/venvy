@@ -62,7 +62,6 @@
             if (e.target.closest('.file-row')) return;
             showContextMenu(e, null);
         });
-        function openCtxMenu(e, path, type, name) { showContextMenu(e, { path, type, name }); }
         function closeCtxMenu() {
             const menu = document.getElementById('ctx-menu');
             menu.classList.remove('scale-100', 'opacity-100');

@@ -94,7 +94,6 @@
             btn.innerHTML = '<svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Testing…';
             document.getElementById('cf-test-results').classList.add('hidden');
             document.getElementById('cf-test-permission-hint').classList.add('hidden');
-            document.getElementById('cf-test-connector-warn')?.classList.add('hidden');
             try {
                 const res = await fetch(`${API}/system/cloudflare/test`, { method: 'POST' });
                 const data = await res.json();
@@ -161,7 +160,6 @@
                     const allText = JSON.stringify(checks).toLowerCase();
                     if (allText.includes('403') || allText.includes('unauthorized') || allText.includes('permission') || !dns.ok) {
                         document.getElementById('cf-test-permission-hint').classList.remove('hidden');
-                        document.getElementById('cf-test-connector-warn')?.classList.add('hidden');
                     }
                 }
             } catch (e) { showToast('Test failed: ' + e.message, 'error'); }

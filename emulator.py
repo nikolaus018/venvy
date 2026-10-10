@@ -15,13 +15,12 @@ Run it from a checkout: it serves web/ and vendor/ next to this script.
 import json
 import random
 import secrets
-import time
 import datetime
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from fastapi import FastAPI, Request, Response, Cookie, HTTPException, Query, Form, UploadFile, File
-from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
+from fastapi import FastAPI, Request, Response, HTTPException, Query, Form, UploadFile, File
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn

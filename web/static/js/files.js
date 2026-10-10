@@ -471,28 +471,6 @@
             if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') confirmFileNameOp(); if (e.key === 'Escape') { e.stopPropagation(); closeModal('file-name-modal'); } });
         });
 
-        async function deletePath(path) {
-            const filename = path.split('/').pop() || path;
-            const rowEl = document.querySelector(`[data-path="${CSS.escape(path)}"]`);
-            const isDir = rowEl ? rowEl.dataset.isdir === '1' : true;
-            const ok = await confirmDialog({
-                title: isDir ? 'Delete folder?' : 'Delete file?',
-                sub: 'This cannot be undone',
-                body: isDir
-                    ? `"${filename}" and everything inside it will be permanently deleted.`
-                    : `"${filename}" will be permanently deleted.`,
-                confirmLabel: 'Delete',
-                danger: true,
-            });
-            if (!ok) return;
-            try {
-                const res = await fetch(`${API}/apps/${activeAppId}/files/op`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'delete', path }) });
-                if (res.ok) showToast(`Deleted "${filename}"`, 'info', 2000);
-                else showToast('Delete failed.', 'error');
-            } catch (e) { showToast('Delete failed.', 'error'); }
-            loadFiles(currentBrowserPath);
-        }
-
         async function deletePaths(items) {
             if (!items || !items.length) return;
             const ok = await confirmDialog({

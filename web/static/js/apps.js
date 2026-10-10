@@ -616,10 +616,3 @@
             catch (e) { const ta = document.createElement('textarea'); ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
             showToast('URL copied!', 'success', 1500);
         }
-
-        async function clearManualPort() {
-            if (!activeAppId) return;
-            document.getElementById('setting-port').value = '';
-            await saveSettings();
-            showToast('Port cleared — will auto-detect on next start.', 'info');
-        }

@@ -359,12 +359,6 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-async def _pid_alive_async(pid: int) -> bool:
-    """Non-blocking wrapper — runs _pid_alive in a thread executor."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _pid_alive, pid)
-
-
 def _proc_start_id(pid: int) -> Optional[str]:
     """A fingerprint of when *pid* started, or None if unknown. Two processes
     that happen to share a PID (one exited, the number was reused) differ."""
