@@ -587,7 +587,32 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 
 ---
 
-## 8. Quick Reference Table
+## 8. Source Layout
+
+```
+main.py                 entry point: dependency check, banner, `python main.py --host … --port …`
+venvy/                  the backend package (see venvy/__init__.py for one line per module)
+  config, crypto, models, db, auth, safefs, isolation, jobs, process, apps,
+  terminal, backup, cloudflare, settings, github, uploads, startup, webui, app
+  api/                  one APIRouter per resource: auth, users, apps, files, system,
+                        cloudflare, github, terminal
+web/
+  index.html            page skeleton; `<!-- include: partials/x.html -->` lines are expanded
+                        on the server (venvy/webui.py), so the browser gets one document
+  partials/             markup per view: sidebar, dashboard, tabs/*, system-view, modals/*
+  static/css/app.css    styles
+  static/js/*.js        one script per feature, plus api.js (API client + shared state);
+                        classic scripts sharing one global scope, loaded in the order
+                        index.html lists them — there is no build step
+  sw.js                 service worker (served at /sw.js)
+vendor/                 third-party scripts shipped with Venvy (served at /vendor)
+emulator.py             fake backend for UI development; serves the same web/ tree
+tests/                  end-to-end suite: `tests/run_all.sh`
+```
+
+A frozen build must bundle `web/` and `vendor/` next to the executable's code.
+
+## 9. Quick Reference Table
 
 | Method | Path | Min. role |
 |---|---|---|
