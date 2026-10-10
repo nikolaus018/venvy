@@ -292,6 +292,25 @@ TRUSTED_PROXY_IPS: Set[str] = {
 }
 
 
+# Optional proof that a request really came through the tunnel. An address
+# can't provide it: with the default TRUSTED_PROXY_IPS, cloudflared and every
+# hosted app both connect from 127.0.0.1, so an app can send its own
+# CF-Connecting-IP and be taken for any client it likes — past the IP
+# allowlist, and past the per-IP login lockout. When this is set, the header
+# is only believed on requests that also carry X-Venvy-Proxy-Secret with the
+# same value (add it at the Cloudflare edge with a request-header transform
+# rule). Hosted apps never see it: it is stripped from their environment.
+PROXY_SECRET = os.getenv("VENVY_PROXY_SECRET", "")
+# Venvy's own settings that must not leak into the processes it starts.
+_PRIVATE_ENV_VARS = ("VENVY_PROXY_SECRET",)
+
+if IP_ALLOWLIST is not None and not PROXY_SECRET and TRUSTED_PROXY_IPS & {"127.0.0.1", "::1"}:
+    logging.warning(
+        "IP_ALLOWLIST is set, but CF-Connecting-IP is trusted from loopback without "
+        "VENVY_PROXY_SECRET: software running on this host (including hosted apps) "
+        "can claim any client IP. Set VENVY_PROXY_SECRET to close that.")
+
+
 def _resolve_client_ip(request: Union[Request, HTTPConnection]) -> str:
     """Resolve the real client IP.
 
@@ -306,7 +325,9 @@ def _resolve_client_ip(request: Union[Request, HTTPConnection]) -> str:
     peer = (request.client.host if request.client else "") or ""
     if peer in TRUSTED_PROXY_IPS:
         cf_ip = (request.headers.get("cf-connecting-ip", "") or "").strip()
-        if cf_ip:
+        if cf_ip and (not PROXY_SECRET or secrets.compare_digest(
+                (request.headers.get("x-venvy-proxy-secret", "") or "").encode("utf-8"),
+                PROXY_SECRET.encode("utf-8"))):
             return cf_ip
     return peer or "unknown"
 
@@ -862,6 +883,8 @@ def get_server_ipv4() -> str:
 def _build_app_env(db_app: App) -> Dict[str, str]:
     """Build the environment dict for a managed app process."""
     env = os.environ.copy()
+    for _private in _PRIVATE_ENV_VARS:
+        env.pop(_private, None)
     try:
         app_env = json.loads(_decrypt_secret(db_app.env_json) or "{}")
         if isinstance(app_env, dict):
@@ -1368,6 +1391,8 @@ def _app_proc_kwargs(app_row: "App") -> dict:
 def _app_tool_env(app_row: "App") -> Dict[str, str]:
     """Environment for venv/pip/cargo runs on an app's behalf."""
     env = os.environ.copy()
+    for _private in _PRIVATE_ENV_VARS:
+        env.pop(_private, None)
     env["VIRTUAL_ENV"] = str(app_row.venv_path)
     env.pop("PYTHONHOME", None)
     env.pop("PYTHONPATH", None)
@@ -2977,6 +3002,12 @@ _login_attempts: dict = {}
 _login_lock = threading.Lock()
 _LOGIN_MAX_TRIES   = 5
 _LOGIN_LOCKOUT_SEC = 300
+# Failures are also counted per username, whatever address they come from —
+# the only limit that holds against a client able to vary its apparent IP
+# (see PROXY_SECRET). Higher than the per-IP limit so that ordinary typos
+# from one place trip that one first.
+_LOGIN_MAX_TRIES_PER_USER = 20
+_LOGIN_MAX_TRACKED = 50_000
 
 def _login_rate_key(request: Request) -> str:
     return _resolve_client_ip(request)
@@ -2995,12 +3026,18 @@ def _check_login_rate(key: str) -> None:
                 headers={'X-Retry-After': str(remaining)},
             )
 
-def _record_login_failure(key: str) -> None:
+def _login_user_key(username: str) -> str:
+    return "user:" + username.strip().lower()[:128]
+
+
+def _record_login_failure(key: str, max_tries: int = _LOGIN_MAX_TRIES) -> None:
     with _login_lock:
+        if key not in _login_attempts and len(_login_attempts) >= _LOGIN_MAX_TRACKED:
+            return
         entry = _login_attempts.setdefault(key, {'count': 0, 'locked_until': None})
         entry['count'] += 1
         entry['last'] = time.time()
-        if entry['count'] >= _LOGIN_MAX_TRIES:
+        if entry['count'] >= max_tries:
             entry['locked_until'] = time.time() + _LOGIN_LOCKOUT_SEC
             entry['count'] = 0
 
@@ -3102,33 +3139,32 @@ def login(
     session: Session = Depends(get_session),
 ):
     rate_key = _login_rate_key(request)
+    user_key = _login_user_key(payload.username)
     _check_login_rate(rate_key)
+    _check_login_rate(user_key)
+
+    def _fail(status: int, detail: str):
+        _record_login_failure(rate_key)
+        _record_login_failure(user_key, _LOGIN_MAX_TRIES_PER_USER)
+        _check_login_rate(rate_key)   # answers 429 if that was the last allowed try
+        _check_login_rate(user_key)
+        raise HTTPException(status, detail)
 
     user = session.exec(select(User).where(User.username == payload.username)).first()
     password_ok = verify_password(payload.password, user.password_hash if user else _DUMMY_PASSWORD_HASH)
     if not user or not password_ok:
-        _record_login_failure(rate_key)
-        entry = _login_attempts.get(rate_key, {})
-        locked_until = entry.get('locked_until')
-        if locked_until and time.time() < locked_until:
-            remaining = int(locked_until - time.time()) + 1
-            raise HTTPException(
-                429,
-                f'Too many failed attempts. Try again in {remaining} seconds.',
-                headers={'X-Retry-After': str(remaining)},
-            )
-        raise HTTPException(401, "Invalid credentials.")
+        _fail(401, "Invalid credentials.")
 
     if user.totp_enabled and user.totp_secret:
         if not payload.totp_code:
             raise HTTPException(403, "totp_required")
         step = _totp_verify(_decrypt_secret(user.totp_secret), payload.totp_code, after=user.totp_last_counter)
         if step is None:
-            _record_login_failure(rate_key)
-            raise HTTPException(401, "Invalid authenticator code.")
+            _fail(401, "Invalid authenticator code.")
         user.totp_last_counter = step
         session.add(user)   # committed with the new session below
 
+    _clear_login_rate(user_key)
     _clear_login_rate(rate_key)
     auth_key = _new_session(session, response, user)
     audit_log(user.username, "login", f"from {rate_key}")

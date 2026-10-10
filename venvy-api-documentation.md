@@ -76,6 +76,8 @@ If the server is started with the `IP_ALLOWLIST` environment variable set (comma
 
 How the client IP is determined (also used by the login lockout and rate limits): the raw TCP peer address. `X-Forwarded-For` is never used (uvicorn runs with `proxy_headers=False`). `CF-Connecting-IP` is honoured **only** when the TCP peer is in `TRUSTED_PROXY_IPS` (default `127.0.0.1,::1`, i.e. `cloudflared` on the same host), because only then did the request really pass through Cloudflare. If `cloudflared` runs on a different machine, add that machine's IP to `TRUSTED_PROXY_IPS`.
 
+An address alone can't tell `cloudflared` from other software on the same host: with the default setting, a hosted app can connect over loopback and send its own `CF-Connecting-IP`. To close that, set `VENVY_PROXY_SECRET` and add a Cloudflare request-header transform rule that sends the same value as `X-Venvy-Proxy-Secret`; the header is then only believed on requests that carry the secret (it is stripped from hosted apps' environments). Independently of this, failed logins are also limited per username (20 failures → 5-minute lock), so varying the apparent IP does not allow unlimited password guessing.
+
 ---
 
 ## 3. Roles & Permissions
