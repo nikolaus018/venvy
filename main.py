@@ -1362,7 +1362,10 @@ async def start_app_process_logic(app_id: int, session: Session) -> App:
             except Exception as exc:
                 logging.error(f"Error while waiting for App {_app_id}: {exc}")
             finally:
-                _active_app_pids.pop(_app_id, None)
+                # Only forget our own PID: after a restart this slot already
+                # holds the replacement process.
+                if _active_app_pids.get(_app_id) == proc.pid:
+                    _active_app_pids.pop(_app_id, None)
                 _running_tasks.discard(asyncio.current_task())
                     
             _trigger_supervisor()
