@@ -1,3 +1,4 @@
 httpx
 websockets
 psutil
+playwright  # optional: only for t_ui.py, which drives an installed Chrome

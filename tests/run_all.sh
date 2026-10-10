@@ -24,5 +24,7 @@ run proxy_trust "$PYB" t_proxy.py "$R"
 run env_unreadable "$PYB" t_env.py "$R"
 run files "$PYB" t_fs.py "$R"
 run small "$PYB" t_small.py "$R"
+# Browser pass; needs `pip install playwright` and an installed Google Chrome.
+"$PYB" -c "import playwright" 2>/dev/null && run ui "$PYB" t_ui.py "$R"
 [ -n "$SLOW" ] && run login_lockout "$PYB" t_misc.py "$R" login_lockout
 exit $fail
