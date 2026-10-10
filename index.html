@@ -5072,9 +5072,9 @@
                     return `
             <tr class="transition" style="border-color:var(--border)">
                 <td class="px-5 py-3.5 font-medium text-sm" style="color:var(--text)">${escapeHtml(u.username)}</td>
-                <td class="px-5 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${u.role === 'operator' ? 'status-stopped' : ''}" style="${badgeStyle}">${roleLabel}</span></td>
+                <td class="px-5 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${u.role === 'operator' ? 'status-stopped' : ''}" style="${badgeStyle}">${escapeHtml(roleLabel)}</span></td>
                 <td class="px-5 py-3.5 text-right">
-                    ${!isSelf ? `<button data-uid="${u.id}" data-uname="${escapeHtml(u.username)}" class="user-del-btn btn-danger text-xs px-3 py-1.5 rounded-lg font-bold">Delete</button>` : ''}
+                    ${!isSelf ? `<button data-uid="${escapeHtml(u.id)}" data-uname="${escapeHtml(u.username)}" class="user-del-btn btn-danger text-xs px-3 py-1.5 rounded-lg font-bold">Delete</button>` : ''}
                 </td>
             </tr>`;
                 }).join('');
@@ -5362,15 +5362,15 @@
                     <div class="min-w-0 flex-1">
                         <p class="text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5" style="color:var(--green)">
                             <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="var(--green)" viewBox="0 0 24 24" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                            Local Network · port ${portStr}
+                            Local Network · port ${escapeHtml(portStr)}
                         </p>
-                        <p class="text-sm mono font-semibold truncate select-all leading-snug" style="color:var(--green)">${localUrl}</p>
+                        <p class="text-sm mono font-semibold truncate select-all leading-snug" style="color:var(--green)">${escapeHtml(localUrl)}</p>
                     </div>
                     <div class="flex gap-1 shrink-0">
                         <button onclick="copyAccessUrl()" title="Copy local URL" class="p-1.5 rounded-lg transition active:scale-95" style="color:var(--text3)">
                             <i data-feather="copy" class="w-3.5 h-3.5"></i>
                         </button>
-                        <a href="${localUrl}" target="_blank" title="Open local" class="p-1.5 rounded-lg transition active:scale-95 flex items-center" style="color:var(--text3)">
+                        <a href="${escapeHtml(localUrl)}" target="_blank" rel="noopener" title="Open local" class="p-1.5 rounded-lg transition active:scale-95 flex items-center" style="color:var(--text3)">
                             <i data-feather="external-link" class="w-3.5 h-3.5"></i>
                         </a>
                     </div>
