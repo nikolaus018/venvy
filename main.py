@@ -162,6 +162,9 @@ from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 # venvy imports
+from venvy.audit import (
+    audit_log,
+)
 from venvy.crypto import (
     _ENC_PREFIX,
     _fernet_instance,
@@ -238,13 +241,6 @@ def check_ip_allowlist(request: HTTPConnection) -> None:
     ip = _resolve_client_ip(request)
     if ip not in IP_ALLOWLIST:
         raise HTTPException(status_code=403, detail="Access from this IP is not allowed.")
-
-
-def audit_log(username: str, action: str, detail: str = "") -> None:
-    """Lightweight audit trail — logs who did what. No dedicated table; these are
-    plain INFO log lines an operator can grep/ship to their own log aggregator."""
-    suffix = f" — {detail}" if detail else ""
-    logging.info(f"AUDIT: user={username!r} action={action}{suffix}")
 
 
 VALID_ROLES = ("admin", "operator", "viewer")
