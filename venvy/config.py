@@ -78,8 +78,24 @@ TRUSTED_PROXY_IPS: Set[str] = {
 # same value (add it at the Cloudflare edge with a request-header transform
 # rule). Hosted apps never see it: it is stripped from their environment.
 PROXY_SECRET = os.getenv("VENVY_PROXY_SECRET", "")
-# Venvy's own settings that must not leak into the processes it starts.
-_PRIVATE_ENV_VARS = ("VENVY_PROXY_SECRET",)
+# Venvy's own settings, which the processes it starts must not inherit. The
+# proxy secret is the obvious one, but HOST and PORT matter just as much:
+# the systemd unit sets them for Venvy, and a hosted app that reads $PORT
+# would otherwise be told to bind Venvy's own port.
+_PRIVATE_ENV_VARS = (
+    "HOST", "PORT", "LOG_LEVEL", "SESSION_COOKIE_SECURE", "ALLOWED_ORIGINS",
+    "IP_ALLOWLIST", "TRUSTED_PROXY_IPS",
+)
+_PRIVATE_ENV_PREFIX = "VENVY_"
+
+
+def child_base_env() -> dict:
+    """os.environ for a process started on an app's behalf, minus Venvy's own
+    configuration."""
+    return {
+        k: v for k, v in os.environ.items()
+        if k not in _PRIVATE_ENV_VARS and not k.startswith(_PRIVATE_ENV_PREFIX)
+    }
 
 if IP_ALLOWLIST is not None and not PROXY_SECRET and TRUSTED_PROXY_IPS & {"127.0.0.1", "::1"}:
     logging.warning(

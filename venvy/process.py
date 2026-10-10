@@ -24,7 +24,7 @@ from sqlmodel import Session, select
 from venvy.auth import _purge_login_attempts
 from venvy.config import (
     APP_LOGS_DIR,
-    _PRIVATE_ENV_VARS,
+    child_base_env,
     _VENVY_BOOT_TIME,
     _make_tz_aware,
     psutil,
@@ -180,9 +180,7 @@ def get_server_ipv4() -> str:
 
 def _build_app_env(db_app: App) -> Dict[str, str]:
     """Build the environment dict for a managed app process."""
-    env = os.environ.copy()
-    for _private in _PRIVATE_ENV_VARS:
-        env.pop(_private, None)
+    env = child_base_env()
     try:
         app_env = json.loads(_decrypt_secret(db_app.env_json) or "{}")
         if isinstance(app_env, dict):

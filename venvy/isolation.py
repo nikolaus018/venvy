@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 
-from venvy.config import APP_LOGS_DIR, APPS_BASE_DIR, _PRIVATE_ENV_VARS
+from venvy.config import APP_LOGS_DIR, APPS_BASE_DIR, child_base_env
 from venvy.models import App
 
 
@@ -132,9 +132,7 @@ def _app_proc_kwargs(app_row: "App") -> dict:
 
 def _app_tool_env(app_row: "App") -> Dict[str, str]:
     """Environment for venv/pip/cargo runs on an app's behalf."""
-    env = os.environ.copy()
-    for _private in _PRIVATE_ENV_VARS:
-        env.pop(_private, None)
+    env = child_base_env()
     env["VIRTUAL_ENV"] = str(app_row.venv_path)
     env.pop("PYTHONHOME", None)
     env.pop("PYTHONPATH", None)
