@@ -587,6 +587,27 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 
 ---
 
+## 7a. Installing and Updating
+
+On a fresh Debian 12+ / Ubuntu 22.04+ machine:
+
+```
+curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install.sh | sudo bash
+```
+
+Options follow `bash -s --`, e.g. `… | sudo bash -s -- --host 127.0.0.1 --port 8080`
+(`--version TAG`, `--with-rust`, `--app-users`, `--uninstall`). The installer adds
+missing system packages, creates a `venvy` system user, puts the code in
+`/opt/venvy/releases/<version>/` (with its own Python venv), data in `/var/lib/venvy/`,
+settings in `/etc/venvy/venvy.env`, and a `venvy` systemd service that starts at boot.
+
+Running the same command again updates: the release is downloaded, checksum-verified and
+prepared beside the running one, the database is snapshotted into `backups/`, the service is
+switched over, and it is switched back automatically if `/api/health` does not answer.
+An installation that predates the installer keeps its data directory where it is.
+
+Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed.
+
 ## 8. Source Layout
 
 ```
@@ -608,6 +629,9 @@ web/
 vendor/                 third-party scripts shipped with Venvy (served at /vendor)
 emulator.py             fake backend for UI development; serves the same web/ tree
 tests/                  end-to-end suite: `tests/run_all.sh`
+install.sh              installer / updater (see "Installing and Updating")
+requirements.txt        Venvy's own Python dependencies, pinned
+.github/workflows/      release.yml builds and publishes a release on a v* tag
 ```
 
 A frozen build must bundle `web/` and `vendor/` next to the executable's code.

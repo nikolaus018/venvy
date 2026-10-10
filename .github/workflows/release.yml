@@ -1,0 +1,50 @@
+# Pushing a tag like v4.1.0 builds and publishes a release:
+#   venvy.tar.gz          the code (main.py, venvy/, web/, vendor/, requirements.txt, VERSION)
+#   venvy.tar.gz.sha256   its checksum, verified by the installer
+#   install.sh            the installer / updater
+# Asset names are fixed so /releases/latest/download/<name> always works.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          grep -v '^playwright' tests/requirements.txt | pip install -r /dev/stdin
+
+      - name: Smoke test (boots a real server; a red test publishes nothing)
+        working-directory: tests
+        env:
+          SMOKE_EXPECT_SHUTDOWN_LOG: "1"
+        run: python smoke.py ..
+
+      - name: Check the installer parses
+        run: bash -n install.sh
+
+      - name: Build the release archive
+        run: |
+          echo "${GITHUB_REF_NAME}" > VERSION
+          tar --owner=0 --group=0 --exclude='__pycache__' -czf venvy.tar.gz \
+            main.py requirements.txt VERSION venvy web vendor
+          sha256sum venvy.tar.gz > venvy.tar.gz.sha256
+          cat venvy.tar.gz.sha256
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" venvy.tar.gz venvy.tar.gz.sha256 install.sh --title "Venvy ${GITHUB_REF_NAME}" --generate-notes
