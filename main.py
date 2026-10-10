@@ -2147,6 +2147,9 @@ class TerminalManager:
                         except Exception:
                             pass
                     await _reap()
+                    # Reaped: the number may be handed to an unrelated process
+                    # now, so the fallback kill below must not use it.
+                    pid = -1
 
                 if master_fd != -1:
                     try:
@@ -2165,10 +2168,13 @@ class TerminalManager:
                     except OSError:
                         pass
             if pid > 0:
+                # Only reached when setup failed before the normal teardown.
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except OSError:
                     pass
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(os.waitpid, pid, 0)
             try:
                 await websocket.close()
             except Exception:
