@@ -71,3 +71,6 @@ ios/**/xcuserdata/
 ios/**/*.xcuserstate
 ios/**/DerivedData/
 .DS_Store
+
+# Test suite output
+/tests/.out/
