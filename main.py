@@ -262,6 +262,11 @@ _app_metrics: Dict[int, Dict[str, Union[float, int]]] = {}
 _host_cpu_percent: float = 0.0
 
 
+def host_cpu_percent() -> float:
+    """Latest host CPU reading from the metrics collector."""
+    return _host_cpu_percent
+
+
 
 def _psutil_net_connections(kind: str = "tcp"):
     """Wrapper for psutil.net_connections that handles the API change in psutil ≥ 6.0."""
@@ -1009,6 +1014,15 @@ def _restart_allowed(app_id: int) -> bool:
 # Set while a restore is running (from the request until the process re-execs,
 # or until the restore fails). Starting apps is held off for the duration.
 _restore_in_progress = False
+
+
+def restore_in_progress() -> bool:
+    return _restore_in_progress
+
+
+def set_restore_in_progress(value: bool) -> None:
+    global _restore_in_progress
+    _restore_in_progress = value
 
 
 async def supervisor_task() -> None:
@@ -2332,7 +2346,7 @@ def get_system_metrics(user: User = Depends(check_admin)):
     if psutil is None:
         return {"error": "psutil not installed"}
     
-    cpu_percent = _host_cpu_percent
+    cpu_percent = host_cpu_percent()
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage('/')
     load = [0.0, 0.0, 0.0]
@@ -2578,10 +2592,9 @@ async def restore_backup(
     are stopped and stay stopped. Requires confirm == "RESTORE" or this is
     a no-op 400; only full backups (not legacy DB-only ones) are restorable.
     """
-    global _restore_in_progress
     if req.confirm != "RESTORE":
         raise HTTPException(400, 'Confirmation phrase did not match — send {"confirm": "RESTORE"}.')
-    if _restore_in_progress:
+    if restore_in_progress():
         raise HTTPException(409, "A restore is already in progress.")
     if not _FULL_BACKUP_FILENAME_RE.match(filename):
         raise HTTPException(400, "Only full backups can be restored — legacy database-only backups are download-only.")
@@ -2591,18 +2604,17 @@ async def restore_backup(
 
     audit_log(admin.username, "system_restore_started", f"path={archive_path}")
     session.close()
-    _restore_in_progress = True
+    set_restore_in_progress(True)
     return _start_job(admin, "restore", lambda: _restore_job(admin, archive_path))
 
 
 async def _restore_job(admin: User, archive_path: Path) -> dict:
-    global _restore_in_progress
     try:
         return await _run_restore(admin, archive_path)
     except BaseException:
         # Failed: this process carries on, so normal service resumes. On
         # success the flag stays set until _self_restart() replaces us.
-        _restore_in_progress = False
+        set_restore_in_progress(False)
         raise
 
 
@@ -2907,7 +2919,7 @@ async def control_app(
         raise HTTPException(400, "Invalid action. Use: start | stop | restart")
     if app_row.status == "installing":
         raise HTTPException(409, "This app is still being set up — wait for its install to finish.")
-    if _restore_in_progress and action != "stop":
+    if restore_in_progress() and action != "stop":
         raise HTTPException(409, "A restore is in progress — apps can be started again once Venvy has restarted.")
     audit_log(user.username, f"app_{action}", f"app '{app_row.name}' (id={app_id})")
 
