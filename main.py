@@ -3711,8 +3711,12 @@ async def delete_app(
     _cancel_log_task(app_id)
     await stop_app_process_logic(app_id, session)
 
-    cf_route = session.exec(select(CfRoute).where(CfRoute.app_id == app_id)).first()
-    if cf_route and cf_route.cf_route_id:
+    # An app has one route per published port. Every one of them has to go:
+    # a hostname left in the tunnel keeps forwarding to that port, where the
+    # next app to bind it would be exposed to the internet unasked.
+    cf_routes = session.exec(select(CfRoute).where(CfRoute.app_id == app_id)).all()
+    published = {r.hostname for r in cf_routes if r.cf_route_id and r.hostname}
+    if published:
         try:
             creds      = _get_cf_creds(session)
             account_id = creds["cf_account_id"]
@@ -3722,21 +3726,24 @@ async def delete_app(
                 f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
                 f"/cfd_tunnel/{tunnel_id}/configurations"
             )
-            hostname = cf_route.hostname
             current_cfg = await _cf_request("GET", cfg_url, api_token)
             result_obj  = current_cfg.get("result") or {}
             ingress     = result_obj.get("config", {}).get("ingress") or []
-            named       = [r for r in ingress if r.get("hostname") and r["hostname"] != hostname]
+            named       = [r for r in ingress if r.get("hostname") and r["hostname"] not in published]
             catch_all   = [r for r in ingress if not r.get("hostname")]
             new_ingress = named + (catch_all or [{"service": "http_status:404"}])
             await _cf_request("PUT", cfg_url, api_token, {"config": {"ingress": new_ingress}})
-            zone_id = await _cf_find_zone_id(hostname, account_id, api_token)
-            if zone_id:
-                await _cf_delete_dns_cname(zone_id, hostname, api_token)
-            logging.info(f"CF route cleaned up for deleted app {app_id} ({hostname})")
+            for hostname in sorted(published):
+                try:
+                    zone_id = await _cf_find_zone_id(hostname, account_id, api_token)
+                    if zone_id:
+                        await _cf_delete_dns_cname(zone_id, hostname, api_token)
+                    logging.info(f"CF route cleaned up for deleted app {app_id} ({hostname})")
+                except Exception as exc:
+                    logging.warning(f"CF DNS cleanup failed for app {app_id} ({hostname}): {exc}")
         except Exception as exc:
             logging.warning(f"CF cleanup failed for app {app_id} during delete: {exc}")
-    if cf_route:
+    for cf_route in cf_routes:
         session.delete(cf_route)
 
     app_dir_path = Path(app_row.app_dir)
