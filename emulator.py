@@ -296,6 +296,14 @@ def serve_vendor(name: str):
         raise HTTPException(404)
     return FileResponse(path, media_type="text/javascript")
 
+@app.get("/sw.js")
+def serve_service_worker():
+    path = ASSETS_DIR / "sw.js"
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
 @app.get("/")
 async def serve_spa():
     html = ASSETS_DIR / "index.html"

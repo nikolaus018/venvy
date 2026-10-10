@@ -2938,7 +2938,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "img-src 'self' data: blob: https://avatars.githubusercontent.com; "
             "connect-src 'self' ws: wss: "
             "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
-            "worker-src blob:; "
+            "worker-src 'self' blob:; "
             "manifest-src 'self' blob:; "
             "frame-ancestors 'none';",
         )
@@ -6369,6 +6369,17 @@ async def serve_vendor(name: str):
         raise HTTPException(404)
     return FileResponse(path, media_type="text/javascript",
                         headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.get("/sw.js")
+async def serve_service_worker():
+    """The PWA service worker. Has to come from the site root to be allowed
+    to control it, and must not be cached hard or updates never arrive."""
+    path = ASSETS_DIR / "sw.js"
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
 
 
 @app.get("/")
