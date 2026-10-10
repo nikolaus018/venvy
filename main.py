@@ -109,6 +109,8 @@ from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 # venvy imports
+from venvy.api.auth import UserReq
+from venvy.api import auth as api_auth
 from venvy.apps import (
     _clean_app_name,
     sanitize_slug,
@@ -651,9 +653,6 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(CSRFMiddleware)
 
-auth_router = APIRouter(
-    prefix="/api/auth", tags=["auth"], dependencies=[Depends(check_ip_allowlist)]
-)
 api_router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
 )
@@ -690,226 +689,6 @@ class FileOpReq(BaseModel):
 
 class PackageReq(BaseModel):
     name: str
-
-
-class UserReq(BaseModel):
-    username: str
-    password: str
-    role: Optional[str] = None
-
-
-class PwdReq(BaseModel):
-    current_password: str
-    password: str
-    password_confirm: str
-
-
-class TotpSetupReq(BaseModel):
-    totp_code: str
-
-class TotpDisableReq(BaseModel):
-    password: str
-
-
-class UserLoginReq(BaseModel):
-    username: str
-    password: str
-    totp_code: Optional[str] = None
-
-
-@auth_router.get("/status")
-def auth_status(request: Request, session: Session = Depends(get_session)):
-    user_exists = session.exec(select(User)).first() is not None
-    user = _authenticate(session, request.cookies.get("session"), request.headers.get("x-venvy-key"))
-    return {
-        "user_exists": user_exists,
-        "authenticated": user is not None,
-        "username": user.username if user else None,
-        "role": user.role if user else None,
-        "totp_enabled": user.totp_enabled if user else False,
-    }
-
-
-_setup_lock = threading.Lock()
-
-
-@auth_router.post("/setup")
-def auth_setup(payload: UserReq, request: Request, response: Response, session: Session = Depends(get_session)):
-    username = _clean_username(payload.username)
-    _validate_password_strength(payload.password)
-    password_hash = hash_password(payload.password)
-    # Handlers run in a thread pool: without the lock, two first-run requests
-    # could both see an empty user table and each create an admin account.
-    with _setup_lock:
-        if session.exec(select(User)).first():
-            raise HTTPException(400, "Setup already completed.")
-        user = User(username=username, password_hash=password_hash, role="admin")
-        session.add(user)
-        session.commit()
-    session.refresh(user)
-    auth_key = _new_session(session, response, user)
-    audit_log(user.username, "user_setup", "initial admin account created")
-    return {"ok": True, "username": user.username, "role": user.role, "auth_key": auth_key}
-
-
-@auth_router.post("/login")
-def login(
-    payload: UserLoginReq,
-    request: Request,
-    response: Response,
-    session: Session = Depends(get_session),
-):
-    rate_key = _login_rate_key(request)
-    user_key = _login_user_key(payload.username)
-    _check_login_rate(rate_key)
-    _check_login_rate(user_key)
-
-    def _fail(status: int, detail: str):
-        _record_login_failure(rate_key)
-        _record_login_failure(user_key, _LOGIN_MAX_TRIES_PER_USER)
-        _check_login_rate(rate_key)   # answers 429 if that was the last allowed try
-        _check_login_rate(user_key)
-        raise HTTPException(status, detail)
-
-    user = session.exec(select(User).where(User.username == payload.username)).first()
-    password_ok = verify_password(payload.password, user.password_hash if user else _DUMMY_PASSWORD_HASH)
-    if not user or not password_ok:
-        _fail(401, "Invalid credentials.")
-
-    if user.totp_enabled and user.totp_secret:
-        if not payload.totp_code:
-            raise HTTPException(403, "totp_required")
-        step = _totp_verify(_decrypt_secret(user.totp_secret), payload.totp_code, after=user.totp_last_counter)
-        if step is None:
-            _fail(401, "Invalid authenticator code.")
-        user.totp_last_counter = step
-        session.add(user)   # committed with the new session below
-
-    _clear_login_rate(user_key)
-    _clear_login_rate(rate_key)
-    auth_key = _new_session(session, response, user)
-    audit_log(user.username, "login", f"from {rate_key}")
-    return {"ok": True, "username": user.username, "role": user.role, "auth_key": auth_key}
-
-
-@auth_router.post("/logout")
-def logout(
-    request: Request,
-    response: Response,
-    session: Session = Depends(get_session),
-):
-    token = request.cookies.get("session")
-    if token:
-        db_session = session.get(UserSession, _hash_token(token))
-        if db_session:
-            session.delete(db_session)
-            session.commit()
-    response.delete_cookie("session", path="/")
-    return {"ok": True}
-
-
-@auth_router.put("/password")
-def change_own_password(
-    req: PwdReq,
-    request: Request,
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
-):
-    if not verify_password(req.current_password, user.password_hash):
-        raise HTTPException(401, "Current password is incorrect.")
-    if req.password != req.password_confirm:
-        raise HTTPException(400, "New passwords do not match.")
-    _validate_password_strength(req.password)
-    user.password_hash = hash_password(req.password)
-    session.add(user)
-    # A password change is usually "someone may know the old one" — sign out
-    # every other session of this user, keep only the one making the change.
-    current = _hash_token(request.cookies.get("session") or "")
-    for row in session.exec(select(UserSession).where(UserSession.user_id == user.id)).all():
-        if row.token != current:
-            session.delete(row)
-    session.commit()
-    audit_log(user.username, "password_change", "other sessions revoked")
-    return {"ok": True}
-
-
-@auth_router.post("/download-ticket")
-def create_download_ticket(user: User = Depends(get_current_user)):
-    """Trade the X-Venvy-Key header for a one-time, 60-second ticket usable as
-    ?ticket= on a download URL (see get_download_user)."""
-    ticket = secrets.token_urlsafe(24)
-    with _download_tickets_lock:
-        _download_tickets[_hash_token(ticket)] = (user.id, time.monotonic() + _DOWNLOAD_TICKET_TTL)
-    return {"ticket": ticket}
-
-
-# ---------------------------------------------------------------------------
-# TOTP routes
-# ---------------------------------------------------------------------------
-
-@auth_router.get("/totp/setup")
-def totp_setup_begin(
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
-):
-    """Generate (or return pending) TOTP secret + QR URI. Does NOT enable TOTP yet."""
-    if user.totp_enabled:
-        # Replacing an active authenticator must go through /totp/disable,
-        # which asks for the password — a borrowed session alone must not be
-        # able to re-enrol 2FA onto someone else's phone.
-        raise HTTPException(400, "Two-factor authentication is already enabled. Disable it first to set up a new authenticator.")
-    secret = _totp_generate_secret()
-    key = f"totp_pending_{user.id}"
-    setting = session.get(SystemSetting, key)
-    if setting:
-        setting.value = _encrypt_secret(secret)
-    else:
-        setting = SystemSetting(key=key, value=_encrypt_secret(secret))
-    session.add(setting)
-    session.commit()
-    uri = _totp_uri(secret, user.username)
-    return {"ok": True, "secret": secret, "uri": uri}
-
-
-@auth_router.post("/totp/setup/confirm")
-def totp_setup_confirm(
-    req: TotpSetupReq,
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
-):
-    """Verify the 6-digit code against the pending secret, then enable TOTP."""
-    key = f"totp_pending_{user.id}"
-    setting = session.get(SystemSetting, key)
-    if not setting or not setting.value:
-        raise HTTPException(400, "No pending TOTP setup. Start setup first.")
-    secret = _decrypt_secret(setting.value)
-    step = _totp_verify(secret, req.totp_code)
-    if step is None:
-        raise HTTPException(400, "Incorrect code — try again.")
-    user.totp_secret = _encrypt_secret(secret)
-    user.totp_enabled = True
-    user.totp_last_counter = step
-    session.add(user)
-    session.delete(setting)
-    session.commit()
-    return {"ok": True}
-
-
-@auth_router.post("/totp/disable")
-def totp_disable(
-    req: TotpDisableReq,
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
-):
-    """Disable TOTP after verifying current password."""
-    if not verify_password(req.password, user.password_hash):
-        raise HTTPException(401, "Incorrect password.")
-    user.totp_enabled = False
-    user.totp_secret = None
-    user.totp_last_counter = None
-    session.add(user)
-    session.commit()
-    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -3247,7 +3026,7 @@ async def terminal_ws(
 # Static routes
 # ---------------------------------------------------------------------------
 
-app.include_router(auth_router)
+app.include_router(api_auth.router)
 app.include_router(api_router)
 
 
