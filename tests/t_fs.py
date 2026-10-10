@@ -80,10 +80,10 @@ with server(repo, 54999) as (base, data, srv):
           and (app_dir / "sub/b.txt").read_bytes() == b"B" and [s["path"] for s in j["skipped"]] == ["../evil.txt"], r.text)
 
 # --- swap-after-check: call the fs layer with components that have become symlinks
-spec = u.spec_from_file_location("m", os.path.join(repo, os.environ.get("SMOKE_ENTRY", "main.py")))
 work = Path(tempfile.mkdtemp(prefix="venvy-race-")); os.chdir(work)
-sys.argv = ["x"]; m = u.module_from_spec(spec); spec.loader.exec_module(m)
-fs = getattr(m, "_safefs", m)
+sys.path.insert(0, os.path.abspath(repo))
+import venvy.safefs as fs
+import main as iso
 root = work / "app"; (root / "real").mkdir(parents=True)
 victim = work / "victim"; victim.mkdir(); (victim / "keep.txt").write_text("keep")
 os.symlink(victim, root / "d")          # "d" was a directory when the path was checked
@@ -103,6 +103,6 @@ fs._fs_save(root, ("real", "f"), b"new", None)
 check("race: save replaces a link, never writes through it", (victim / "keep.txt").read_text() == "keep" and (root / "real/f").read_text() == "new" and not (root / "real/f").is_symlink())
 os.symlink(victim / "keep.txt", root / "real" / "g")
 check("race: read of link refused", refused(fs._fs_open_file, root, ("real", "g")))
-fs._chown_tree(root, os.getuid(), os.getgid())
+iso._chown_tree(root, os.getuid(), os.getgid())
 print("FAILED:" if fails else "ALL OK", fails)
 sys.exit(1 if fails else 0)
