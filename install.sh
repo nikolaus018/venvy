@@ -302,7 +302,14 @@ if [ "$HEALTHY" -ne 1 ]; then
     warn "Switching back to $(basename "$PREV_DIR")..."
     ln -sfn "$PREV_DIR" "$CODE_DIR/current"
     systemctl restart venvy.service
-    die "The update was rolled back; the previous version is running again. The database snapshot is in $DATA_DIR/backups."
+    rm -rf "$REL_DIR"
+    for _ in $(seq 1 60); do
+      if curl -fsS -o /dev/null "http://$PROBE_HOST:$PORT/api/health" 2>/dev/null; then
+        die "The update was rolled back; the previous version is running again. The database snapshot is in $DATA_DIR/backups."
+      fi
+      sleep 1
+    done
+    die "The update failed and the previous version did not come back up either. Check:  journalctl -u venvy -e"
   fi
   die "Venvy is installed but not responding. Check:  journalctl -u venvy -e"
 fi
