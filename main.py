@@ -4780,10 +4780,14 @@ def get_system_setting(
     session: Session = Depends(get_session),
 ):
     setting = session.get(SystemSetting, key)
+    if _is_secret_setting(key):
+        # Write-only: a credential has no business travelling back to a
+        # browser. The server uses it; the UI only needs to know it exists.
+        return {"key": key, "value": "", "is_set": bool(setting and setting.value)}
     if not setting:
         return {"key": key, "value": ""}
     value = setting.value
-    if key.startswith("cf_") or key == "gh_token":
+    if key.startswith("cf_"):
         value = _decrypt_secret(value)
     return {"key": key, "value": value}
 
@@ -4794,6 +4798,11 @@ def _sanitize_cf_value(v: str) -> str:
     v = "".join(ch for ch in v if ch not in "\r\n\t")
     v = "".join(ch for ch in v if unicodedata.category(ch) != "Cf")
     return v
+
+
+def _is_secret_setting(key: str) -> bool:
+    """Settings whose value is never returned by the API once stored."""
+    return key in ("cf_api_token", "gh_token") or key.startswith("totp_pending_")
 
 
 def _setting_for_storage(key: str, value: str) -> tuple:
@@ -4960,6 +4969,27 @@ async def test_cf_credentials(
 
     all_ok = all(v["ok"] for v in results.values())
     return {"ok": all_ok, "checks": results}
+
+
+@api_router.get("/system/cloudflare/status")
+def cf_status(
+    _: User = Depends(require_operator),
+    session: Session = Depends(get_session),
+):
+    """Whether the Cloudflare integration is configured — what the tunnel UI
+    needs to know, for everyone allowed to publish routes, without handing
+    out the API token."""
+    def _value(key: str) -> str:
+        row = session.get(SystemSetting, key)
+        return _sanitize_cf_value(_decrypt_secret(row.value)) if row and row.value else ""
+
+    token, account, tunnel = _value("cf_api_token"), _value("cf_account_id"), _value("cf_tunnel_id")
+    return {
+        "configured": bool(token and account and tunnel),
+        "token_set": bool(token),
+        "account_id_hint": account[:8],
+        "tunnel_id_hint": tunnel[:8],
+    }
 
 
 @api_router.get("/system/cloudflare/zones")

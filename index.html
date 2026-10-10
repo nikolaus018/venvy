@@ -7856,20 +7856,18 @@
         }
         async function loadCfCredsStatus() {
             try {
-                const [t, a, ti] = await Promise.all([
-                    fetch(`${API}/system/settings/cf_api_token`).then(r => r.json()),
-                    fetch(`${API}/system/settings/cf_account_id`).then(r => r.json()),
-                    fetch(`${API}/system/settings/cf_tunnel_id`).then(r => r.json()),
-                ]);
-                const allSet = !!(t.value && a.value && ti.value);
+                const res = await fetch(`${API}/system/cloudflare/status`);
+                if (!res.ok) return;
+                const st = await res.json();
+                const allSet = !!st.configured;
                 // Warm the shared cache with what we just fetched
                 _cfCredsCache = { hasCreds: allSet, ts: Date.now() };
                 const badge = document.getElementById('cf-creds-badge');
                 if (allSet) {
                     badge.classList.remove('hidden'); badge.classList.add('flex');
                     document.getElementById('cf-cred-token').placeholder = '••••••••  (saved — paste to replace)';
-                    document.getElementById('cf-cred-account').placeholder = a.value.slice(0, 8) + '…  (saved)';
-                    document.getElementById('cf-cred-tunnel').placeholder = ti.value.slice(0, 8) + '…  (saved)';
+                    document.getElementById('cf-cred-account').placeholder = st.account_id_hint + '…  (saved)';
+                    document.getElementById('cf-cred-tunnel').placeholder = st.tunnel_id_hint + '…  (saved)';
                 } else {
                     badge.classList.add('hidden'); badge.classList.remove('flex');
                 }
@@ -8027,13 +8025,12 @@
             if (_cfCredsCache && (now - _cfCredsCache.ts) < _CF_CREDS_TTL_MS) {
                 return _cfCredsCache;
             }
-            const [tokenRes, accountRes, tunnelRes] = await Promise.all([
-                fetch(`${API}/system/settings/cf_api_token`).then(r => r.json()).catch(() => ({})),
-                fetch(`${API}/system/settings/cf_account_id`).then(r => r.json()).catch(() => ({})),
-                fetch(`${API}/system/settings/cf_tunnel_id`).then(r => r.json()).catch(() => ({})),
-            ]);
+            // The status endpoint is open to operators (who may publish routes)
+            // and never returns the API token itself.
+            const st = await fetch(`${API}/system/cloudflare/status`)
+                .then(r => r.ok ? r.json() : {}).catch(() => ({}));
             _cfCredsCache = {
-                hasCreds: !!(tokenRes.value && accountRes.value && tunnelRes.value),
+                hasCreds: !!st.configured,
                 ts: Date.now(),
             };
             return _cfCredsCache;

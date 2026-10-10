@@ -916,6 +916,8 @@ def restore_backup(filename: str, req: RestoreBackupReq, request: Request):
 @app.get("/api/system/settings/{key}")
 def get_system_setting(key: str, request: Request):
     _check_auth(request)
+    if key in ("cf_api_token", "gh_token"):
+        return {"key": key, "value": "", "is_set": bool(FAKE_SETTINGS.get(key))}
     return {"key": key, "value": FAKE_SETTINGS.get(key, "")}
 
 class SystemSettingReq(BaseModel):
@@ -937,6 +939,17 @@ def set_system_settings_batch(items: List[BatchSettingItem], request: Request):
     for item in items:
         FAKE_SETTINGS[item.key] = item.value
     return {"ok": True, "saved": len(items)}
+
+@app.get("/api/system/cloudflare/status")
+def cf_status(request: Request):
+    _check_auth(request)
+    token, account, tunnel = (FAKE_SETTINGS.get(k, "") for k in ("cf_api_token", "cf_account_id", "cf_tunnel_id"))
+    return {
+        "configured": bool(token and account and tunnel),
+        "token_set": bool(token),
+        "account_id_hint": account[:8],
+        "tunnel_id_hint": tunnel[:8],
+    }
 
 @app.post("/api/system/cloudflare/test")
 async def test_cf_credentials(request: Request):

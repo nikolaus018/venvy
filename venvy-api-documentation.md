@@ -418,11 +418,15 @@ Any role. Returns the server's LAN IPv4 address: `{ "ipv4": "192.168.1.20" }`.
 `require_operator`. Lists currently listening TCP ports plus recommended free ports for new apps.
 
 #### `GET /api/system/settings/{key}` / `PUT /api/system/settings/{key}` — admin only
-Generic key-value store for instance settings. Keys prefixed `cf_` (Cloudflare credentials) are transparently encrypted at rest with a local Fernet key (`.venvy_key`) and decrypted on read.
+Generic key-value store for instance settings. Keys prefixed `cf_` (Cloudflare credentials) and `gh_token` are transparently encrypted at rest with a local Fernet key (`.venvy_key`).
+Secrets are write-only: `GET` for `cf_api_token` or `gh_token` answers `{ "key", "value": "", "is_set": true|false }` and never the stored value. Other keys (including `cf_account_id` / `cf_tunnel_id`) are returned decrypted.
 **PUT body:** `{ "value": "string" }`
 
 #### `POST /api/system/settings/batch` — admin only
-**Body:** `[{ "key", "value" }, ...]` — saves multiple settings in one DB transaction. Same `cf_` encryption rule applies per item.
+**Body:** `[{ "key", "value" }, ...]` — saves multiple settings in one DB transaction. The same encryption rule applies per item.
+
+#### `GET /api/system/cloudflare/status`
+`require_operator`. Whether the Cloudflare integration is configured, without exposing the token: `{ "configured": true, "token_set": true, "account_id_hint": "0123abcd", "tunnel_id_hint": "89ef4567" }` (hints are the first 8 characters).
 
 ---
 
@@ -627,6 +631,7 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 | POST | `/api/system/backup/restore/{filename}` | admin |
 | GET/PUT | `/api/system/settings/{key}` | admin |
 | POST | `/api/system/settings/batch` | admin |
+| GET | `/api/system/cloudflare/status` | operator |
 | POST | `/api/system/cloudflare/test` | admin |
 | GET | `/api/system/cloudflare/zones` | operator |
 | GET | `/api/apps/{id}/tunnel` | viewer |
