@@ -938,12 +938,17 @@ def _app_ids(app_row: "App") -> Optional[tuple]:
 
 
 def _chown_tree(path: Path, uid: int, gid: int) -> None:
+    """Give *path* and everything under it to uid:gid without ever following
+    a symlink. The tree belongs to the app, which can rearrange it while we
+    walk: os.fwalk() hands out a directory fd per level and verifies each
+    directory it enters is the one it listed, so a directory swapped for a
+    symlink mid-walk is skipped instead of leading root's chown elsewhere."""
     os.lchown(path, uid, gid)
     if path.is_dir() and not path.is_symlink():
-        for root, dirs, files in os.walk(path):
+        for _dirpath, dirs, files, dirfd in os.fwalk(path, follow_symlinks=False):
             for n in dirs + files:
                 with contextlib.suppress(FileNotFoundError):
-                    os.lchown(os.path.join(root, n), uid, gid)
+                    os.chown(n, uid, gid, dir_fd=dirfd, follow_symlinks=False)
 
 
 def _ensure_app_user(app_row: "App") -> Optional[tuple]:
@@ -982,23 +987,352 @@ def _delete_app_user(app_id: int) -> None:
         subprocess.run(["userdel", _app_username(app_id)], capture_output=True, timeout=30)
 
 
-def _chown_for_app(app_row: "App", path: Path) -> None:
-    """Hand a path Venvy just wrote inside an app dir over to the app's user."""
+def _chown_app_dir(app_row: "App") -> None:
+    """Hand the app's whole directory (back) to its user, after a tool that
+    ran on its behalf may have left other owners behind."""
     ids = _app_ids(app_row)
-    if ids and path.exists():
-        _chown_tree(path, *ids)
+    app_dir = Path(app_row.app_dir)
+    if ids and app_dir.exists():
+        _chown_tree(app_dir, *ids)
 
 
-def _first_missing_ancestor(root: Path, target: Path) -> Optional[Path]:
-    """The top-most directory between root and target that doesn't exist yet
-    (what a mkdir(parents=True) is about to create), or None."""
-    missing = None
-    p = target
-    while p != root and root in p.parents:
-        if not p.exists():
-            missing = p
-        p = p.parent
-    return missing
+# ---------------------------------------------------------------------------
+# File access inside app directories
+# ---------------------------------------------------------------------------
+# With per-app users Venvy is root and the directory belongs to the app, which
+# can change it at any moment — including swapping a directory for a symlink
+# between Venvy checking a path and using it. A path string that was safe when
+# checked is therefore worth nothing by the time it is opened: root would
+# follow the new link and write (or read, or chown) wherever it points.
+#
+# So nothing below uses a path twice. A request path is resolved once (which
+# is what lets an app's own, legitimate symlinks keep working), reduced to its
+# components under the app directory, and then walked from the app directory
+# one component at a time with O_NOFOLLOW. Every operation happens relative to
+# the directory fd that walk returns. If anything on the way has turned into a
+# symlink since it was resolved, the walk fails instead of following it.
+
+_O_NOFOLLOW_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_FS_COPY_BUF = 1024 * 1024
+
+
+class AppPathError(Exception):
+    """A path inside an app directory can't be used as asked. Carries the
+    HTTP status the API should answer with."""
+
+    def __init__(self, status: int, detail: str = ""):
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+
+
+def _app_rel_parts(root: Path, rel_path: str, follow_last: bool = True) -> tuple:
+    """Check a client-supplied path against the app directory *root* and
+    return its components below it. With follow_last=False the final
+    component is taken literally rather than resolved, for operations that
+    act on a directory entry itself (delete, rename): deleting a symlink
+    should remove the link, not what it points to."""
+    root_r = root.resolve()
+    cand = root / (rel_path or "")
+    if follow_last or cand.name in ("", ".", ".."):
+        target = cand.resolve()
+    else:
+        target = cand.parent.resolve() / cand.name
+    if not (target == root_r or root_r in target.parents):
+        raise AppPathError(403, "Path is outside the app directory.")
+    return target.relative_to(root_r).parts
+
+
+@contextlib.contextmanager
+def _open_app_dir(root: Path, parts: tuple, create: bool = False, owner: Optional[tuple] = None):
+    """Yield a directory fd for root/parts, reached without following any
+    symlink below root. create=True makes missing directories on the way
+    (owned by *owner* when given)."""
+    fd = os.open(root.resolve(), _O_NOFOLLOW_DIR)
+    try:
+        for part in parts:
+            try:
+                try:
+                    nfd = os.open(part, _O_NOFOLLOW_DIR, dir_fd=fd)
+                except FileNotFoundError:
+                    if not create:
+                        raise AppPathError(404, f"'{part}' does not exist.")
+                    with contextlib.suppress(FileExistsError):
+                        os.mkdir(part, 0o755, dir_fd=fd)
+                    nfd = os.open(part, _O_NOFOLLOW_DIR, dir_fd=fd)
+                    if owner:
+                        os.fchown(nfd, *owner)
+            except OSError as exc:
+                # ELOOP / ENOTDIR: a symlink or a plain file where a folder
+                # was expected.
+                raise AppPathError(409, f"'{part}' is not a folder.") from exc
+            os.close(fd)
+            fd = nfd
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _fs_lstat(dir_fd: int, name: str) -> Optional[os.stat_result]:
+    try:
+        return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def _fs_is_dir(st: Optional[os.stat_result]) -> bool:
+    import stat as _stat
+    return st is not None and _stat.S_ISDIR(st.st_mode)
+
+
+def _fs_write_new(dir_fd: int, name: str, chunks, mode: int, owner: Optional[tuple], limit: Optional[int] = None) -> bool:
+    """Write *chunks* to dir_fd/name via a temp file + rename, so a crash or
+    full disk never leaves a truncated file behind. Returns False (nothing
+    changed) if the data exceeds *limit* bytes."""
+    tmp = f".{name}.venvy-{secrets.token_hex(4)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, 0o600, dir_fd=dir_fd)
+    try:
+        written = 0
+        with os.fdopen(fd, "wb") as f:
+            for chunk in chunks:
+                written += len(chunk)
+                if limit is not None and written > limit:
+                    return False
+                f.write(chunk)
+            f.flush()
+            os.fsync(f.fileno())
+            os.fchmod(f.fileno(), mode)
+            if owner:
+                os.fchown(f.fileno(), *owner)
+        # rename() replaces a symlink itself, it never writes through one.
+        os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        return True
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp, dir_fd=dir_fd)
+
+
+def _fs_read_chunks(fileobj):
+    while True:
+        buf = fileobj.read(_FS_COPY_BUF)
+        if not buf:
+            return
+        yield buf
+
+
+def _fs_save(root: Path, parts: tuple, data: bytes, owner: Optional[tuple]) -> None:
+    """Create or overwrite the file root/parts, keeping an existing file's mode."""
+    import stat as _stat
+    with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
+        st = _fs_lstat(dfd, parts[-1])
+        if _fs_is_dir(st):
+            raise AppPathError(409, "That path is a folder.")
+        mode = _stat.S_IMODE(st.st_mode) if st is not None and _stat.S_ISREG(st.st_mode) else 0o644
+        _fs_write_new(dfd, parts[-1], [data], mode, owner)
+
+
+def _fs_write_stream(root: Path, parts: tuple, fileobj, limit: int, owner: Optional[tuple]) -> bool:
+    """Stream *fileobj* into root/parts. False if it is larger than *limit*."""
+    with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
+        if _fs_is_dir(_fs_lstat(dfd, parts[-1])):
+            raise AppPathError(409, f"'{parts[-1]}' already exists as a folder.")
+        return _fs_write_new(dfd, parts[-1], _fs_read_chunks(fileobj), 0o644, owner, limit)
+
+
+def _fs_install(root: Path, parts: tuple, src: Path, owner: Optional[tuple]) -> None:
+    """Move *src* — a finished file in Venvy's own temp space — to root/parts."""
+    with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
+        if _fs_is_dir(_fs_lstat(dfd, parts[-1])):
+            raise AppPathError(409, f"'{parts[-1]}' already exists as a folder.")
+        if owner:
+            os.lchown(src, *owner)
+        try:
+            os.replace(src, parts[-1], dst_dir_fd=dfd)
+        except OSError:
+            # Different filesystem (e.g. DATA_DIR/apps is a mount) — copy instead.
+            mode = os.stat(src).st_mode & 0o777
+            with open(src, "rb") as f:
+                _fs_write_new(dfd, parts[-1], _fs_read_chunks(f), mode, owner)
+            src.unlink(missing_ok=True)
+
+
+def _fs_touch(root: Path, parts: tuple, owner: Optional[tuple]) -> None:
+    with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
+        try:
+            fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, 0o644, dir_fd=dfd)
+        except FileExistsError:
+            # Same as touch(1) on an existing entry: just bump its mtime.
+            os.utime(parts[-1], dir_fd=dfd, follow_symlinks=False)
+            return
+        try:
+            if owner:
+                os.fchown(fd, *owner)
+        finally:
+            os.close(fd)
+
+
+def _fs_mkdir(root: Path, parts: tuple, owner: Optional[tuple]) -> None:
+    with _open_app_dir(root, parts, create=True, owner=owner):
+        pass
+
+
+def _fs_rmtree(dir_fd: int, name: str) -> None:
+    """Remove the directory dir_fd/name and everything in it, best effort,
+    descending only into real directories (never through a symlink)."""
+    try:
+        sub = os.open(name, _O_NOFOLLOW_DIR, dir_fd=dir_fd)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(name, dir_fd=dir_fd)
+        return
+    try:
+        with os.scandir(sub) as it:
+            entries = [(e.name, e.is_dir(follow_symlinks=False)) for e in it]
+        for child, is_dir in entries:
+            if is_dir:
+                _fs_rmtree(sub, child)
+            else:
+                with contextlib.suppress(OSError):
+                    os.unlink(child, dir_fd=sub)
+    finally:
+        os.close(sub)
+    with contextlib.suppress(OSError):
+        os.rmdir(name, dir_fd=dir_fd)
+
+
+def _fs_delete(root: Path, parts: tuple) -> None:
+    with _open_app_dir(root, parts[:-1]) as dfd:
+        st = _fs_lstat(dfd, parts[-1])
+        if st is None:
+            return
+        if _fs_is_dir(st):
+            _fs_rmtree(dfd, parts[-1])
+        else:
+            os.unlink(parts[-1], dir_fd=dfd)
+
+
+def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner: Optional[tuple]) -> None:
+    """Copy one directory entry (file, symlink or whole directory) between
+    two directory fds. Symlinks are copied as symlinks, never followed."""
+    import stat as _stat
+    st = os.stat(src_name, dir_fd=src_fd, follow_symlinks=False)
+    if _stat.S_ISLNK(st.st_mode):
+        os.symlink(os.readlink(src_name, dir_fd=src_fd), dst_name, dir_fd=dst_fd)
+        if owner:
+            os.chown(dst_name, *owner, dir_fd=dst_fd, follow_symlinks=False)
+    elif _stat.S_ISDIR(st.st_mode):
+        os.mkdir(dst_name, 0o700, dir_fd=dst_fd)
+        s_sub = os.open(src_name, _O_NOFOLLOW_DIR, dir_fd=src_fd)
+        try:
+            d_sub = os.open(dst_name, _O_NOFOLLOW_DIR, dir_fd=dst_fd)
+            try:
+                if owner:
+                    os.fchown(d_sub, *owner)
+                with os.scandir(s_sub) as it:
+                    names = [e.name for e in it]
+                for name in names:
+                    _fs_copy_entry(s_sub, name, d_sub, name, owner)
+                os.fchmod(d_sub, _stat.S_IMODE(st.st_mode))
+            finally:
+                os.close(d_sub)
+        finally:
+            os.close(s_sub)
+    elif _stat.S_ISREG(st.st_mode):
+        fd = os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW | _O_CLOEXEC, dir_fd=src_fd)
+        with os.fdopen(fd, "rb") as f:
+            out = os.open(dst_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, 0o600, dir_fd=dst_fd)
+            with os.fdopen(out, "wb") as o:
+                shutil.copyfileobj(f, o, _FS_COPY_BUF)
+                os.fchmod(o.fileno(), _stat.S_IMODE(st.st_mode))
+                if owner:
+                    os.fchown(o.fileno(), *owner)
+        os.utime(dst_name, ns=(st.st_atime_ns, st.st_mtime_ns), dir_fd=dst_fd, follow_symlinks=False)
+    # Sockets, FIFOs and devices are not copied.
+
+
+def _fs_move_or_copy(root: Path, src: tuple, dst: tuple, copy: bool, owner: Optional[tuple], dst_label: str) -> None:
+    """Rename (copy=False) or copy the entry root/src to root/dst."""
+    with _open_app_dir(root, src[:-1]) as sfd, _open_app_dir(root, dst[:-1], create=True, owner=owner) as dfd:
+        s_st = _fs_lstat(sfd, src[-1])
+        if s_st is None:
+            raise AppPathError(404, "Source does not exist.")
+        d_st = _fs_lstat(dfd, dst[-1])
+        # The one overwrite allowed: renaming an entry onto itself, which is
+        # how a case-only rename looks on a case-insensitive filesystem.
+        same = d_st is not None and (d_st.st_dev, d_st.st_ino) == (s_st.st_dev, s_st.st_ino)
+        if d_st is not None and not (same and not copy):
+            raise AppPathError(409, f"'{dst_label}' already exists.")
+        if copy:
+            _fs_copy_entry(sfd, src[-1], dfd, dst[-1], owner)
+        else:
+            os.rename(src[-1], dst[-1], src_dir_fd=sfd, dst_dir_fd=dfd)
+
+
+def _fs_open_file(root: Path, parts: tuple):
+    """Open the regular file root/parts for reading; returns (file object,
+    stat). Raises AppPathError(404) for anything else."""
+    import stat as _stat
+    if not parts:
+        raise AppPathError(404, "File not found.")
+    with _open_app_dir(root, parts[:-1]) as dfd:
+        try:
+            # O_NONBLOCK: don't hang on a FIFO that appeared in the meantime.
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _O_CLOEXEC, dir_fd=dfd)
+        except OSError:
+            raise AppPathError(404, "File not found.")
+    st = os.fstat(fd)
+    if not _stat.S_ISREG(st.st_mode):
+        os.close(fd)
+        raise AppPathError(404, "File not found.")
+    os.set_blocking(fd, True)
+    return os.fdopen(fd, "rb"), st
+
+
+def _fs_listdir(root: Path, parts: tuple) -> List[dict]:
+    """[{name, is_dir, size}] for the directory root/parts ([] if it isn't one)."""
+    try:
+        with _open_app_dir(root, parts) as dfd:
+            out = []
+            with os.scandir(dfd) as it:
+                for entry in it:
+                    try:
+                        size = entry.stat().st_size
+                    except OSError:
+                        size = 0
+                    try:
+                        is_dir = entry.is_dir()
+                    except OSError:
+                        is_dir = False
+                    out.append({"name": entry.name, "is_dir": is_dir, "size": size})
+            return out
+    except AppPathError:
+        return []
+
+
+def _file_download_response(fileobj, st: os.stat_result, filename: str, media_type: Optional[str] = None):
+    """What FileResponse(path, filename=...) would send, but from a file that
+    is already open — the path is not looked up a second time."""
+    import mimetypes
+    from starlette.responses import StreamingResponse
+
+    def _iter():
+        with fileobj:
+            yield from _fs_read_chunks(fileobj)
+
+    quoted = urllib.parse.quote(filename)
+    disposition = (f'attachment; filename="{filename}"' if quoted == filename
+                   else f"attachment; filename*=utf-8''{quoted}")
+    return StreamingResponse(
+        _iter(),
+        media_type=media_type or mimetypes.guess_type(filename)[0] or "text/plain",
+        headers={
+            "Content-Length": str(st.st_size),
+            "Content-Disposition": disposition,
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 def _app_proc_kwargs(app_row: "App") -> dict:
@@ -3493,8 +3827,7 @@ async def upload_app(
 
             if req_bytes is not None and runtime == "python":
                 req_path = app_dir / "requirements.txt"
-                await asyncio.to_thread(req_path.write_bytes, req_bytes)
-                await asyncio.to_thread(_chown_for_app, row, req_path)
+                await asyncio.to_thread(_fs_save, app_dir, ("requirements.txt",), req_bytes, _app_ids(row))
                 pip_bin = venv_path / "bin" / "pip"
                 if not await asyncio.to_thread(pip_bin.exists):
                     raise HTTPException(500, "pip not found in the new virtual environment.")
@@ -3837,50 +4170,22 @@ def file_tree(
     if not app_row:
         raise HTTPException(404)
     root = Path(app_row.app_dir)
-    target = (root / path).resolve()
-    if not is_safe_path(root, target):
-        raise HTTPException(403)
+    try:
+        parts = _app_rel_parts(root, path)
+    except AppPathError as exc:
+        raise HTTPException(exc.status)
     results = []
     _SKIP_NAMES = {"venv", "__pycache__", "logs", "node_modules", ".git", ".mypy_cache", ".pytest_cache"}
-    if target.is_dir():
-        for item in target.iterdir():
-            if item.name in _SKIP_NAMES or _is_protected_app_file(item.name):
-                continue
-            try:
-                size = item.stat().st_size
-            except OSError:
-                size = 0
-            results.append({
-                "name": item.name,
-                "path": item.relative_to(root).as_posix(),
-                "is_dir": item.is_dir(),
-                "size": size,
-            })
+    for item in _fs_listdir(root, parts):
+        if item["name"] in _SKIP_NAMES or _is_protected_app_file(item["name"]):
+            continue
+        results.append({
+            "name": item["name"],
+            "path": "/".join(parts + (item["name"],)),
+            "is_dir": item["is_dir"],
+            "size": item["size"],
+        })
     return sorted(results, key=lambda x: (not x["is_dir"], x["name"].lower()))
-
-
-def _atomic_save(app_row: App, target: Path, content: str) -> None:
-    """Write via a temp file + rename, so a crash or full disk mid-save never
-    leaves a truncated file behind. Keeps the file's mode (and, under per-app
-    users, gives it to the app's user)."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        mode = target.stat().st_mode & 0o7777
-    except FileNotFoundError:
-        mode = 0o644
-    tmp = target.with_name(f".{target.name}.venvy-{secrets.token_hex(4)}.tmp")
-    try:
-        with open(tmp, "x", encoding="utf-8") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, mode)
-        ids = _app_ids(app_row)
-        if ids:
-            os.lchown(tmp, *ids)
-        os.replace(tmp, target)
-    finally:
-        tmp.unlink(missing_ok=True)
 
 
 @api_router.post("/apps/{app_id}/files/op")
@@ -3895,64 +4200,45 @@ async def file_operations(
     if not app_row:
         raise HTTPException(404)
     root = Path(app_row.app_dir)
-    target = (root / req.path).resolve()
-    if not is_safe_path(root, target):
-        raise HTTPException(403)
-    if _is_protected_app_file(target.name):
-        raise HTTPException(403, "Operation not permitted on this path.")
+    op = req.operation
+    if op not in ("create_file", "create_folder", "delete", "rename", "copy", "save"):
+        raise HTTPException(400, f"Unknown operation: {op}")
 
     try:
-        if target == root.resolve() and req.operation not in ("create_folder",):
+        # delete/rename/copy act on the entry itself; the others on what it names.
+        parts = _app_rel_parts(root, req.path, follow_last=op not in ("delete", "rename", "copy"))
+        if parts and _is_protected_app_file(parts[-1]):
+            raise HTTPException(403, "Operation not permitted on this path.")
+        if not parts and op != "create_folder":
             raise HTTPException(400, "That operation isn't allowed on the app's root folder.")
-        created: Optional[Path] = None   # what to hand to the app's user afterwards
+        owner = _app_ids(app_row)   # new files and folders go to the app's user
 
-        if req.operation == "create_file":
-            created = _first_missing_ancestor(root.resolve(), target.parent) or target
-            await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
-            await asyncio.to_thread(target.touch)
+        if op == "create_file":
+            await asyncio.to_thread(_fs_touch, root, parts, owner)
 
-        elif req.operation == "create_folder":
-            created = _first_missing_ancestor(root.resolve(), target)
-            await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
+        elif op == "create_folder":
+            await asyncio.to_thread(_fs_mkdir, root, parts, owner)
 
-        elif req.operation == "delete":
-            if await asyncio.to_thread(target.is_dir):
-                await asyncio.to_thread(shutil.rmtree, target, True)
-            else:
-                await asyncio.to_thread(target.unlink, missing_ok=True)
+        elif op == "delete":
+            await asyncio.to_thread(_fs_delete, root, parts)
 
-        elif req.operation in ("rename", "copy"):
-            new_target = (root / (req.new_path or "")).resolve()
-            if not is_safe_path(root, new_target) or new_target == root.resolve():
+        elif op in ("rename", "copy"):
+            new_parts = _app_rel_parts(root, req.new_path or "", follow_last=False)
+            if not new_parts:
                 raise HTTPException(403)
-            if _is_protected_app_file(new_target.name):
+            if _is_protected_app_file(new_parts[-1]):
                 raise HTTPException(403, "Operation not permitted on this path.")
-            if await asyncio.to_thread(new_target.exists) and not (
-                    req.operation == "rename" and await asyncio.to_thread(os.path.samefile, target, new_target)):
-                raise HTTPException(409, f"'{req.new_path}' already exists.")
-            created = _first_missing_ancestor(root.resolve(), new_target.parent) or new_target
-            await asyncio.to_thread(new_target.parent.mkdir, parents=True, exist_ok=True)
-            if req.operation == "rename":
-                await asyncio.to_thread(target.rename, new_target)
-            elif await asyncio.to_thread(target.is_dir):
-                await asyncio.to_thread(shutil.copytree, target, new_target, True)
-            else:
-                await asyncio.to_thread(shutil.copy2, target, new_target)
+            await asyncio.to_thread(
+                _fs_move_or_copy, root, parts, new_parts, op == "copy", owner, req.new_path or "")
 
-        elif req.operation == "save":
+        elif op == "save":
             if req.content is None:
                 raise HTTPException(400, "No content provided for save.")
-            if await asyncio.to_thread(target.is_dir):
-                raise HTTPException(409, "That path is a folder.")
-            created = _first_missing_ancestor(root.resolve(), target.parent)
-            await asyncio.to_thread(_atomic_save, app_row, target, req.content)
-        else:
-            raise HTTPException(400, f"Unknown operation: {req.operation}")
-
-        if created is not None:
-            await asyncio.to_thread(_chown_for_app, app_row, created)
+            await asyncio.to_thread(_fs_save, root, parts, req.content.encode("utf-8"), owner)
     except HTTPException:
         raise
+    except AppPathError as exc:
+        raise HTTPException(exc.status, exc.detail or None)
     except Exception as exc:
         raise HTTPException(500, f"File operation failed: {exc}")
     return {"ok": True}
@@ -3972,19 +4258,12 @@ async def download_file(
     if not app_row:
         raise HTTPException(404)
     root = Path(app_row.app_dir)
-    target = (root / path).resolve()
-    if not is_safe_path(root, target):
-        raise HTTPException(403)
-    if not target.is_file():
-        raise HTTPException(404, "File not found.")
-    return FileResponse(
-        target,
-        filename=target.name,
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate",
-            "Pragma":        "no-cache",
-        },
-    )
+    try:
+        parts = _app_rel_parts(root, path)
+        fileobj, st = await asyncio.to_thread(_fs_open_file, root, parts)
+    except AppPathError as exc:
+        raise HTTPException(exc.status, exc.detail or None)
+    return _file_download_response(fileobj, st, parts[-1])
 
 
 @api_router.post("/apps/{app_id}/files/upload")
@@ -4005,22 +4284,26 @@ async def upload_file_to_path(
         raise HTTPException(403)
     if not target_dir.is_dir():
         raise HTTPException(404, "Target directory does not exist.")
+    owner = _app_ids(app_row)
     skipped: List[Dict[str, str]] = []
     for file in files:
         rel_path = file.filename or "upload"
         reason = _upload_rel_path_error(rel_path)
-        dest = (target_dir / rel_path).resolve()
-        if not reason and not is_safe_path(root, dest):
-            reason = "path escapes app directory"
+        parts: tuple = ()
+        if not reason:
+            try:
+                parts = _app_rel_parts(root, str(target_dir / rel_path))
+            except AppPathError:
+                reason = "path escapes app directory"
+        if not reason:
+            file.file.seek(0)
+            try:
+                if not await asyncio.to_thread(_fs_write_stream, root, parts, file.file, _SINGLE_REQUEST_UPLOAD_MAX, owner):
+                    reason = f"exceeds the {_SINGLE_REQUEST_UPLOAD_MAX // (1024 * 1024)} MB single-request limit"
+            except AppPathError as exc:
+                reason = exc.detail or "invalid path"
         if reason:
             skipped.append({"path": rel_path, "reason": reason})
-            continue
-        created = _first_missing_ancestor(root.resolve(), dest.parent) or dest
-        await asyncio.to_thread(dest.parent.mkdir, parents=True, exist_ok=True)
-        if not await asyncio.to_thread(_save_upload_file, file, dest, _SINGLE_REQUEST_UPLOAD_MAX):
-            skipped.append({"path": rel_path, "reason": f"exceeds the {_SINGLE_REQUEST_UPLOAD_MAX // (1024 * 1024)} MB single-request limit"})
-            continue
-        await asyncio.to_thread(_chown_for_app, app_row, created)
     return {"ok": True, "skipped": skipped}
 
 
@@ -4054,8 +4337,9 @@ async def upload_file_chunk(
     reason = _upload_rel_path_error(rel_path)
     if reason:
         raise HTTPException(400, f"'{rel_path}': {reason}.")
-    dest = (target_dir / rel_path).resolve()
-    if not is_safe_path(root, dest):
+    try:
+        dest_parts = _app_rel_parts(root, str(target_dir / rel_path))
+    except AppPathError:
         raise HTTPException(403, "Upload path escapes app directory.")
     if total < 0 or offset < 0 or offset > total:
         raise HTTPException(400, "Invalid offset/total.")
@@ -4099,21 +4383,11 @@ async def upload_file_chunk(
         return {"ok": True, "received": received, "done": False}
 
     def _finalize() -> None:
-        if dest.is_dir():
-            part.unlink(missing_ok=True)
-            raise HTTPException(409, f"'{rel_path}' already exists as a folder.")
-        created = _first_missing_ancestor(root.resolve(), dest.parent)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        ids = _app_ids(app_row)
-        if ids:
-            os.lchown(part, *ids)
         try:
-            os.replace(part, dest)
-        except OSError:
-            # Different filesystem (e.g. DATA_DIR/apps is a mount) — copy instead.
-            shutil.move(str(part), str(dest))
-        if created is not None:
-            _chown_for_app(app_row, created)
+            _fs_install(root, dest_parts, part, _app_ids(app_row))
+        except AppPathError as exc:
+            part.unlink(missing_ok=True)
+            raise HTTPException(exc.status, exc.detail or f"'{rel_path}' cannot be written.")
 
     await asyncio.to_thread(_finalize)
     return {"ok": True, "received": received, "done": True}
@@ -4142,13 +4416,15 @@ async def list_packages(
         raise HTTPException(404)
     
     if app_row.runtime == "rust":
-        manifest_path = Path(app_row.app_dir) / "Cargo.toml"
-        if not manifest_path.exists():
+        try:
+            manifest, _ = _fs_open_file(Path(app_row.app_dir), ("Cargo.toml",))
+        except AppPathError:
             return []
         if not _toml:
+            manifest.close()
             raise HTTPException(500, "tomllib not available (requires Python 3.11+)")
         try:
-            with open(manifest_path, "rb") as f:
+            with manifest as f:
                 data = _toml.load(f)
             deps = data.get("dependencies", {})
             dev_deps = data.get("dev-dependencies", {})
@@ -4392,9 +4668,13 @@ async def scan_imports(
         if "venv" in parts or "__pycache__" in parts:
             continue
         try:
-            text = await asyncio.to_thread(py_file.read_text, encoding="utf-8", errors="replace")
+            fileobj, _st = await asyncio.to_thread(_fs_open_file, root, py_file.relative_to(root).parts)
+            with fileobj:
+                text = (await asyncio.to_thread(fileobj.read)).decode("utf-8", errors="replace")
             tree = _ast.parse(text)
-        except SyntaxError:
+        except (AppPathError, OSError, SyntaxError, ValueError, RecursionError):
+            # Not a plain file we can reach without following a link, or not
+            # parseable Python (binary content raises ValueError, not SyntaxError).
             continue
         for node in _ast.walk(tree):
             if isinstance(node, _ast.Import):
@@ -5127,7 +5407,7 @@ async def git_clone(
         except HTTPException:
             await asyncio.to_thread(shutil.rmtree, app_dir / ".git", ignore_errors=True)
             raise
-        await asyncio.to_thread(_chown_for_app, app_row, app_dir)
+        await asyncio.to_thread(_chown_app_dir, app_row)
         audit_log(user.username, "git_clone", f"app '{app_row.name}' (id={app_id}) <- {url}")
         return await _git_status_payload(app_row, session)
 
@@ -5171,7 +5451,7 @@ async def git_pull(
 
     async def _job() -> dict:
         await _run_git(app_row, [*_git_auth_config(token), "pull", "--ff-only", "origin"], timeout=180, token=token)
-        await asyncio.to_thread(_chown_for_app, app_row, Path(app_row.app_dir))
+        await asyncio.to_thread(_chown_app_dir, app_row)
         audit_log(user.username, "git_pull", f"app '{app_row.name}' (id={app_id})")
         return await _git_status_payload(app_row, session)
 
