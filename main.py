@@ -3206,7 +3206,11 @@ def _self_restart():
     now on disk. Used after a restore, where swapping data.db/apps/the key
     out from under a live process is otherwise fragile."""
     logging.warning("Restarting Venvy to complete the restore...")
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+    # A frozen build is its own executable: argv[0] is already the binary, and
+    # prepending it again would hand the path to argparse as a stray argument,
+    # so the restarted process exited instead of coming back up.
+    argv = sys.argv if getattr(sys, "frozen", False) else [sys.executable] + sys.argv
+    os.execv(sys.executable, argv)
 
 
 @api_router.post("/system/backup/restore/{filename}")
