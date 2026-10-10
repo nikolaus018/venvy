@@ -1915,14 +1915,15 @@ class TerminalManager:
         self,
         websocket: WebSocket,
         app_id: int,
-        session: Session,
         user_id: int,
         user_role: str,
     ) -> None:
         if user_role not in ("admin", "operator"):
             await websocket.close(code=1008, reason="Operator or admin privileges required for terminal access.")
             return
-        db_app = session.get(App, app_id)
+        # Read the app and let go of the DB straight away — see terminal_ws().
+        with Session(engine) as session:
+            db_app = session.get(App, app_id)
         if not db_app:
             await websocket.close(code=1008, reason="App not found.")
             return
@@ -5647,8 +5648,12 @@ async def unpublish_cf_route(
 async def terminal_ws(
     websocket: WebSocket,
     app_id: int,
-    session: Session = Depends(get_session),
 ):
+    # No Depends(get_session) here: a dependency session lives as long as the
+    # socket, and after its first query it sits in an open read transaction.
+    # Every open terminal then pinned one pooled connection (15 terminals
+    # exhausted the pool and hung the whole API) and kept SQLite from
+    # checkpointing its WAL. Sessions below are opened and closed per lookup.
     await websocket.accept()
 
     # This endpoint is registered directly on `app`, not on api_router, so it
@@ -5680,14 +5685,16 @@ async def terminal_ws(
         await websocket.close(code=1008, reason="Not authenticated.")
         return
     auth_key = first[1:] if first.startswith("\x01") else None
-    ws_user = _authenticate(session, websocket.cookies.get("session"), auth_key)
-    if not ws_user:
+    with Session(engine) as session:
+        ws_user = _authenticate(session, websocket.cookies.get("session"), auth_key)
+        ws_user_id, ws_user_role = (ws_user.id, ws_user.role) if ws_user else (None, None)
+    if ws_user_id is None:
         await websocket.close(code=1008, reason="Not authenticated.")
         return
 
     try:
         await terminal_manager.start_terminal(
-            websocket, app_id, session, ws_user.id, ws_user.role
+            websocket, app_id, ws_user_id, ws_user_role
         )
     except Exception as exc:
         logging.error(f"WS terminal error: {exc}")
