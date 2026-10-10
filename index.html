@@ -5548,6 +5548,8 @@
                 document.getElementById('setting-port').value = app.port || '';
                 document.getElementById('setting-env').value = app.env_redacted
                     ? '// Hidden — operator or admin access is required to view or edit environment variables.'
+                    : app.env_unreadable
+                    ? '// These variables are stored but cannot be decrypted (the server\'s .venvy_key is missing or was replaced).\n// They are left untouched while this note is here. To set new ones, replace this whole text with a JSON object.'
                     : (() => {
                         try { return JSON.stringify(JSON.parse(app.env_json || '{}'), null, 2); }
                         catch (e) { return app.env_json || '{}'; }
@@ -8937,15 +8939,21 @@
                 showToast('CPU limit must be between 1 and 10,000% (or 0 for unlimited).', 'warn'); return;
             }
 
+            // A "//" note in the box (hidden from this role, or stored but
+            // undecryptable) means the variables are not being edited: leave
+            // them out of the request so saving anything else can't wipe them.
             let env = {};
-            try {
-                const raw = document.getElementById('setting-env').value || '{}';
-                const parsed = JSON.parse(raw);
-                if (typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
-                for (const [k, v] of Object.entries(parsed)) env[String(k)] = String(v);
-            } catch {
-                showToast('Invalid JSON in Environment Variables.', 'error');
-                return;
+            const envRaw = (document.getElementById('setting-env').value || '{}').trim();
+            const envUntouched = envRaw.startsWith('//');
+            if (!envUntouched) {
+                try {
+                    const parsed = JSON.parse(envRaw || '{}');
+                    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error();
+                    for (const [k, v] of Object.entries(parsed)) env[String(k)] = String(v);
+                } catch {
+                    showToast('Invalid JSON in Environment Variables.', 'error');
+                    return;
+                }
             }
 
             const body = {
@@ -8953,7 +8961,7 @@
                 runtime: runtime,
                 restart_policy: policy,
                 start_on_boot: boot,
-                env_vars: env,
+                ...(envUntouched ? {} : { env_vars: env }),
                 entrypoint,
                 manual_ports: manualPorts,
                 url_source_pref: _getOpenUrlPref(),
@@ -9048,7 +9056,7 @@
             let envMatch = true;
             try {
                 const raw = (document.getElementById('setting-env').value || '{}').trim();
-                if (raw && raw.startsWith('// Hidden')) {
+                if (raw && raw.startsWith('//')) {
                     envMatch = true;
                 } else {
                     const activeEnv = JSON.parse(activeApp.env_json || '{}');

@@ -247,19 +247,26 @@ def _encrypt_secret(plaintext: str) -> str:
     return _ENC_PREFIX + token
 
 
-def _decrypt_secret(stored: str) -> str:
-    """Decrypt a value written by _encrypt_secret. Tolerates legacy plaintext values
-    (i.e. rows written before encryption was introduced) by returning them unchanged."""
+def _try_decrypt_secret(stored: str) -> tuple:
+    """(ok, plaintext) for a value written by _encrypt_secret. Tolerates legacy
+    plaintext values (rows written before encryption was introduced) by
+    returning them unchanged. ok is False only when a value is there but
+    can't be decrypted — which callers must not mistake for "empty"."""
     if not stored:
-        return ""
+        return True, ""
     if not stored.startswith(_ENC_PREFIX):
-        return stored
+        return True, stored
     token = stored[len(_ENC_PREFIX):]
     try:
-        return _get_fernet().decrypt(token.encode("ascii")).decode("utf-8")
-    except (InvalidToken, Exception):
+        return True, _get_fernet().decrypt(token.encode("ascii")).decode("utf-8")
+    except Exception:
         logging.error("Failed to decrypt a stored secret — the .venvy_key file may be missing or changed.")
-        return ""
+        return False, ""
+
+
+def _decrypt_secret(stored: str) -> str:
+    """Plaintext of a stored secret, or "" if it is empty or unreadable."""
+    return _try_decrypt_secret(stored)[1]
 
 
 # Tracks all PIDs launched in the current Venvy session to ensure 
@@ -1692,6 +1699,19 @@ async def _start_app_process(app_id: int, session: Session) -> App:
     if not await asyncio.to_thread(log_file.exists):
         await asyncio.to_thread(log_file.touch)
 
+    if not _try_decrypt_secret(db_app.env_json)[0]:
+        # Starting it anyway would run the app without its configuration —
+        # against a default database, with no API keys — and look healthy.
+        msg = ("This app's environment variables can't be decrypted (the .venvy_key file is missing "
+               "or was replaced). Re-enter them in Settings, or restore the key, then start again.")
+        with contextlib.suppress(OSError):
+            with open(log_file, "a", encoding="utf-8") as lf:
+                lf.write(f"[{utc_now().strftime('%Y-%m-%d %H:%M:%S')}] [venvy] {msg}\n")
+        db_app.status = "error"
+        session.add(db_app)
+        session.commit()
+        raise RuntimeError(msg)
+
     env = _build_app_env(db_app)
     if ids:
         env.update(HOME=str(app_dir), USER=_app_username(app_id), LOGNAME=_app_username(app_id))
@@ -2939,7 +2959,11 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
     plaintext env vars (e.g. a read-only viewer browsing the app list)."""
     d = app_row.model_dump()
     if reveal_secrets:
-        d["env_json"] = _decrypt_secret(app_row.env_json) or "{}"
+        env_ok, env_plain = _try_decrypt_secret(app_row.env_json)
+        d["env_json"] = env_plain or "{}"
+        # Stored but undecryptable (key lost or replaced). The UI must not
+        # present this as "no variables" and save that back over them.
+        d["env_unreadable"] = not env_ok
     else:
         d["env_json"] = "{}"
         d["env_redacted"] = bool(app_row.env_json)
