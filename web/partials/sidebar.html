@@ -1,0 +1,75 @@
+        <!-- Sidebar -->
+        <aside id="main-sidebar"
+            class="fixed inset-y-0 left-0 flex flex-col h-full z-50 transform -translate-x-full md:translate-x-0 transition-transform duration-300 ease-in-out md:relative pt-safe w-[280px] md:w-[260px]"
+            style="background:var(--sidebar-bg);border-right:1px solid var(--border);">
+
+            <!-- Brand Header -->
+            <div class="px-5 flex items-center justify-between shrink-0 h-[60px]"
+                style="border-bottom:1px solid var(--border)">
+                <div class="flex items-center gap-0">
+                    <span class="brand-text text-[17px]"
+                        style="letter-spacing:-0.05em"><span style="color:var(--accent)">V</span>envy</span>
+                </div>
+                <button onclick="closeSidebar()" class="md:hidden p-1.5 rounded-lg" style="color:var(--text3)"><i
+                        data-feather="x" class="w-4 h-4"></i></button>
+            </div>
+
+            <!-- Actions -->
+            <div class="px-3 py-3 shrink-0 space-y-1.5">
+                <button onclick="openModal('create-app-modal')" data-requires-operator
+                    class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition active:scale-95"
+                    style="background:rgba(var(--accent-rgb),0.09);color:var(--accent-light);border:1px dashed rgba(var(--accent-rgb),0.3);letter-spacing:-0.01em">
+                    <i data-feather="plus" class="w-4 h-4"></i> New Application
+                </button>
+                <button id="admin-users-btn" onclick="openUsersModal()"
+                    class="btn-ghost w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium hidden">
+                    <i data-feather="users" class="w-4 h-4"></i> Manage Users
+                </button>
+            </div>
+
+            <!-- App list -->
+            <div class="px-4 pb-1.5 flex items-center gap-2">
+                <span class="section-label" id="app-list-label">Applications</span>
+                <span class="app-count-pill ml-auto" id="app-count" aria-hidden="true">0</span>
+            </div>
+            <div class="px-3 pb-2" id="app-search-wrap">
+                <label for="app-search" class="sr-only">Filter applications</label>
+                <input type="text" id="app-search" placeholder="Filter…" autocomplete="off" spellcheck="false"
+                    class="inp w-full pl-3 pr-8 py-2 text-xs font-medium"
+                    oninput="onAppSearchInput()" onkeydown="onAppSearchKey(event)">
+                <button type="button" id="app-search-clear" onclick="clearAppSearch()" aria-label="Clear filter"
+                    title="Clear filter">
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path d="M18 6L6 18M6 6l12 12" stroke-linecap="round" />
+                    </svg>
+                </button>
+            </div>
+            <nav class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5 min-h-0" id="app-list"
+                aria-labelledby="app-list-label"></nav>
+
+            <!-- System nav -->
+            <div class="px-3 py-2 shrink-0" style="border-top:1px solid var(--border)">
+                <button onclick="openSystemView(true)" id="system-nav-btn"
+                    class="nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition"
+                    style="color:var(--text2)">
+                    <i data-feather="monitor" class="w-4 h-4 shrink-0"></i> System
+                </button>
+            </div>
+
+            <!-- User footer -->
+            <div class="px-3 py-3 shrink-0 pb-safe-content" style="border-top:1px solid var(--border)">
+                <button onclick="openAccountMenu()"
+                    class="account-footer-btn-hover w-full flex items-center gap-3 px-2 py-2 rounded-xl transition active:scale-95 text-left"
+                    style="transition: background 0.15s" id="account-footer-btn">
+                    <div class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0"
+                        style="background:var(--ov);color:var(--text);border:1px solid var(--ov-border)"
+                        id="user-avatar">U</div>
+                    <div class="flex flex-col flex-1 min-w-0">
+                        <span class="text-sm font-semibold truncate" style="color:var(--text)"
+                            id="current-user">User</span>
+                        <span class="text-xs" style="color:var(--text3)">Manage account</span>
+                    </div>
+                    <i data-feather="chevron-up" class="w-3.5 h-3.5 shrink-0" style="color:var(--text3)"></i>
+                </button>
+            </div>
+        </aside>
