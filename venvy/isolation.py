@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 
-from venvy.config import APP_LOGS_DIR, APPS_BASE_DIR, child_base_env
+from venvy.config import APP_LOGS_DIR, APPS_BASE_DIR, DATA_DIR, child_base_env
 from venvy.models import App
 
 
@@ -96,7 +96,10 @@ def _ensure_app_user(app_row: "App") -> Optional[tuple]:
     uid, gid = ids
     app_dir = Path(app_row.app_dir)
     # Parents: traversable, not listable, so apps can't enumerate each other.
-    for parent in (APPS_BASE_DIR, app_dir.parent):
+    # That includes the data directory itself — an app's user has to pass
+    # through it to reach its own files. What else lives there (data.db, the
+    # key, backups, logs) is closed by its own mode, see _lock_down_data_files.
+    for parent in (DATA_DIR, APPS_BASE_DIR, app_dir.parent):
         with contextlib.suppress(OSError):
             parent.chmod(0o711)
     if app_dir.exists() and app_dir.stat().st_uid != uid:

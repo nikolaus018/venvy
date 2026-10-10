@@ -181,7 +181,10 @@ fi
 if [ ! -d "$DATA_DIR" ]; then
   mkdir -p "$DATA_DIR"
   chown "$RUN_USER:$RUN_GROUP" "$DATA_DIR"
-  chmod 750 "$DATA_DIR"
+  # With per-app users each app's user must be able to pass through (not
+  # list) this directory to reach its own files; the database, key and
+  # backups inside are closed individually.
+  if [ "$APP_USERS" = "1" ]; then chmod 711 "$DATA_DIR"; else chmod 750 "$DATA_DIR"; fi
 fi
 
 mkdir -p "$CONF_DIR"
