@@ -1212,8 +1212,26 @@ def _systemd_run_available() -> bool:
     return _SYSTEMD_AVAILABLE
 
 
+# One lock per app serialises start/stop/restart. Without it a manual start
+# racing the supervisor's automatic restart (or a double click) spawned two
+# processes, and only the second was tracked — the first ran on unmanaged.
+_app_locks: Dict[int, asyncio.Lock] = {}
+
+
+def _app_lock(app_id: int) -> asyncio.Lock:
+    return _app_locks.setdefault(app_id, asyncio.Lock())
+
+
 async def start_app_process_logic(app_id: int, session: Session) -> App:
-    db_app = session.get(App, app_id)
+    async with _app_lock(app_id):
+        return await _start_app_process(app_id, session)
+
+
+async def _start_app_process(app_id: int, session: Session) -> App:
+    """Start the app. Caller holds _app_lock(app_id)."""
+    # populate_existing: the caller's session may hold a copy loaded before
+    # we got the lock.
+    db_app = session.get(App, app_id, populate_existing=True)
     if not db_app:
         raise ValueError("App not found.")
 
@@ -1461,9 +1479,15 @@ async def _kill_pid_tree(pid: int) -> None:
 
 
 async def stop_app_process_logic(app_id: int, session: Session, manual: bool = False) -> None:
+    async with _app_lock(app_id):
+        await _stop_app_process(app_id, session, manual)
+
+
+async def _stop_app_process(app_id: int, session: Session, manual: bool = False) -> None:
+    """Stop the app. Caller holds _app_lock(app_id)."""
     _cancel_log_task(app_id)
 
-    db_app = session.get(App, app_id)
+    db_app = session.get(App, app_id, populate_existing=True)
     if not db_app:
         return
     if not db_app.pid:
@@ -1594,25 +1618,45 @@ async def supervisor_task() -> None:
                 await asyncio.sleep(5)
                 continue
 
-            for app_row in apps_to_check:
+            for stale_row in apps_to_check:
+                # This loop awaits (restarts, port scans), so the snapshot above
+                # can be seconds old by the time a given app is reached.
+                try:
+                    with Session(engine) as session:
+                        app_row = session.get(App, stale_row.id)
+                except Exception as e:
+                    logging.error(f"Failed to fetch app {stale_row.id}: {e}")
+                    continue
+                if app_row is None:
+                    continue
                 is_alive = _app_pid_alive(app_row)
 
                 if app_row.status == "running" and not is_alive:
+                    died = False
+                    async with _app_lock(app_row.id):
+                        try:
+                            with Session(engine) as update_session:
+                                refreshed = update_session.get(App, app_row.id)
+                                # Re-check under the lock: a restart may have
+                                # replaced this PID while we waited, and its
+                                # new process must not be written off as dead.
+                                if (refreshed and refreshed.status == "running"
+                                        and refreshed.pid == app_row.pid):
+                                    refreshed.pid = None
+                                    refreshed.pid_start = None
+                                    refreshed.systemd_scope = None
+                                    refreshed.status = "stopped"
+                                    refreshed.last_stop_time = utc_now()
+                                    if refreshed.last_exit_code is None:
+                                        refreshed.last_exit_code = 1
+                                    update_session.add(refreshed)
+                                    update_session.commit()
+                                    died = True
+                        except Exception as db_exc:
+                            logging.error(f"Failed to update state for {app_row.name}: {db_exc}")
+                    if not died:
+                        continue
                     logging.warning(f"App '{app_row.name}' (PID {app_row.pid}) died unexpectedly.")
-                    try:
-                        with Session(engine) as update_session:
-                            refreshed = update_session.get(App, app_row.id)
-                            if refreshed:
-                                refreshed.pid = None
-                                refreshed.pid_start = None
-                                refreshed.status = "stopped"
-                                refreshed.last_stop_time = utc_now()
-                                if refreshed.last_exit_code is None:
-                                    refreshed.last_exit_code = 1
-                                update_session.add(refreshed)
-                                update_session.commit()
-                    except Exception as db_exc:
-                        logging.error(f"Failed to update state for {app_row.name}: {db_exc}")
 
                     if app_row.restart_policy in ("always", "on-failure"):
                         has_started_this_session = (
@@ -3398,19 +3442,13 @@ async def control_app(
 
     async def _do_restart():
         try:
-            with Session(engine) as s:
-                await stop_app_process_logic(app_id, s, manual=False)
-            await asyncio.sleep(0.1)
-            with Session(engine) as s:
-                refreshed = s.get(App, app_id)
-                if refreshed and refreshed.pid and _app_pid_alive(refreshed):
-                    refreshed.pid = None
-                    refreshed.pid_start = None
-                    refreshed.status = "stopped"
-                    s.add(refreshed)
-                    s.commit()
-            with Session(engine) as s:
-                await start_app_process_logic(app_id, s)
+            # One lock hold for both halves, so nothing else can start the
+            # app in the gap between them.
+            async with _app_lock(app_id):
+                with Session(engine) as s:
+                    await _stop_app_process(app_id, s, manual=False)
+                with Session(engine) as s:
+                    await _start_app_process(app_id, s)
             _trigger_supervisor()
         except Exception as exc:
             logging.error(f"Background restart failed for app {app_id}: {exc}")
@@ -3605,6 +3643,7 @@ async def delete_app(
     _restart_backoff.pop(app_id, None)
     session.delete(app_row)
     session.commit()
+    _app_locks.pop(app_id, None)
     audit_log(user.username, "app_delete", f"deleted app '{app_name}' (id={app_id})")
     return {"ok": True}
 
