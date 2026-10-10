@@ -2355,6 +2355,9 @@ async def metrics_collector_task():
         await asyncio.sleep(2.5)
 
 
+_TERMINAL_RECHECK_SEC = float(os.getenv("VENVY_TERMINAL_RECHECK_SEC", "10"))
+
+
 class TerminalManager:
 
     async def start_terminal(
@@ -2363,7 +2366,11 @@ class TerminalManager:
         app_id: int,
         user_id: int,
         user_role: str,
+        still_allowed=None,
     ) -> None:
+        """Run a shell for *app_id* on *websocket* until either side closes.
+        still_allowed() is polled while it is open; when it turns False the
+        terminal is closed."""
         if user_role not in ("admin", "operator"):
             await websocket.close(code=1008, reason="Operator or admin privileges required for terminal access.")
             return
@@ -2560,15 +2567,34 @@ class TerminalManager:
                 finally:
                     stop.set()
 
+            async def watchdog() -> None:
+                # A terminal is a root-of-the-app shell that used to stay open
+                # for as long as the tab did: signing out, having the session
+                # revoked by a password change, being deleted or the app being
+                # deleted all left it usable. Re-check periodically.
+                while still_allowed is not None:
+                    await asyncio.sleep(_TERMINAL_RECHECK_SEC)
+                    try:
+                        allowed = await asyncio.to_thread(still_allowed)
+                    except Exception:
+                        continue   # e.g. DB briefly busy — not a reason to cut the user off
+                    if not allowed:
+                        with contextlib.suppress(Exception):
+                            await websocket.send_text("\r\n\x1b[31m─── session ended ───\x1b[0m\r\n")
+                        return
+                await stop.wait()
+
             t1 = asyncio.create_task(reader())
             t2 = asyncio.create_task(writer())
+            t3 = asyncio.create_task(watchdog())
             try:
-                await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+                await asyncio.wait([t1, t2, t3], return_when=asyncio.FIRST_COMPLETED)
             finally:
                 stop.set()
                 t1.cancel()
                 t2.cancel()
-                await asyncio.gather(t1, t2, return_exceptions=True)
+                t3.cancel()
+                await asyncio.gather(t1, t2, t3, return_exceptions=True)
                 
                 if pid > 0:
                     try:
@@ -6278,9 +6304,16 @@ async def terminal_ws(
         await websocket.close(code=1008, reason="Not authenticated.")
         return
 
+    cookie_token = websocket.cookies.get("session")
+
+    def _still_allowed() -> bool:
+        with Session(engine) as s:
+            u = _authenticate(s, cookie_token, auth_key)
+            return bool(u and u.role in ("admin", "operator") and s.get(App, app_id))
+
     try:
         await terminal_manager.start_terminal(
-            websocket, app_id, ws_user_id, ws_user_role
+            websocket, app_id, ws_user_id, ws_user_role, _still_allowed
         )
     except Exception as exc:
         logging.error(f"WS terminal error: {exc}")
