@@ -1,0 +1,90 @@
+                    <!-- LOGS -->
+                    <div id="tab-logs"
+                        class="tab-content absolute inset-0 md:inset-4 hidden flex flex-col rounded-none md:rounded-xl overflow-hidden pb-safe-content md:pb-0"
+                        style="background:var(--surface);border:1px solid var(--border)">
+                        <div class="min-h-[44px] flex items-center px-3 gap-1.5 shrink-0 overflow-x-auto scrollbar-hide"
+                            style="border-bottom:1px solid var(--border);background:var(--surface2)">
+                            <span class="text-xs flex items-center gap-2 font-medium shrink-0 pr-1"
+                                style="color:var(--text3)" id="log-live-label">
+                                <span class="w-2 h-2 rounded-full pulse-dot" id="log-live-dot"
+                                    style="background:var(--green)"></span>
+                                <span id="log-live-text" class="hidden sm:inline">Live</span>
+                            </span>
+
+                            <div class="w-px h-5 shrink-0 mx-0.5" style="background:var(--border2)"></div>
+
+                            <!-- Filter -->
+                            <div class="relative flex-1" style="min-width:88px;max-width:300px">
+                                <label for="log-search" class="sr-only">Filter log lines</label>
+                                <input type="text" id="log-search" placeholder="Filter…" autocomplete="off"
+                                    spellcheck="false" class="inp w-full pl-2.5 pr-14 py-1 text-xs mono"
+                                    style="height:26px" oninput="onLogSearchInput()" onkeydown="onLogSearchKey(event)">
+                                <span id="log-search-count"
+                                    class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] mono pointer-events-none"
+                                    style="color:var(--text3)"></span>
+                            </div>
+
+                            <button class="log-tool-btn shrink-0" id="log-follow-btn" aria-pressed="true"
+                                onclick="toggleLogFollow()" title="Follow new output (F)">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M12 5v14m0 0l-6-6m6 6l6-6" stroke-linecap="round"
+                                        stroke-linejoin="round" />
+                                </svg>
+                                <span class="hidden md:inline">Follow</span>
+                            </button>
+
+                            <button class="log-tool-btn shrink-0" id="log-wrap-btn" aria-pressed="true"
+                                onclick="toggleLogWrap()" title="Toggle line wrapping (W)">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M3 6h18M3 12h13a4 4 0 010 8h-3m0 0l2-2m-2 2l2 2M3 18h5"
+                                        stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                                <span class="hidden md:inline">Wrap</span>
+                            </button>
+
+                            <div class="w-px h-5 shrink-0 mx-0.5" style="background:var(--border2)"></div>
+
+                            <button class="log-tool-btn shrink-0" onclick="copyLogs()" title="Copy all logs">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                                </svg>
+                                <span class="hidden md:inline">Copy</span>
+                            </button>
+
+                            <button class="log-tool-btn shrink-0" onclick="downloadLogs()" title="Download as .log">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
+                                        stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                                <span class="hidden md:inline">Save</span>
+                            </button>
+
+                            <button class="log-tool-btn shrink-0" onclick="deleteLogs()" title="Clear the log file"
+                                style="color:var(--red)" data-requires-operator>
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m2 0l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"
+                                        stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                                <span class="hidden md:inline">Clear</span>
+                            </button>
+                        </div>
+                        <div class="flex-1 relative min-h-0 flex flex-col">
+                            <pre id="log-viewer" tabindex="0" role="log" aria-label="Application logs"
+                                class="flex-1 p-4 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed"><span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span></pre>
+                            <button id="log-jump-btn" onclick="logJumpToLatest()"
+                                class="btn-primary px-3 py-1.5 text-xs font-semibold rounded-full flex items-center gap-1.5">
+                                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="3">
+                                    <path d="M12 5v14m0 0l-6-6m6 6l6-6" stroke-linecap="round"
+                                        stroke-linejoin="round" />
+                                </svg>
+                                Jump to latest
+                            </button>
+                        </div>
+                    </div>

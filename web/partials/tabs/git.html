@@ -1,0 +1,91 @@
+                    <!-- GIT -->
+                    <div id="tab-git"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-2xl mx-auto space-y-5 pb-10">
+
+                            <!-- Not connected: clone form -->
+                            <div id="git-clone-card" class="card p-5 hidden">
+                                <h3 class="text-sm font-semibold mb-1 flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="git-branch" class="w-4 h-4"></i> Connect a repository
+                                </h3>
+                                <p class="text-xs mb-4" style="color:var(--text3)">Clones into this app's directory.
+                                    Existing files (like <code class="mono">logs/</code> or <code class="mono">venv/</code>)
+                                    are left alone unless the repo itself has a file with the same name.</p>
+
+                                <div id="git-gh-hint" class="hidden mb-4 px-3 py-2.5 rounded-xl text-xs flex items-start gap-2"
+                                    style="background:var(--ov-soft);border:1px solid var(--ov-border-soft);color:var(--text2)">
+                                    <i data-feather="info" class="w-3.5 h-3.5 shrink-0 mt-0.5"></i>
+                                    <span>Not signed in to GitHub — only public repositories will clone. <button
+                                            onclick="openSystemView(true)" class="underline font-semibold" style="color:var(--text)">Connect
+                                            in Settings</button></span>
+                                </div>
+
+                                <div id="git-repo-picker" class="hidden mb-4">
+                                    <label class="block section-label mb-2">Your repositories</label>
+                                    <select id="git-repo-select" onchange="onGitRepoPicked()"
+                                        class="inp w-full px-4 py-3 text-sm mono mb-1">
+                                        <option value="">Loading…</option>
+                                    </select>
+                                    <p class="text-xs" style="color:var(--text3)">Or paste any URL below (e.g. a repo you don't own).</p>
+                                </div>
+
+                                <label class="block section-label mb-2">Repository URL</label>
+                                <input type="text" id="git-clone-url" placeholder="https://github.com/owner/repo.git"
+                                    autocomplete="off" spellcheck="false" class="inp w-full px-4 py-3 text-sm mono mb-5">
+
+                                <button onclick="gitClone()" id="git-clone-btn" class="btn-primary w-full py-3 text-sm">Clone into this app</button>
+                            </div>
+
+                            <!-- Connected: status + actions -->
+                            <div id="git-repo-card" class="hidden space-y-5">
+                                <div class="card overflow-hidden">
+                                    <div class="px-5 py-4 flex items-center gap-3" style="border-bottom:1px solid var(--border)">
+                                        <i data-feather="git-branch" class="w-4 h-4" style="color:var(--text)"></i>
+                                        <div class="min-w-0 flex-1">
+                                            <p class="text-sm font-semibold truncate" style="color:var(--text)" id="git-branch-name">—</p>
+                                            <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="git-remote-url">—</p>
+                                        </div>
+                                        <button onclick="loadGitStatus()" title="Refresh" class="shrink-0 p-2 rounded-lg" style="color:var(--text3)">
+                                            <i data-feather="refresh-cw" class="w-3.5 h-3.5"></i>
+                                        </button>
+                                    </div>
+                                    <div class="px-5 py-3 flex flex-wrap items-center gap-2 text-xs" style="background:var(--surface2)">
+                                        <span id="git-ahead-pill" class="hidden px-2 py-1 rounded-full font-bold" style="background:var(--green-dim);color:var(--green);border:1px solid var(--green-border)"></span>
+                                        <span id="git-behind-pill" class="hidden px-2 py-1 rounded-full font-bold" style="background:var(--amber-dim);color:var(--amber);border:1px solid var(--amber-border)"></span>
+                                        <span id="git-dirty-pill" class="hidden px-2 py-1 rounded-full font-bold" style="background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)"></span>
+                                        <span id="git-clean-pill" class="hidden px-2 py-1 rounded-full font-bold" style="background:var(--surface3);color:var(--text3)">Up to date</span>
+                                        <span id="git-last-commit" class="ml-auto mono truncate" style="color:var(--text3)"></span>
+                                    </div>
+                                </div>
+
+                                <div class="card p-5">
+                                    <h3 class="text-sm font-semibold mb-4 flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="download" class="w-4 h-4"></i> Sync
+                                    </h3>
+                                    <div class="grid grid-cols-3 gap-3">
+                                        <button onclick="gitFetch()" id="git-fetch-btn" class="btn-secondary py-2.5 text-sm">Fetch</button>
+                                        <button onclick="gitPull()" id="git-pull-btn" class="btn-secondary py-2.5 text-sm">Pull</button>
+                                        <button onclick="gitPush()" id="git-push-btn" class="btn-secondary py-2.5 text-sm">Push</button>
+                                    </div>
+                                </div>
+
+                                <div class="card p-5">
+                                    <h3 class="text-sm font-semibold mb-4 flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="edit-3" class="w-4 h-4"></i> Commit
+                                    </h3>
+                                    <textarea id="git-commit-msg" rows="2" placeholder="Commit message…"
+                                        class="inp w-full px-4 py-3 text-sm mb-3" style="resize:vertical"></textarea>
+                                    <button onclick="gitCommit()" id="git-commit-btn" class="btn-primary w-full py-2.5 text-sm">Commit all changes</button>
+                                </div>
+
+                                <div class="card p-5">
+                                    <h3 class="text-sm font-semibold mb-1" style="color:var(--text2)">Danger zone</h3>
+                                    <p class="text-xs mb-4" style="color:var(--text3)">Removes the <code class="mono">.git</code> folder only — your files are kept.</p>
+                                    <button onclick="gitDisconnect()" id="git-disconnect-btn"
+                                        class="w-full py-2.5 text-sm font-bold rounded-xl transition active:scale-95"
+                                        style="background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)">Disconnect repository</button>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>

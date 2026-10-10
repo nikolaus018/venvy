@@ -1,0 +1,73 @@
+                    <!-- PACKAGES -->
+                    <div id="tab-packages"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-3xl mx-auto">
+                            <!-- Install input -->
+                            <div id="pkg-install-controls" class="flex gap-3 mb-5 flex-col md:flex-row">
+                                <input type="text" id="pkg-input" placeholder="Package name, e.g. numpy==1.26"
+                                    class="inp flex-1 px-4 py-3 text-sm"
+                                    onkeydown="if(event.key==='Enter') installPackage()">
+                                <button onclick="installPackage()" id="pkg-install-btn"
+                                    class="btn-primary px-8 py-3 text-sm">Install</button>
+                            </div>
+
+                            <!-- Auto-scan -->
+                            <div id="pkg-auto-scan-card" class="card overflow-hidden mb-5">
+                                <div class="flex items-center justify-between px-5 py-4"
+                                    style="border-bottom:1px solid var(--border)">
+                                    <div>
+                                        <p class="text-sm font-semibold" style="color:var(--text)">Auto-scan project</p>
+                                        <p class="text-xs mt-0.5" style="color:var(--text3)">Finds imports missing from
+                                            your venv</p>
+                                    </div>
+                                    <button onclick="scanImports()" id="scan-btn"
+                                        class="shrink-0 text-xs font-bold px-4 py-2 rounded-xl transition active:scale-95 flex items-center gap-2"
+                                        style="background:var(--surface2);color:var(--text);border:1px solid var(--border2)">
+                                        <i data-feather="search" class="w-3.5 h-3.5"></i> Scan
+                                    </button>
+                                </div>
+                                <div id="scan-results" class="hidden">
+                                    <div id="scan-missing-section" class="hidden">
+                                        <div class="px-5 py-3 flex items-center justify-between gap-3"
+                                            style="background:var(--surface3);border-bottom:1px solid var(--border3)">
+                                            <span class="text-xs font-bold flex items-center gap-1.5"
+                                                style="color:var(--text)"><i data-feather="alert-triangle"
+                                                    class="w-3.5 h-3.5"></i> <span id="scan-missing-count"></span>
+                                                missing</span>
+                                            <button onclick="installAllMissing()" id="install-all-btn"
+                                                class="btn-secondary text-xs px-4 py-1.5 flex items-center gap-1.5">
+                                                <i data-feather="download" class="w-3 h-3"></i> Install All
+                                            </button>
+                                        </div>
+                                        <ul id="scan-missing-list" class="divide-y max-h-48 overflow-y-auto"
+                                            style="border-color:var(--border)"></ul>
+                                    </div>
+                                    <div id="scan-ok-section"
+                                        class="hidden px-5 py-3 text-xs font-bold flex items-center gap-2"
+                                        style="background:rgba(16,185,129,0.08);color:var(--green)">
+                                        <i data-feather="check-circle" class="w-3.5 h-3.5"></i> All imports satisfied
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Package list -->
+                            <div class="card overflow-hidden">
+                                <table class="w-full text-left text-sm">
+                                    <thead class="section-label"
+                                        style="background:var(--surface2);border-bottom:1px solid var(--border)">
+                                        <tr>
+                                            <th class="px-4 md:px-6 py-3.5 font-bold">Library</th>
+                                            <th class="px-2 md:px-6 py-3.5 font-bold hidden sm:table-cell">Version</th>
+                                            <th id="pkg-action-header" class="px-3 md:px-6 py-3.5 text-right font-bold">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="pkg-list" class="divide-y" style="border-color:var(--border)">
+                                        <tr>
+                                            <td colspan="3" class="px-6 py-8 text-center text-sm"
+                                                style="color:var(--text3)">Loading environment…</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>

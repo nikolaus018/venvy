@@ -1,0 +1,380 @@
+                    <!-- SETTINGS -->
+                    <div id="tab-settings"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-2xl mx-auto space-y-5 pb-10">
+
+                            <!-- Lifecycle -->
+                            <div class="card p-5">
+                                <h3 class="text-sm font-semibold mb-5 flex items-center gap-2"
+                                    style="color:var(--text)">
+                                    <i data-feather="refresh-cw" class="w-4 h-4" style="color:var(--text)"></i>
+                                    Lifecycle
+                                </h3>
+                                <div class="mb-5">
+                                    <label class="block section-label mb-2">App Name</label>
+                                    <input type="text" id="setting-name"
+                                        class="inp w-full px-4 py-3 text-sm font-semibold" placeholder="My App">
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    <div>
+                                        <label class="block section-label mb-2">Runtime Environment</label>
+                                        <select id="setting-runtime" class="inp w-full px-4 py-3 text-sm font-semibold"
+                                            onchange="onRuntimeChange('settings')">
+                                            <option value="python">Python 3 (Venv)</option>
+                                            <option value="rust">Rust (Cargo)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-2">Restart Policy</label>
+                                        <select id="setting-policy" class="inp w-full px-4 py-3 text-sm font-semibold">
+                                            <option value="never">Never (Manual only)</option>
+                                            <option value="on-failure">On Failure (Crash)</option>
+                                            <option value="always">Always (Keep alive)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-2">Auto-Start</label>
+                                        <div class="h-[46px] flex items-center px-4 rounded-xl"
+                                            style="background:var(--surface2);border:1px solid var(--border)">
+                                            <label class="flex items-center gap-3 cursor-pointer select-none w-full">
+                                                <input type="checkbox" id="setting-boot" class="rounded"
+                                                    style="accent-color:var(--text)">
+                                                <span class="text-sm font-medium" style="color:var(--text2)">Start on
+                                                    System Boot</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mt-5">
+                                    <label class="block section-label mb-2">Entrypoint File</label>
+                                    <input type="text" id="setting-entrypoint" class="inp w-full px-4 py-3 mono text-sm"
+                                        placeholder="main.py">
+                                    <p class="text-xs mt-1.5" style="color:var(--text3)">The Python file that launches
+                                        your app (e.g. <code class="px-1 py-0.5 rounded mono"
+                                            style="background:var(--surface2)">main.py</code>). Upload files first if
+                                        the app has none yet.</p>
+                                </div>
+                            </div>
+
+                            <!-- Resource Limits -->
+                            <div class="card p-5">
+                                <div class="flex items-center justify-between mb-1">
+                                    <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="cpu" class="w-4 h-4" style="color:var(--text)"></i>
+                                        Resource Limits
+                                    </h3>
+                                    <button type="button" id="setting-limits-toggle" role="switch"
+                                        aria-checked="false" aria-label="Limit resources" onclick="toggleResourceLimits()"
+                                        class="toggle-track shrink-0">
+                                        <span class="toggle-knob"></span>
+                                    </button>
+                                </div>
+                                <p class="text-xs mb-4" style="color:var(--text3)">Off = this app can use whatever
+                                    CPU and memory it wants. On = pick hard caps below.</p>
+                                <div id="setting-limits-unenforced-warn"
+                                    class="hidden items-start gap-2.5 mb-4 px-4 py-3 rounded-xl text-xs font-medium"
+                                    style="background:var(--surface3);border:1px solid var(--border3);color:var(--text2)">
+                                    <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor"
+                                        viewBox="0 0 24 24" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                    </svg>
+                                    <span>This host has no systemd — limits below will be saved but not enforced
+                                        until the app runs on a systemd Linux host.</span>
+                                </div>
+                                <div id="resource-limit-sliders-wrap" class="hidden grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <div class="flex items-center justify-between mb-2.5">
+                                            <label class="section-label">Memory Limit</label>
+                                            <span id="setting-memory-limit-label" class="text-xs font-bold mono"
+                                                style="color:var(--text)">512 MB</span>
+                                        </div>
+                                        <input type="range" id="setting-memory-limit" class="slider" min="16"
+                                            max="8192" step="16" value="512"
+                                            oninput="_updateResourceLimitLabels()">
+                                        <p class="text-xs mt-2" style="color:var(--text3)">Max reflects this host's
+                                            total RAM<span id="setting-memory-limit-hint"></span>.</p>
+                                    </div>
+                                    <div>
+                                        <div class="flex items-center justify-between mb-2.5">
+                                            <label class="section-label">CPU Limit</label>
+                                            <span id="setting-cpu-limit-label" class="text-xs font-bold mono"
+                                                style="color:var(--text)">0.5 cores</span>
+                                        </div>
+                                        <input type="range" id="setting-cpu-limit" class="slider" min="25" max="800"
+                                            step="25" value="50" oninput="_updateResourceLimitLabels()">
+                                        <p class="text-xs mt-2" style="color:var(--text3)">Max reflects this host's
+                                            core count<span id="setting-cpu-limit-hint"></span>.</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Privileges -->
+
+                            <!-- Networking -->
+                            <div class="card p-5">
+                                <h3 class="text-sm font-semibold mb-4 flex items-center gap-2"
+                                    style="color:var(--text)">
+                                    <i data-feather="globe" class="w-4 h-4" style="color:var(--text)"></i> Networking
+                                    &amp; Config
+                                </h3>
+                                <div id="net-status-card" class="mb-4"></div>
+                                <!-- Open-App URL preference — only shown when CF tunnel is live -->
+                                <div id="open-url-pref-row"
+                                    class="hidden mb-5 flex items-center justify-between px-4 py-3 rounded-xl"
+                                    style="background:var(--surface2);border:1px solid var(--border)">
+                                    <div>
+                                        <p class="text-xs font-semibold" style="color:var(--text2)">Open App button uses
+                                        </p>
+                                        <p class="text-xs mt-0.5" style="color:var(--text3)">Choose which URL the button
+                                            opens</p>
+                                    </div>
+                                    <div class="flex items-center gap-1 p-1 rounded-xl"
+                                        style="background:var(--surface);border:1px solid var(--border)">
+                                        <button id="open-pref-local" onclick="setOpenUrlPref('local')"
+                                            class="px-3 py-1.5 text-xs font-bold rounded-lg transition"
+                                            style="color:var(--text3)">Local IP</button>
+                                        <button id="open-pref-public" onclick="setOpenUrlPref('public')"
+                                            class="px-3 py-1.5 text-xs font-bold rounded-lg transition"
+                                            style="color:var(--text3)">Public URL</button>
+                                    </div>
+                                </div>
+
+                                <details id="port-override-details" class="mb-5 group">
+                                    <summary
+                                        class="flex items-center gap-1.5 cursor-pointer select-none list-none text-xs font-medium transition-colors"
+                                        style="color:var(--text3)">
+                                        <svg class="w-3.5 h-3.5 transition-transform duration-150 group-open:rotate-90"
+                                            fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                                        </svg>
+                                        Set ports manually (comma-separated, overrides auto-detection)
+                                    </summary>
+                                    <div class="mt-3 pl-5 space-y-2">
+                                        <div class="flex justify-between items-center mb-1">
+                                            <label class="block section-label">Port Numbers</label>
+                                            <button
+                                                onclick="document.getElementById('setting-port').value='';saveSettings()"
+                                                class="text-[10px] uppercase font-bold tracking-wider opacity-40 hover:opacity-100 transition-opacity">Clear
+                                                All</button>
+                                        </div>
+                                        <div class="flex gap-2">
+                                            <input type="text" id="setting-port"
+                                                class="inp flex-1 px-4 py-3 mono text-sm" placeholder="e.g. 8000, 8080"
+                                                onblur="saveSettings()">
+                                        </div>
+                                        <p class="text-xs leading-relaxed" style="color:var(--text3)">Injected as
+                                            <code class="px-1 py-0.5 rounded mono text-[10px]"
+                                                style="background:var(--surface2)">PORT</code>
+                                            on next start. First port is primary.
+                                        </p>
+                                    </div>
+                                </details>
+
+                                <label class="block section-label mb-2">Environment Variables <span
+                                        style="color:var(--text3)" class="font-normal normal-case">(JSON)</span></label>
+                                <textarea id="setting-env"
+                                    class="inp textarea w-full px-4 py-3 h-36 mono text-xs leading-relaxed"
+                                    placeholder='{"DEBUG": "true"}'></textarea>
+                            </div>
+
+                            <!-- Cloudflare per-app -->
+                            <div class="card overflow-hidden">
+                                <div class="px-5 py-4 flex items-center gap-3"
+                                    style="border-bottom:1px solid var(--border)">
+                                    <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="var(--cf-orange)">
+                                        <path
+                                            d="M16.5 7.5C16.5 7.5 15.75 4.5 12 4.5C8.68 4.5 6 7.18 6 10.5C6 10.5 3 11.25 3 14.25C3 16.93 5.07 19.5 8.25 19.5H17.25C19.73 19.5 21.75 17.48 21.75 15C21.75 12.8 20.12 10.98 18 10.58" />
+                                    </svg>
+                                    <div class="flex-1 min-w-0">
+                                        <h3 class="text-sm font-semibold" style="color:var(--text)">Cloudflare Tunnel
+                                        </h3>
+                                        <p class="text-xs mt-0.5 truncate" style="color:var(--text3)">Publish this app
+                                            to your domain</p>
+                                    </div>
+                                    <div id="cf-route-badge"
+                                        class="hidden items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold shrink-0"
+                                        style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);color:var(--green)">
+                                        <span class="w-1.5 h-1.5 rounded-full inline-block pulse-dot"
+                                            style="background:var(--green)"></span> Live
+                                    </div>
+                                </div>
+                                <div class="p-5 space-y-4">
+                                    <!-- Warning: no CF creds configured -->
+                                    <div id="cf-no-creds-warn"
+                                        class="hidden items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-medium"
+                                        style="background:var(--surface3);border:1px solid var(--border3);color:var(--text)">
+                                        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round"
+                                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                        <span>Not configured. <button onclick="openSystemView()"
+                                                class="underline font-bold">System → Cloudflare Tunnel</button></span>
+                                    </div>
+                                    <!-- Warning: no port set -->
+                                    <div id="cf-no-port-warn"
+                                        class="hidden items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-medium"
+                                        style="background:var(--surface3);border:1px solid var(--border3);color:var(--text)">
+                                        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round"
+                                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                        <span>No port set. Add one in the Networking card above first.</span>
+                                    </div>
+                                    <!-- Live URL banner (published state only) -->
+                                    <div id="cf-route-url-banner" class="hidden px-4 py-3.5 rounded-xl"
+                                        style="background:var(--surface3);border:1px solid var(--border3)">
+                                        <p class="section-label mb-1.5" style="color:var(--text)">Live Public URL</p>
+                                        <div class="flex items-center gap-2">
+                                            <a id="cf-route-url-link" href="#" target="_blank"
+                                                class="flex-1 text-sm mono font-bold hover:underline truncate min-w-0 select-text"
+                                                style="color:var(--text)"></a>
+                                            <button onclick="copyCfRouteUrl()" title="Copy URL"
+                                                class="shrink-0 p-1.5 rounded-lg transition active:scale-95"
+                                                style="color:var(--text)">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                                                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                                                </svg>
+                                            </button>
+                                            <a id="cf-route-url-open" href="#" target="_blank" title="Open in browser"
+                                                class="shrink-0 p-1.5 rounded-lg transition active:scale-95"
+                                                style="color:var(--text)">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+                                                    <polyline points="15 3 21 3 21 9" />
+                                                    <line x1="10" y1="14" x2="21" y2="3" />
+                                                </svg>
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <!-- Hostname + buttons — hidden when tunnel is not configured -->
+                                    <div id="cf-inputs-section" class="space-y-4">
+                                        <!-- Hostname input -->
+                                        <div id="cf-hostname-row">
+                                            <label class="block section-label mb-2">Public Hostname</label>
+                                            <!-- Subdomain + domain dropdown row -->
+                                            <div class="flex items-stretch gap-2">
+                                                <!-- Subdomain part (optional) -->
+                                                <div class="flex items-center rounded-xl overflow-hidden focus-within:ring-2 flex-1 min-w-0"
+                                                    style="background:var(--surface2);border:1px solid var(--border);transition:border-color 0.15s">
+                                                    <input type="text" id="cf-subdomain-input"
+                                                        placeholder="subdomain (optional)" autocomplete="off"
+                                                        spellcheck="false"
+                                                        class="flex-1 bg-transparent px-3 py-3 text-sm mono outline-none min-w-0 select-text"
+                                                        style="color:var(--text)" oninput="updateCfHostnamePreview()"
+                                                        onkeydown="if(event.key==='Enter') publishCfRoute()">
+                                                </div>
+                                                <!-- Dot separator -->
+                                                <span class="flex items-center text-sm mono shrink-0 px-1 select-none"
+                                                    style="color:var(--text3)">.</span>
+                                                <!-- Domain dropdown -->
+                                                <div class="relative flex-1 min-w-0">
+                                                    <select id="cf-domain-select"
+                                                        class="w-full h-full rounded-xl px-3 py-3 text-sm mono outline-none appearance-none cursor-pointer"
+                                                        style="background:var(--surface2);border:1px solid var(--border);color:var(--text);transition:border-color 0.15s"
+                                                        onchange="updateCfHostnamePreview()">
+                                                        <option value="" disabled selected style="color:var(--text3)">
+                                                            loading domains…</option>
+                                                    </select>
+                                                    <!-- Dropdown arrow -->
+                                                    <div
+                                                        class="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+                                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                            viewBox="0 0 24 24" stroke-width="2.5">
+                                                            <polyline points="6 9 12 15 18 9" />
+                                                        </svg>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <!-- Live preview of the full hostname -->
+                                            <p id="cf-hostname-preview" class="text-xs mt-2 mono font-medium"
+                                                style="color:var(--text);min-height:1.2em"></p>
+                                            <p class="text-xs mt-0.5" style="color:var(--text3)">Leave subdomain blank
+                                                to use the root domain.</p>
+                                        </div>
+                                        <!-- Button row — mutually exclusive states managed by loadCfRouteStatus() -->
+                                        <div class="flex gap-3">
+                                            <!-- UNPUBLISHED: single Publish button -->
+                                            <button onclick="publishCfRoute()" id="cf-publish-btn"
+                                                class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
+                                                style="display:flex">
+                                                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                                    <path
+                                                        d="M16.5 7.5C16.5 7.5 15.75 4.5 12 4.5C8.68 4.5 6 7.18 6 10.5C6 10.5 3 11.25 3 14.25C3 16.93 5.07 19.5 8.25 19.5H17.25C19.73 19.5 21.75 17.48 21.75 15C21.75 12.8 20.12 10.98 18 10.58" />
+                                                </svg>
+                                                Publish
+                                            </button>
+                                            <!-- PUBLISHED: Republish + Remove side-by-side -->
+                                            <button onclick="publishCfRoute()" id="cf-republish-btn"
+                                                class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
+                                                style="display:none">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <polyline points="1 4 1 10 7 10" />
+                                                    <path d="M3.51 15a9 9 0 1 0 .49-4.85" />
+                                                </svg>
+                                                Republish
+                                            </button>
+                                            <button onclick="unpublishCfRoute()" id="cf-unpublish-btn"
+                                                class="btn-danger py-3 px-5 text-sm items-center justify-center gap-2"
+                                                style="display:none">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <polyline points="3 6 5 6 21 6" />
+                                                    <path d="M19 6l-1 14H6L5 6" />
+                                                    <path d="M10 11v6M14 11v6" />
+                                                    <path d="M9 6V4h6v2" />
+                                                </svg>
+                                                Remove
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Export -->
+                            <div class="card p-5">
+                                <h3 class="text-sm font-semibold mb-2 flex items-center gap-2"
+                                    style="color:var(--text)">
+                                    <i data-feather="download-cloud" class="w-4 h-4" style="color:var(--text)"></i>
+                                    Export Application
+                                </h3>
+                                <p class="text-sm mb-4" style="color:var(--text3)">Download a .zip archive with all
+                                    source files for this application.</p>
+                                <button onclick="downloadAppZip()" id="btn-download-zip"
+                                    class="btn-secondary w-full py-3 text-sm flex items-center justify-center gap-2">
+                                    <i data-feather="archive" class="w-4 h-4"></i> Download Source Code
+                                </button>
+                            </div>
+
+                            <!-- Danger zone -->
+                            <div class="card p-5" style="border-color:rgba(239,68,68,0.2)">
+                                <h3 class="text-sm font-semibold mb-1 flex items-center gap-2" style="color:var(--red)">
+                                    <i data-feather="alert-triangle" class="w-4 h-4"></i> Danger Zone
+                                </h3>
+                                <p class="text-xs mb-4" style="color:var(--text3)">Permanently delete this application
+                                    and all its files.</p>
+                                <button onclick="deleteApp()"
+                                    class="btn-danger w-full py-3 rounded-xl text-sm font-medium">Delete
+                                    Application</button>
+                            </div>
+                            <!-- Auto-save status indicator -->
+                            <div id="autosave-indicator" class="hidden flex items-center gap-2 justify-end px-1"
+                                style="color:var(--text3)">
+                                <svg id="autosave-spinner" class="hidden w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 12a9 9 0 11-6.219-8.56" />
+                                </svg>
+                                <svg id="autosave-check" class="hidden w-3.5 h-3.5" fill="none" stroke="var(--green)"
+                                    viewBox="0 0 24 24" stroke-width="2.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span id="autosave-text" class="text-xs font-medium"></span>
+                            </div>
+                        </div>
+                    </div>
