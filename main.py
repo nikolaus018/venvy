@@ -3596,9 +3596,9 @@ def _resolve_backup_path(filename: str) -> Path:
 
 @api_router.get("/system/backups/{filename}/download")
 def download_backup(filename: str, admin: User = Depends(get_download_user)):
+    """Download a previously created backup."""
     if admin.role != "admin":
         raise HTTPException(status_code=403, detail="Admin privileges required.")
-    """Download a previously created backup."""
     path = _resolve_backup_path(filename)
     audit_log(admin.username, "system_backup_download", f"path={path}")
     return FileResponse(
@@ -4149,8 +4149,24 @@ async def update_app(
         app_row.port = combined[0]
 
     if req.env_vars is not None:
+        for env_key, env_value in req.env_vars.items():
+            # Anything else can't be put in a process environment at all, and
+            # only failed later, as an unexplained error on start.
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
+                raise HTTPException(400, f"Invalid environment variable name: {env_key!r}")
+            if "\x00" in env_value:
+                raise HTTPException(400, f"Environment variable {env_key} contains a NUL character.")
         app_row.env_json = _encrypt_secret(json.dumps(req.env_vars))
         audit_log(user.username, "app_env_change", f"app '{app_row.name}' (id={app_id})")
+    # Runtime first: the entrypoint rules below depend on it, and a request
+    # that switches a Rust app to Python *and* names its entrypoint used to
+    # have that entrypoint overwritten with main.rs.
+    if req.runtime is not None:
+        if req.runtime not in ("python", "rust"):
+            raise HTTPException(400, "runtime must be one of: python, rust")
+        app_row.runtime = req.runtime
+        if app_row.runtime == "rust":
+            app_row.entrypoint = "main.rs"
     if req.entrypoint is not None:
         if app_row.runtime == "rust":
             app_row.entrypoint = "main.rs"
@@ -4169,12 +4185,6 @@ async def update_app(
         if req.url_source_pref not in ("local", "public"):
             raise HTTPException(400, "url_source_pref must be 'local' or 'public'")
         app_row.url_source_pref = req.url_source_pref
-    if req.runtime is not None:
-        if req.runtime not in ("python", "rust"):
-            raise HTTPException(400, "runtime must be one of: python, rust")
-        app_row.runtime = req.runtime
-        if app_row.runtime == "rust":
-            app_row.entrypoint = "main.rs"
     if req.memory_limit_mb is not None:
         if req.memory_limit_mb != 0 and not (16 <= req.memory_limit_mb <= 1_048_576):
             raise HTTPException(400, "memory_limit_mb must be between 16 and 1048576 (or 0 for unlimited).")
