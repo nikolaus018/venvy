@@ -31,142 +31,15 @@
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230c111c'/%3E%3Cdefs%3E%3ClinearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%233b82f6' /%3E%3Cstop offset='100%25' stop-color='%232563eb' /%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M28 32 L46 72 C48 76 52 76 54 72 L72 32' stroke='url(%23grad)' stroke-width='14' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
 
     <!-- Apple touch icon — must be PNG-compatible; use a canvas-generated one -->
-    <script>
-        (function () {
-            // Generate a 180×180 PNG icon on a canvas and set it as apple-touch-icon
-            try {
-                const c = document.createElement('canvas');
-                c.width = c.height = 180;
-                const ctx = c.getContext('2d');
-                const r = (x, y, w, h, rad, col) => {
-                    ctx.beginPath(); ctx.roundRect(x, y, w, h, rad); ctx.fillStyle = col; ctx.fill();
-                };
-                r(0, 0, 180, 180, 40, '#090b0f');
-                ctx.strokeStyle = '#3b82f6';
-                ctx.lineWidth = 24; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-                ctx.beginPath(); ctx.moveTo(50, 56); ctx.lineTo(90, 132); ctx.lineTo(130, 56); ctx.stroke();
-                const link = document.createElement('link');
-                link.rel = 'apple-touch-icon';
-                link.href = c.toDataURL('image/png');
-                document.currentScript.parentNode.appendChild(link);
-            } catch (e) { }
-
-            // Generate iOS startup images for the installed PWA splash screen.
-            try {
-                const splashSpecs = [
-                    [320, 568, '(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2)'],
-                    [320, 480, '(device-width: 320px) and (device-height: 480px) and (-webkit-device-pixel-ratio: 1)'],
-                    [375, 667, '(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2)'],
-                    [375, 812, '(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3)'],
-                    [390, 844, '(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)'],
-                    [393, 852, '(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3)'],
-                    [414, 736, '(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3)'],
-                    [414, 896, '(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2)'],
-                    [414, 896, '(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3)'],
-                    [402, 874, '(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3)'],
-                    [428, 926, '(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3)'],
-                    [430, 932, '(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3)'],
-                    [440, 956, '(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3)'],
-                    [768, 1024, '(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 1)'],
-                    [834, 1112, '(device-width: 834px) and (device-height: 1112px) and (-webkit-device-pixel-ratio: 2)'],
-                    [1024, 1366, '(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2)'],
-                ];
-                const drawSplashCanvas = (w, h) => {
-                    const c = document.createElement('canvas');
-                    c.width = w;
-                    c.height = h;
-                    const ctx = c.getContext('2d');
-                    const bg = ctx.createLinearGradient(0, 0, w, h);
-                    bg.addColorStop(0, '#090b0f');
-                    bg.addColorStop(1, '#0c111c');
-                    ctx.fillStyle = bg;
-                    ctx.fillRect(0, 0, w, h);
-                    ctx.strokeStyle = '#3b82f6';
-                    ctx.lineWidth = Math.max(18, Math.round(w * 0.072));
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    ctx.beginPath();
-                    ctx.moveTo(w * 0.24, h * 0.34);
-                    ctx.lineTo(w * 0.5, h * 0.62);
-                    ctx.lineTo(w * 0.76, h * 0.34);
-                    ctx.stroke();
-                    return c.toDataURL('image/png');
-                };
-                splashSpecs.forEach(([w, h, media]) => {
-                    const link = document.createElement('link');
-                    link.rel = 'apple-touch-startup-image';
-                    link.href = drawSplashCanvas(w, h);
-                    link.media = media;
-                    document.currentScript.parentNode.appendChild(link);
-                });
-            } catch (e) { }
-
-            // Inject manifest as blob — richer than before, proper PNG icon via canvas
-            try {
-                const c2 = document.createElement('canvas');
-                c2.width = c2.height = 512;
-                const ctx2 = c2.getContext('2d');
-                const r2 = (x, y, w, h, rad, col) => {
-                    ctx2.beginPath(); ctx2.roundRect(x, y, w, h, rad); ctx2.fillStyle = col; ctx2.fill();
-                };
-                const s = 512;
-                r2(0, 0, s, s, s * 0.22, '#090b0f');
-                ctx2.strokeStyle = '#3b82f6';
-                ctx2.lineWidth = 68; ctx2.lineCap = 'round'; ctx2.lineJoin = 'round';
-                ctx2.beginPath(); ctx2.moveTo(s * 0.28, s * 0.31); ctx2.lineTo(s * 0.5, s * 0.73); ctx2.lineTo(s * 0.72, s * 0.31); ctx2.stroke();
-                const iconDataUrl = c2.toDataURL('image/png');
-
-                const manifest = {
-                    name: 'Venvy',
-                    short_name: 'Venvy',
-                    description: 'Manage, deploy and monitor your Python applications',
-                    start_url: window.location.origin + '/',
-                    scope: window.location.origin + '/',
-                    display: 'standalone',
-                    orientation: 'any',
-                    background_color: '#0c111c',
-                    theme_color: '#0c111c',
-                    categories: ['developer', 'utilities', 'productivity'],
-                    icons: [
-                        { src: iconDataUrl, sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
-                    ],
-                    shortcuts: [],
-                    prefer_related_applications: false,
-                };
-                const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
-                const mlink = document.createElement('link');
-                mlink.rel = 'manifest'; mlink.href = URL.createObjectURL(blob);
-                document.currentScript.parentNode.appendChild(mlink);
-            } catch (e) { }
-        })();
-    </script>
+    <script src="/static/js/head/pwa-meta.js"></script>
 
     <!-- Apply the stored theme/motion preference before first paint so the app
          never flashes the wrong colours on load. -->
-    <script>
-        (function () {
-            try {
-                var p = localStorage.getItem('venvy-theme') || 'system';
-                var t = p === 'system'
-                    ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-                    : p;
-                document.documentElement.setAttribute('data-theme', t);
-                if (localStorage.getItem('venvy-motion') === 'reduce') {
-                    document.documentElement.setAttribute('data-motion', 'reduce');
-                }
-            } catch (e) { }
-        })();
-    </script>
+    <script src="/static/js/head/theme-preload.js"></script>
 
     <!-- Tailwind CSS — using the CDN play version for single-file deployments.
          For production builds consider switching to a compiled CSS file. -->
-    <script>
-        const _warn = console.warn;
-        console.warn = function (...args) {
-            if (args[0] && typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com should not be used in production')) return;
-            _warn.apply(console, args);
-        };
-    </script>
+    <script src="/static/js/head/quiet-tailwind-warning.js"></script>
     <!-- Every third-party file is version-pinned with a Subresource Integrity
          hash: if a CDN ever serves something else, the browser refuses it.
          (Ace lazy-loads its language modes from the same pinned version.) -->
@@ -180,12 +53,7 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js" integrity="sha384-AQLWHRKAgdTxkolJcLOELg4E9rE89CPE2xMy3tIRFn08NcGKPTsELdvKomqji+DL" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/feather-icons/4.29.2/feather.min.js" integrity="sha384-qEqAs1VsN9WH2myXDbiP2wGGIttL9bMRZBKCl54ZnzpDlVqbYANP9vMaoT/wvQcf" crossorigin="anonymous"></script>
-    <script>
-        // Safe wrapper for _featherReplace() — gracefully handles offline / CDN failure
-        window._featherReplace = function () {
-            try { if (window.feather) feather.replace(); } catch (e) { }
-        };
-    </script>
+    <script src="/static/js/head/feather-safe.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous"></script>
     <link
         href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700;800&display=swap"
@@ -193,18 +61,7 @@
 
     <link rel="stylesheet" href="/static/css/app.css">
 
-    <script>
-
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        brand: { 50: '#eff6ff', 100: '#dbeafe', 500: 'var(--text)', 600: 'var(--text)', 700: '#1d4ed8' }
-                    }
-                }
-            }
-        }
-    </script>
+    <script src="/static/js/head/tailwind-config.js"></script>
 </head>
 
 
