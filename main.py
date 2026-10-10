@@ -619,6 +619,12 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
+# Checked when a login names a user that doesn't exist, so that case costs the
+# same scrypt run as a wrong password and response time doesn't reveal which
+# usernames are real.
+_DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(16))
+
+
 def _validate_password_strength(password: str) -> None:
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
@@ -2715,7 +2721,8 @@ def login(
     _check_login_rate(rate_key)
 
     user = session.exec(select(User).where(User.username == payload.username)).first()
-    if not user or not verify_password(payload.password, user.password_hash):
+    password_ok = verify_password(payload.password, user.password_hash if user else _DUMMY_PASSWORD_HASH)
+    if not user or not password_ok:
         _record_login_failure(rate_key)
         entry = _login_attempts.get(rate_key, {})
         locked_until = entry.get('locked_until')
