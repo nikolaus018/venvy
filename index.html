@@ -5494,7 +5494,8 @@
             }
 
             // Port polling — only when running with no port detected yet
-            if (activeApp.status === 'running' && !activeApp.port) {
+            // (activeApp is null here if the refresh above failed with nothing cached)
+            if (activeApp && activeApp.status === 'running' && !activeApp.port) {
                 let _polls = 0;
                 _portPollTimer = setInterval(async () => {
                     _polls++;
