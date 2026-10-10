@@ -5411,12 +5411,15 @@
                 return;
             }
 
-            // Switching apps overwrites the Settings form — confirm before losing edits.
-            if (activeAppId != null && id !== activeAppId && isSettingsDirty()) {
+            // Switching apps overwrites the Settings form and closes the open
+            // file — confirm before losing edits in either.
+            if (activeAppId != null && id !== activeAppId && (isSettingsDirty() || _editorDirty)) {
+                const what = isSettingsDirty() && _editorDirty ? 'Settings and in the open file'
+                    : isSettingsDirty() ? 'Settings' : 'the open file';
                 const leave = await confirmDialog({
-                    title: 'Discard unsaved settings?',
+                    title: 'Discard unsaved changes?',
                     sub: activeApp?.name || '',
-                    body: 'You have changes in Settings that have not been saved. Switching to another application will discard them.',
+                    body: `You have changes in ${what} that have not been saved. Switching to another application will discard them.`,
                     confirmLabel: 'Discard & switch',
                     cancelLabel: 'Stay here',
                     danger: true,
@@ -5571,7 +5574,7 @@
 
             // ONLY clear path if we are switching to a COMPLETELY DIFFERENT app
             if (typeof _lastActiveAppId !== 'undefined' && _lastActiveAppId !== app.id) {
-                currentBrowserPath = ""; fileClipboard = null; _openFilePath = null; _setEditorDirty(false);
+                currentBrowserPath = ""; fileClipboard = null; _resetEditor();
             }
             window._lastActiveAppId = app.id;
         }
@@ -6324,6 +6327,24 @@
             _editorDirty = dirty;
             const indicator = document.getElementById('editor-dirty-indicator');
             if (indicator) indicator.classList.toggle('hidden', !dirty);
+        }
+
+        // Back to "No file open". Saving goes by the path stored on
+        // #current-filename plus the active app, so a file left open across
+        // an app switch would be written into the *other* app on the next
+        // Save / Ctrl+S, replacing its file of the same name.
+        function _resetEditor() {
+            _openFilePath = null;
+            const filenameEl = document.getElementById('current-filename');
+            if (filenameEl) { filenameEl.innerText = 'No file open'; filenameEl.dataset.path = ''; }
+            if (aceEditor) {
+                aceEditor.setValue('', -1);
+                aceEditor.session.getUndoManager().reset();
+            }
+            _setEditorDirty(false);
+            document.getElementById('editor-panel')?.classList.add('translate-x-full');
+            document.getElementById('file-tree-container')?.classList.remove('slide-out-left');
+            isMobileFileEditorOpen = false;
         }
 
         function aceSearch() {
