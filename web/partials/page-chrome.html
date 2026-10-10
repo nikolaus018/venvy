@@ -1,0 +1,36 @@
+    <!-- Connection banner — shown when the backend stops responding -->
+    <div id="conn-banner" role="status" aria-live="polite">
+        <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        </svg>
+        <span id="conn-banner-text">Reconnecting to server…</span>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast-container" role="region" aria-label="Notifications"></div>
+
+    <!-- Polite live region for screen-reader status announcements -->
+    <div id="sr-live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
+
+
+    <!-- Mobile Header -->
+    <div class="md:hidden border-b shrink-0 z-30 pt-safe transition duration-300"
+        style="background:var(--surface);border-color:var(--border)">
+        <div class="h-14 flex items-center justify-between px-4">
+            <button onclick="toggleSidebar()" class="p-2 -ml-2 rounded-lg transition-colors" style="color:var(--text2)">
+                <i data-feather="menu" class="w-5 h-5"></i>
+            </button>
+            <div class="flex items-center gap-0">
+                <span class="brand-text text-[17px]" style="letter-spacing:-0.05em"><span style="color:var(--accent)">V</span>envy</span>
+            </div>
+            <div class="w-9"></div>
+        </div>
+    </div>
+
+    <!-- Sidebar overlay -->
+    <div id="sidebar-overlay" onclick="closeSidebar()"
+        class="fixed inset-0 z-40 hidden md:hidden backdrop-blur-sm transition-opacity opacity-0 duration-300"
+        style="background:rgba(0,0,0,0.6)"></div>
+
+    <!-- include: partials/files-context-menu.html -->

@@ -1,0 +1,26 @@
+    <!-- Context Menu -->
+    <div id="ctx-menu" role="menu" aria-label="File options"
+        class="fixed py-1.5 w-48 hidden z-[60] text-sm font-medium transform origin-top-left scale-95 opacity-0 transition duration-100">
+        <div class="px-3 py-2 section-label border-b truncate" id="ctx-header" style="border-color:var(--border)">File
+            Options</div>
+        <button id="ctx-rename" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors"
+            style="color:var(--text2)">
+            <i data-feather="edit-2" class="w-3.5 h-3.5"></i> Rename
+        </button>
+        <button id="ctx-cut" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors"
+            style="color:var(--text2)">
+            <i data-feather="scissors" class="w-3.5 h-3.5"></i> Cut
+        </button>
+        <button id="ctx-copy" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors"
+            style="color:var(--text2)">
+            <i data-feather="copy" class="w-3.5 h-3.5"></i> Copy
+        </button>
+        <button id="ctx-paste" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors border-t"
+            style="color:var(--text2);border-color:var(--border)">
+            <i data-feather="clipboard" class="w-3.5 h-3.5"></i> Paste
+        </button>
+        <button id="ctx-delete" class="w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors border-t"
+            style="color:var(--red);border-color:var(--border)">
+            <i data-feather="trash-2" class="w-3.5 h-3.5"></i> Delete
+        </button>
+    </div>
