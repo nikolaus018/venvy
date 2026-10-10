@@ -16,6 +16,12 @@ try:
 except ImportError:
     psutil = None
 
+try:
+    import tomllib as _toml
+except ImportError:
+    # Fallback for Python < 3.11 (though Venvy recommends 3.11+)
+    _toml = None
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
