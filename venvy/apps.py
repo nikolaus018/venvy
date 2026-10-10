@@ -1,0 +1,67 @@
+"""App helpers shared by the API: naming rules and the API representation."""
+import datetime
+import re
+
+from fastapi import HTTPException
+
+from venvy.crypto import _try_decrypt_secret
+from venvy.models import App
+from venvy.process import _app_metrics, _systemd_run_available, get_server_ipv4
+
+
+def _clean_app_name(name: str) -> str:
+    name_clean = name.strip()
+    if not name_clean:
+        raise HTTPException(status_code=400, detail="App name cannot be empty.")
+    if len(name_clean) > 50:
+        raise HTTPException(status_code=400, detail="App name must be 50 characters or less.")
+    return name_clean
+
+
+# ---------------------------------------------------------------------------
+# Misc helpers
+# ---------------------------------------------------------------------------
+
+def sanitize_slug(name: str) -> str:
+    s = name.lower().strip()
+    s = re.sub(r"[\s\W-]+", "-", s)
+    return s or "app"
+
+
+def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
+    """Return App as dict — injects local_url + access_url + live metrics.
+
+    env_json is encrypted at rest and holds real secrets (DB passwords, API
+    keys, etc. for the hosted app). reveal_secrets=False redacts it instead
+    of decrypting, for callers where the requester's role shouldn't see
+    plaintext env vars (e.g. a read-only viewer browsing the app list)."""
+    d = app_row.model_dump()
+    if reveal_secrets:
+        env_ok, env_plain = _try_decrypt_secret(app_row.env_json)
+        d["env_json"] = env_plain or "{}"
+        # Stored but undecryptable (key lost or replaced). The UI must not
+        # present this as "no variables" and save that back over them.
+        d["env_unreadable"] = not env_ok
+    else:
+        d["env_json"] = "{}"
+        d["env_redacted"] = bool(app_row.env_json)
+    local_url = f"http://{get_server_ipv4()}:{app_row.port}" if app_row.port else None
+    d["local_url"] = local_url
+    d["metrics"]   = _app_metrics.get(app_row.id, {"cpu": 0.0, "memory": 0})
+    d["resource_limits_enforced"] = _systemd_run_available()
+    pref = app_row.url_source_pref
+    if pref == "public" and app_row.external_url:
+        d["access_url"] = app_row.external_url
+        d["url_source"] = "cloudflare"
+    elif local_url:
+        d["access_url"] = local_url
+        d["url_source"] = "local"
+    else:
+        d["access_url"] = None
+        d["url_source"] = None
+    for key in ("created_at", "updated_at", "last_start_time", "last_stop_time",
+                "last_manually_stopped_at"):
+        val = d.get(key)
+        if isinstance(val, datetime.datetime):
+            d[key] = val.isoformat()
+    return d
