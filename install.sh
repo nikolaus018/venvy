@@ -31,6 +31,9 @@
 venvy_install() {
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+# The service user has to be able to read the code this (root) installs,
+# whatever umask the admin's shell happens to use.
+umask 022
 
 REPO="nikolaus018/venvy"
 CODE_DIR="/opt/venvy"

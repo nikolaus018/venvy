@@ -405,7 +405,7 @@ def _systemd_run_available() -> bool:
         if available:
             try:
                 available = subprocess.run(
-                    ["systemd-run", "--scope", "--quiet", "true"],
+                    ["systemd-run", "--scope", "--quiet", "--no-ask-password", "true"],
                     stdin=subprocess.DEVNULL, capture_output=True, timeout=15,
                 ).returncode == 0
             except Exception:

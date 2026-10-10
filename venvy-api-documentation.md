@@ -140,7 +140,7 @@ Two independent limiters, both keyed by client IP:
 
 | Limiter | Scope | Limit |
 |---|---|---|
-| Login | `POST /api/auth/login` | 5 failed attempts → 5-minute lockout |
+| Login | `POST /api/auth/login` | 5 failed attempts per client IP → 5-minute lockout; independently, 20 failed attempts for one username (from any IP) → 5-minute lockout of that username |
 | Mutations | Every app/file/package/log/tunnel-mutating route except `POST /files/upload/chunk` (one large file is hundreds of chunks) | 60 requests / 60-second sliding window |
 
 Both return `429` with an `X-Retry-After` header (seconds).
@@ -201,7 +201,7 @@ On success every other session of this user is revoked; the calling session stay
 Returns `{ "ticket": "..." }`: a one-time, 60-second ticket to append as `?ticket=` to `GET /files/download` or `GET /system/backups/{filename}/download` (see §2.1).
 
 #### `GET /api/auth/totp/setup`
-Generates (or re-returns) a pending TOTP secret + `otpauth://` URI for QR display. **Does not enable TOTP.**
+Generates (or re-returns) a pending TOTP secret + `otpauth://` URI for QR display. **Does not enable TOTP.** `400` if TOTP is already enabled — disable it first (which requires the password) to enrol a new authenticator.
 ```json
 { "ok": true, "secret": "BASE32SECRET", "uri": "otpauth://totp/Venvy:alice?..." }
 ```
@@ -209,6 +209,8 @@ Generates (or re-returns) a pending TOTP secret + `otpauth://` URI for QR displa
 #### `POST /api/auth/totp/setup/confirm`
 **Body:** `{ "totp_code": "123456" }`
 Verifies the code against the pending secret; on success, enables TOTP for the account. `400` if no pending setup or the code is wrong.
+
+TOTP codes are single-use: a code (at login or here) is rejected once it, or a later one, has been accepted. Secrets are stored encrypted.
 
 #### `POST /api/auth/totp/disable`
 **Body:** `{ "password": "string" }`
@@ -279,7 +281,7 @@ Creates the app's directory and DB record right away (status `installing`), then
 Poll `GET /api/apps` (or `.../stats`) to observe the final `running` / `stopped` / `error` state. `400` for any action other than `start`, `stop`, or `restart`.
 
 #### `GET /api/apps/{app_id}/stats`
-Any authenticated role. Live process stats, sampled fresh on each call (not cached).
+Any authenticated role. Process stats from the background metrics collector (a sample at most a few seconds old, including the app's child processes); all zeros when the app is not running.
 ```json
 { "cpu": 3.2, "memory": 84.5, "uptime": 1523.7 }
 ```
@@ -300,6 +302,8 @@ All paths are relative to the app's sandbox root and validated to prevent traver
 #### `POST /files/op`
 `require_operator`, rate-limited.
 **Body:** `{ "operation", "path", "new_path"?, "content"? }`
+
+Paths are resolved once and then opened without following symlinks. `delete`, `rename` and `copy` act on a symlink itself, not on what it points to; copying a folder copies links as links. A path that leads outside the app directory answers `403`; a missing `rename`/`copy` source answers `404`; an existing destination answers `409`.
 
 | Operation | Required fields | Behavior |
 |---|---|---|
@@ -407,7 +411,7 @@ Downloads a backup of either type. `filename` must match one of the fixed naming
 Permanently deletes a backup of either type. Same filename validation as the download endpoint.
 
 #### `POST /api/system/backup/restore/{filename}` — admin only
-Rolls this **live** server back to a full backup. Only `type: "full"` backups are accepted (`400` for a legacy DB-only filename or anything not matching the naming scheme). **Body:** `{ "confirm": "RESTORE" }` — any other value is a `400` no-op, nothing is touched.
+Rolls this **live** server back to a full backup. `409` if a restore is already running; while one runs, `start`/`restart` of apps also answer `409`. The archive is unpacked and checked before anything is stopped, so an unreadable backup fails without touching the running instance. Only `type: "full"` backups are accepted (`400` for a legacy DB-only filename or anything not matching the naming scheme). **Body:** `{ "confirm": "RESTORE" }` — any other value is a `400` no-op, nothing is touched.
 
 Sequence: (1) creates a fresh full backup of the *current* state first, so the restore itself can be undone if it turns out to be a mistake — if this safety backup fails, the request aborts here and nothing else is touched; (2) stops every running app; (3) extracts the target archive to a staging directory, rejecting any entry whose path would land outside it — including writes through symlinks extracted earlier (symlinks themselves are allowed: every venv has one to the system Python); (4) closes all database connections, removes the old `data.db-wal`/`-shm` (SQLite would otherwise replay them onto the restored database) and swaps `apps/`, `data.db`, and `.venvy_key` into place; (5) restarts the whole Venvy process (`os.execv` — same PID, fresh process image) so every piece of in-memory state (DB connections, the encryption-key cache, active-process tracking, background tasks) reinitializes cleanly against the restored files.
 
@@ -555,6 +559,7 @@ This is the exact shape returned by `GET /api/apps` (array of these), `POST /api
 | `external_url` | string \| null | set when a Cloudflare route is published |
 | `env_json` | **string** | ⚠️ also a JSON-encoded object **as a string** (`"{}"` if empty), must be `JSON.parse()`'d client-side. For `admin`/`operator` this is the **decrypted plaintext**; see the redaction note below. |
 | `env_redacted` | bool | **only present when secrets are hidden** (i.e. caller is `viewer`) — `true` if the app has any env vars set, even though `env_json` itself will just be `"{}"`. Not present at all for `admin`/`operator` responses. |
+| `env_unreadable` | bool | **only present when secrets are shown** — `true` if env vars are stored but cannot be decrypted (the `.venvy_key` was lost or replaced). `env_json` is then `"{}"`; the app refuses to start until the variables are re-entered or the key restored, and clients must not save `{}` back |
 | `healthcheck_path` | string \| null | |
 | `url_source_pref` | string | `local` \| `public` — the operator's preference for which URL `access_url` should reflect |
 | `memory_limit_mb` | int \| null | default `512`; `null` = unlimited |
