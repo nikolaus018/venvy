@@ -83,7 +83,7 @@ with server(repo, 54999) as (base, data, srv):
 work = Path(tempfile.mkdtemp(prefix="venvy-race-")); os.chdir(work)
 sys.path.insert(0, os.path.abspath(repo))
 import venvy.safefs as fs
-import main as iso
+import venvy.isolation as iso
 root = work / "app"; (root / "real").mkdir(parents=True)
 victim = work / "victim"; victim.mkdir(); (victim / "keep.txt").write_text("keep")
 os.symlink(victim, root / "d")          # "d" was a directory when the path was checked
