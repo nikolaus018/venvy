@@ -107,19 +107,26 @@ def _totp_hotp(secret_b32: str, counter: int) -> str:
     code = (struct.unpack(">I", h[offset:offset+4])[0] & 0x7FFFFFFF) % 1_000_000
     return f"{code:06d}"
 
-def _totp_verify(secret_b32: str, code: str, window: int = 1) -> bool:
-    """Return True if *code* matches the current TOTP ± *window* steps."""
+def _totp_verify(secret_b32: str, code: str, window: int = 1, after: Optional[int] = None) -> Optional[int]:
+    """Return the time step *code* is valid for (current ± *window*), or None.
+
+    Steps at or before *after* — the step of the last code this user was
+    accepted with — don't count: a code is good for one use, so one that was
+    shoulder-surfed or captured in transit can't be replayed inside the
+    ~90 seconds it would otherwise stay valid (RFC 6238 §5.2)."""
     if not secret_b32 or not code:
-        return False
+        return None
     # Compared as bytes: compare_digest() raises TypeError on non-ASCII str,
     # which turned a mistyped code (e.g. full-width digits) into a 500.
     supplied = code.strip().encode("utf-8")
     now = int(time.time()) // 30
     for delta in range(-window, window + 1):
+        if after is not None and now + delta <= after:
+            continue
         expected = _totp_hotp(secret_b32, now + delta)
         if expected and hmac.compare_digest(expected.encode("ascii"), supplied):
-            return True
-    return False
+            return now + delta
+    return None
 
 def _totp_uri(secret_b32: str, username: str, issuer: str = "Venvy") -> str:
     """Build the otpauth:// URI for QR code generation."""
@@ -343,8 +350,10 @@ class User(SQLModel, table=True):
     # "viewer"   — read-only: status, logs, metrics
     role: str = Field(default="operator")
     created_at: datetime.datetime = Field(default_factory=utc_now)
-    totp_secret: Optional[str] = Field(default=None)   # None = TOTP disabled
+    totp_secret: Optional[str] = Field(default=None)   # None = TOTP disabled; encrypted at rest
     totp_enabled: bool = Field(default=False)
+    # Time step of the last accepted code — see _totp_verify().
+    totp_last_counter: Optional[int] = Field(default=None)
 
 
 class UserSession(SQLModel, table=True):
@@ -455,6 +464,7 @@ def create_db_and_tables() -> None:
         "ALTER TABLE app ADD COLUMN systemd_scope VARCHAR",
         "ALTER TABLE app ADD COLUMN pid_start VARCHAR",
         "ALTER TABLE usersession ADD COLUMN key_hash VARCHAR",
+        "ALTER TABLE user ADD COLUMN totp_last_counter INTEGER",
     ]
     
     with engine.begin() as conn:
@@ -497,6 +507,18 @@ def create_db_and_tables() -> None:
         # Sessions from before hashed tokens + auth keys can never validate
         # again; drop them rather than let them sit until expiry.
         conn.exec_driver_sql("DELETE FROM usersession WHERE key_hash IS NULL")
+
+    # TOTP secrets used to be stored as-is; anyone who could read data.db (or a
+    # backup of it) could generate every user's codes. Encrypt what's there.
+    with Session(engine) as session:
+        plain = [u for u in session.exec(select(User)).all()
+                 if u.totp_secret and not u.totp_secret.startswith(_ENC_PREFIX)]
+        for u in plain:
+            u.totp_secret = _encrypt_secret(u.totp_secret)
+            session.add(u)
+        if plain:
+            session.commit()
+            logging.info(f"Encrypted {len(plain)} stored TOTP secret(s).")
 
     APPS_BASE_DIR.mkdir(exist_ok=True)
     _lock_down_data_files()
@@ -3100,9 +3122,12 @@ def login(
     if user.totp_enabled and user.totp_secret:
         if not payload.totp_code:
             raise HTTPException(403, "totp_required")
-        if not _totp_verify(user.totp_secret, payload.totp_code):
+        step = _totp_verify(_decrypt_secret(user.totp_secret), payload.totp_code, after=user.totp_last_counter)
+        if step is None:
             _record_login_failure(rate_key)
             raise HTTPException(401, "Invalid authenticator code.")
+        user.totp_last_counter = step
+        session.add(user)   # committed with the new session below
 
     _clear_login_rate(rate_key)
     auth_key = _new_session(session, response, user)
@@ -3171,13 +3196,18 @@ def totp_setup_begin(
     user: User = Depends(get_current_user),
 ):
     """Generate (or return pending) TOTP secret + QR URI. Does NOT enable TOTP yet."""
+    if user.totp_enabled:
+        # Replacing an active authenticator must go through /totp/disable,
+        # which asks for the password — a borrowed session alone must not be
+        # able to re-enrol 2FA onto someone else's phone.
+        raise HTTPException(400, "Two-factor authentication is already enabled. Disable it first to set up a new authenticator.")
     secret = _totp_generate_secret()
     key = f"totp_pending_{user.id}"
     setting = session.get(SystemSetting, key)
     if setting:
-        setting.value = secret
+        setting.value = _encrypt_secret(secret)
     else:
-        setting = SystemSetting(key=key, value=secret)
+        setting = SystemSetting(key=key, value=_encrypt_secret(secret))
     session.add(setting)
     session.commit()
     uri = _totp_uri(secret, user.username)
@@ -3195,10 +3225,13 @@ def totp_setup_confirm(
     setting = session.get(SystemSetting, key)
     if not setting or not setting.value:
         raise HTTPException(400, "No pending TOTP setup. Start setup first.")
-    if not _totp_verify(setting.value, req.totp_code):
+    secret = _decrypt_secret(setting.value)
+    step = _totp_verify(secret, req.totp_code)
+    if step is None:
         raise HTTPException(400, "Incorrect code — try again.")
-    user.totp_secret = setting.value
+    user.totp_secret = _encrypt_secret(secret)
     user.totp_enabled = True
+    user.totp_last_counter = step
     session.add(user)
     session.delete(setting)
     session.commit()
@@ -3216,6 +3249,7 @@ def totp_disable(
         raise HTTPException(401, "Incorrect password.")
     user.totp_enabled = False
     user.totp_secret = None
+    user.totp_last_counter = None
     session.add(user)
     session.commit()
     return {"ok": True}
@@ -4818,6 +4852,12 @@ def _is_secret_setting(key: str) -> bool:
     return key in ("cf_api_token", "gh_token") or key.startswith("totp_pending_")
 
 
+def _reject_reserved_setting(key: str) -> None:
+    """Keys Venvy keeps its own state under are not settable through the API."""
+    if key.startswith("totp_pending_"):
+        raise HTTPException(400, f"'{key}' is reserved.")
+
+
 def _setting_for_storage(key: str, value: str) -> tuple:
     """(cleaned value, value as stored) for a system setting — the one place
     that decides which settings are encrypted at rest."""
@@ -4836,6 +4876,7 @@ def set_system_setting(
     admin: User = Depends(check_admin),
     session: Session = Depends(get_session),
 ):
+    _reject_reserved_setting(key)
     value, stored_value = _setting_for_storage(key, req.value)
     setting = session.get(SystemSetting, key)
     if setting:
@@ -4860,6 +4901,8 @@ def set_system_settings_batch(
     session: Session = Depends(get_session),
 ):
     """Save multiple settings in a single DB transaction."""
+    for item in items:
+        _reject_reserved_setting(item.key)
     for item in items:
         _, stored_value = _setting_for_storage(item.key, item.value)
         setting = session.get(SystemSetting, item.key)
