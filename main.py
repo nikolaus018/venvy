@@ -1609,6 +1609,11 @@ def _restart_allowed(app_id: int) -> bool:
     return True
 
 
+# Set while a restore is running (from the request until the process re-execs,
+# or until the restore fails). Starting apps is held off for the duration.
+_restore_in_progress = False
+
+
 async def supervisor_task() -> None:
     """Background loop: detect crashed apps, restart per policy, auto-detect ports."""
     global _supervisor_event
@@ -1622,6 +1627,13 @@ async def supervisor_task() -> None:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(_supervisor_event.wait(), timeout=1.0)
             _supervisor_event.clear()
+
+            if _restore_in_progress:
+                # The restored data.db describes apps as they were when the
+                # backup was taken — "running", with PIDs long gone. Acting on
+                # that here would start them moments before Venvy re-execs,
+                # cutting off their output pipe and leaving them unsupervised.
+                continue
 
             now_mono = time.monotonic()
 
@@ -3215,8 +3227,11 @@ async def restore_backup(
     are stopped and stay stopped. Requires confirm == "RESTORE" or this is
     a no-op 400; only full backups (not legacy DB-only ones) are restorable.
     """
+    global _restore_in_progress
     if req.confirm != "RESTORE":
         raise HTTPException(400, 'Confirmation phrase did not match — send {"confirm": "RESTORE"}.')
+    if _restore_in_progress:
+        raise HTTPException(409, "A restore is already in progress.")
     if not _FULL_BACKUP_FILENAME_RE.match(filename):
         raise HTTPException(400, "Only full backups can be restored — legacy database-only backups are download-only.")
     archive_path = BACKUP_DIR / filename
@@ -3225,10 +3240,22 @@ async def restore_backup(
 
     audit_log(admin.username, "system_restore_started", f"path={archive_path}")
     session.close()
+    _restore_in_progress = True
     return _start_job(admin, "restore", lambda: _restore_job(admin, archive_path))
 
 
 async def _restore_job(admin: User, archive_path: Path) -> dict:
+    global _restore_in_progress
+    try:
+        return await _run_restore(admin, archive_path)
+    except BaseException:
+        # Failed: this process carries on, so normal service resumes. On
+        # success the flag stays set until _self_restart() replaces us.
+        _restore_in_progress = False
+        raise
+
+
+async def _run_restore(admin: User, archive_path: Path) -> dict:
 
     # Safety net: back up the CURRENT state before touching anything, so a
     # restore that turns out to be a mistake can itself be undone. If this
@@ -3517,6 +3544,8 @@ async def control_app(
         raise HTTPException(400, "Invalid action. Use: start | stop | restart")
     if app_row.status == "installing":
         raise HTTPException(409, "This app is still being set up — wait for its install to finish.")
+    if _restore_in_progress and action != "stop":
+        raise HTTPException(409, "A restore is in progress — apps can be started again once Venvy has restarted.")
     audit_log(user.username, f"app_{action}", f"app '{app_row.name}' (id={app_id})")
 
     async def _do_start():
