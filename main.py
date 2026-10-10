@@ -1490,14 +1490,16 @@ async def _stop_app_process(app_id: int, session: Session, manual: bool = False)
     db_app = session.get(App, app_id, populate_existing=True)
     if not db_app:
         return
+    # Recorded even when nothing is running: that is exactly the state of a
+    # crash-looping app between two automatic restarts, and Stop has to end
+    # the loop there too.
+    if manual:
+        db_app.last_manually_stopped_at = utc_now()
     if not db_app.pid:
         db_app.status = "stopped"
         session.add(db_app)
         session.commit()
         return
-
-    if manual:
-        db_app.last_manually_stopped_at = utc_now()
 
     pid = db_app.pid
     if not await asyncio.to_thread(_app_pid_alive, db_app):
