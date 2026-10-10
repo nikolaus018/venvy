@@ -34,6 +34,7 @@ from venvy.process import (
     metrics_collector_task,
     _pid_alive,
     start_app_process_logic,
+    _systemd_run_available,
     supervisor_task,
 )
 from venvy.startup import _check_python3_venv, _check_rust
@@ -54,6 +55,7 @@ async def lifespan(app: FastAPI):
 
     await _check_python3_venv()
     await _check_rust()
+    await asyncio.to_thread(_systemd_run_available)   # warm the (blocking) probe off the event loop
 
     with Session(engine) as session:
         _boot_reset_time = utc_now()

@@ -13,6 +13,7 @@ import os
 import shutil
 import signal
 import socket
+import subprocess
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Union
@@ -395,20 +396,35 @@ _SYSTEMD_AVAILABLE: Optional[bool] = None
 
 
 def _systemd_run_available() -> bool:
-    """Best-effort check that `systemd-run`/`systemctl` exist and systemd is PID 1's
-    init (i.e. we're actually on a systemd Linux host). Cached after first check."""
+    """Whether apps can be launched in a systemd scope: `systemd-run`/`systemctl`
+    exist, systemd is PID 1's init, and — checked by actually creating one —
+    this process is allowed to start a transient scope. That last part is not
+    a given: as an unprivileged service user it needs polkit authorisation,
+    and without it every app launch would fail with "Interactive
+    authentication required". Cached after the first check (blocking, up to
+    a few seconds; warmed at startup)."""
     global _SYSTEMD_AVAILABLE
     if _SYSTEMD_AVAILABLE is None:
-        _SYSTEMD_AVAILABLE = bool(
+        available = bool(
             shutil.which("systemd-run")
             and shutil.which("systemctl")
             and Path("/run/systemd/system").exists()
         )
+        if available:
+            try:
+                available = subprocess.run(
+                    ["systemd-run", "--scope", "--quiet", "true"],
+                    stdin=subprocess.DEVNULL, capture_output=True, timeout=15,
+                ).returncode == 0
+            except Exception:
+                available = False
+        _SYSTEMD_AVAILABLE = available
         if not _SYSTEMD_AVAILABLE:
             logging.warning(
-                "systemd-run is not available on this host — apps will launch without "
-                "per-app CPU/memory limits (expected on non-Linux hosts or containers "
-                "without systemd; fine for local dev/testing)."
+                "systemd-run is not usable here — apps will launch without per-app "
+                "CPU/memory limits (expected on non-Linux hosts, in containers without "
+                "systemd, or when Venvy runs as an unprivileged user that may not "
+                "create systemd scopes)."
             )
     return _SYSTEMD_AVAILABLE
 
