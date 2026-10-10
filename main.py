@@ -2277,6 +2277,11 @@ async def lifespan(app: FastAPI):
                 logging.warning(f"Install of '{app_row.name}' was interrupted — marking it as error.")
                 app_row.status = "error"
                 modified = True
+            elif app_row.status in ("starting", "stopping"):
+                # The task that would have finished this died with the old
+                # process. Nothing else ever moves an app out of these states.
+                app_row.status = "running" if app_row.pid else "stopped"
+                modified = True
 
             if app_row.status == "running" and app_row.pid:
                 if not _app_pid_alive(app_row):
@@ -3455,6 +3460,12 @@ async def control_app(
             _trigger_supervisor()
         except Exception as exc:
             logging.error(f"Background stop failed for app {app_id}: {exc}")
+            with Session(engine) as s:
+                a = s.get(App, app_id)
+                if a and a.status == "stopping":
+                    a.status = "running" if a.pid else "stopped"
+                    s.add(a)
+                    s.commit()
         finally:
             _running_tasks.discard(asyncio.current_task())
 
