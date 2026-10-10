@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlmodel import Session
 
 from venvy.crypto import _decrypt_secret, _encrypt_secret
-from venvy.isolation import _app_proc_kwargs, _app_tool_env
+from venvy.isolation import _app_tool_env, _as_app_user
 from venvy.models import App, SystemSetting
 
 
@@ -75,12 +75,11 @@ async def _run_git(app_row: "App", args: List[str], timeout: int = 60, token: st
     env["GIT_ASKPASS"] = "true"
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git", "-c", "safe.directory=*", *args,
+            *_as_app_user(app_row, ["git", "-c", "safe.directory=*", *args]),
             cwd=app_row.app_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
-            **_app_proc_kwargs(app_row),
         )
     except FileNotFoundError:
         raise HTTPException(500, "git is not installed on the server.")

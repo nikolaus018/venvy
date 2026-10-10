@@ -30,7 +30,7 @@ from venvy.db import engine, get_session
 from venvy.isolation import (
     _app_ids,
     _app_log_file,
-    _app_proc_kwargs,
+    _as_app_user,
     _app_tool_env,
     _delete_app_user,
     _ensure_app_user,
@@ -58,6 +58,11 @@ from venvy.uploads import _save_upload_file, _SINGLE_REQUEST_UPLOAD_MAX
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
 )
+
+# Where venv/pip/cargo run from. Not Venvy's own working directory: under
+# per-app users the app's user can't enter it, and `python -m …` would put
+# whatever directory it starts in on its import path.
+_TOOL_CWD = "/"
 
 
 # ---------------------------------------------------------------------------
@@ -201,12 +206,11 @@ async def upload_app(
             with Session(engine) as s2:
                 row = s2.get(App, app_id)
             await asyncio.to_thread(_ensure_app_user, row)
-            kw = _app_proc_kwargs(row)
             env = _app_tool_env(row)
             if runtime == "python":
                 proc = await asyncio.create_subprocess_exec(
-                    "python3", "-m", "venv", str(venv_path),
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, **kw,
+                    *_as_app_user(row, ["python3", "-m", "venv", str(venv_path)]),
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, cwd=_TOOL_CWD,
                 )
                 try:
                     _, venv_err = await asyncio.wait_for(proc.communicate(), timeout=120)
@@ -227,8 +231,8 @@ async def upload_app(
                 if not await asyncio.to_thread(pip_bin.exists):
                     raise HTTPException(500, "pip not found in the new virtual environment.")
                 proc = await asyncio.create_subprocess_exec(
-                    str(pip_bin), "install", "--no-input", "-r", str(req_path),
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, **kw,
+                    *_as_app_user(row, [str(pip_bin), "install", "--no-input", "-r", str(req_path)]),
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, cwd=_TOOL_CWD,
                 )
                 try:
                     _, pip_err = await asyncio.wait_for(proc.communicate(), timeout=600)
@@ -598,11 +602,11 @@ async def list_packages(
     # The venv's python runs app-controlled code (.pth files, sitecustomize),
     # so it runs as the app's user, never as Venvy's.
     proc = await asyncio.create_subprocess_exec(
-        str(venv_python), "-m", "pip", "list", "--format=json",
+        *_as_app_user(app_row, [str(venv_python), "-m", "pip", "list", "--format=json"]),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
         env=_app_tool_env(app_row),
-        **_app_proc_kwargs(app_row),
+        cwd=_TOOL_CWD,
     )
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
@@ -619,11 +623,11 @@ async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str) 
     """Run a package-manager command for an app (as the app's user); raise
     HTTPException with its stderr on failure or timeout."""
     proc = await asyncio.create_subprocess_exec(
-        *argv,
+        *_as_app_user(app_row, argv),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=_app_tool_env(app_row),
-        **_app_proc_kwargs(app_row),
+        cwd=_TOOL_CWD,
     )
     try:
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -781,11 +785,11 @@ async def scan_imports(
     installed: Set[str] = set()
     if venv_python.exists():
         proc = await asyncio.create_subprocess_exec(
-            str(venv_python), "-m", "pip", "list", "--format=json",
+            *_as_app_user(app_row, [str(venv_python), "-m", "pip", "list", "--format=json"]),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             env=_app_tool_env(app_row),
-            **_app_proc_kwargs(app_row),
+            cwd=_TOOL_CWD,
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)

@@ -38,8 +38,8 @@ def _isolation_active() -> bool:
         if ok and os.geteuid() != 0:
             logging.error("VENVY_APP_USERS=1 needs Venvy to run as root — running without per-app users.")
             ok = False
-        if ok and not (shutil.which("useradd") and shutil.which("userdel")):
-            logging.error("VENVY_APP_USERS=1 needs useradd/userdel — running without per-app users.")
+        if ok and not (shutil.which("useradd") and shutil.which("userdel") and shutil.which("setpriv")):
+            logging.error("VENVY_APP_USERS=1 needs useradd, userdel and setpriv — running without per-app users.")
             ok = False
         _APP_USERS_ACTIVE = ok
         if ok:
@@ -122,12 +122,19 @@ def _chown_app_dir(app_row: "App") -> None:
         _chown_tree(app_dir, *ids)
 
 
-def _app_proc_kwargs(app_row: "App") -> dict:
-    """subprocess kwargs that run a command as the app's user (or nothing)."""
+def _as_app_user(app_row: "App", argv: list) -> list:
+    """The command line that runs *argv* as the app's user (unchanged when
+    isolation is off).
+
+    Done with setpriv rather than subprocess's user=/group= arguments:
+    uvloop — the event loop uvicorn uses in production — rejects those
+    ("unexpected kwargs: user, group, extra_groups"), which made every venv,
+    pip and git run fail under per-app users. setpriv execs the command, so
+    the PID the caller gets is the command's own."""
     ids = _app_ids(app_row)
     if not ids:
-        return {}
-    return {"user": ids[0], "group": ids[1], "extra_groups": []}
+        return list(argv)
+    return ["setpriv", f"--reuid={ids[0]}", f"--regid={ids[1]}", "--clear-groups", "--", *argv]
 
 
 def _app_tool_env(app_row: "App") -> Dict[str, str]:

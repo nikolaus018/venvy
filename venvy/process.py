@@ -34,7 +34,7 @@ from venvy.crypto import _decrypt_secret, _try_decrypt_secret
 from venvy.db import engine
 from venvy.isolation import (
     _app_log_file,
-    _app_proc_kwargs,
+    _as_app_user,
     _app_username,
     _ensure_app_user,
 )
@@ -550,6 +550,11 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             launch_cmd = scope_cmd
             used_systemd_scope = True
 
+        if not used_systemd_scope:
+            # Under systemd-run, --uid/--gid above does the switch (it must
+            # start as root to create the scope); otherwise switch here.
+            launch_cmd = _as_app_user(db_app, cmd)
+
         process = await asyncio.create_subprocess_exec(
             *launch_cmd,
             cwd=str(app_dir),
@@ -558,9 +563,6 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             stderr=asyncio.subprocess.STDOUT,
             env=env,
             start_new_session=True,
-            # Under systemd-run, --uid/--gid above does the switch (it must
-            # start as root to create the scope); otherwise switch here.
-            **({} if used_systemd_scope else _app_proc_kwargs(db_app)),
         )
 
         if process.stdout:
