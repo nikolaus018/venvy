@@ -109,6 +109,11 @@ from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 # venvy imports
+from venvy.settings import (
+    _is_secret_setting,
+    _reject_reserved_setting,
+    _setting_for_storage,
+)
 from venvy.cloudflare import (
     _sanitize_cf_value,
     _get_cf_creds,
@@ -2282,28 +2287,6 @@ def get_system_setting(
     if key.startswith("cf_"):
         value = _decrypt_secret(value)
     return {"key": key, "value": value}
-
-
-def _is_secret_setting(key: str) -> bool:
-    """Settings whose value is never returned by the API once stored."""
-    return key in ("cf_api_token", "gh_token") or key.startswith("totp_pending_")
-
-
-def _reject_reserved_setting(key: str) -> None:
-    """Keys Venvy keeps its own state under are not settable through the API."""
-    if key.startswith("totp_pending_"):
-        raise HTTPException(400, f"'{key}' is reserved.")
-
-
-def _setting_for_storage(key: str, value: str) -> tuple:
-    """(cleaned value, value as stored) for a system setting — the one place
-    that decides which settings are encrypted at rest."""
-    if key.startswith("cf_"):
-        value = _sanitize_cf_value(value)
-        return value, _encrypt_secret(value)
-    if key == "gh_token":
-        return value, _encrypt_secret(value)
-    return value, value
 
 
 @api_router.put("/system/settings/{key}")
