@@ -111,9 +111,13 @@ def _totp_verify(secret_b32: str, code: str, window: int = 1) -> bool:
     """Return True if *code* matches the current TOTP ± *window* steps."""
     if not secret_b32 or not code:
         return False
+    # Compared as bytes: compare_digest() raises TypeError on non-ASCII str,
+    # which turned a mistyped code (e.g. full-width digits) into a 500.
+    supplied = code.strip().encode("utf-8")
     now = int(time.time()) // 30
     for delta in range(-window, window + 1):
-        if hmac.compare_digest(_totp_hotp(secret_b32, now + delta), code.strip()):
+        expected = _totp_hotp(secret_b32, now + delta)
+        if expected and hmac.compare_digest(expected.encode("ascii"), supplied):
             return True
     return False
 
