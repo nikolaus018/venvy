@@ -3604,14 +3604,6 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
         raise HTTPException(500, f"Could not create a safety backup before restoring — aborted, nothing was touched: {e.detail}")
     audit_log(admin.username, "system_restore_safety_backup", f"path={pre_restore}")
 
-    # Stop every running app before touching apps/ or data.db out from under them.
-    with Session(engine) as session:
-        for a in session.exec(select(App)).all():
-            try:
-                await stop_app_process_logic(a.id, session, manual=True)
-            except Exception as e:
-                logging.warning(f"Failed to stop app {a.id} before restore: {e}")
-
     staging = BACKUP_DIR / f".restore-staging-{secrets.token_hex(4)}"
     staging.mkdir()
 
@@ -3632,33 +3624,54 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
                 tar.extractall(staging)  # Python < 3.12 has no `filter` kwarg
 
     def _swap():
-        # SQLite would replay the *old* database's -wal file onto the
-        # restored data.db on next open, corrupting it. Close every pooled
-        # connection first, then remove the old WAL/SHM with the old DB.
-        engine.dispose()
-        for suffix in ("-wal", "-shm"):
-            Path(str(DB_FILE) + suffix).unlink(missing_ok=True)
         if (staging / "apps").is_dir():
             if APPS_BASE_DIR.exists():
                 shutil.rmtree(APPS_BASE_DIR)
             shutil.move(str(staging / "apps"), str(APPS_BASE_DIR))
-        shutil.move(str(staging / "data.db"), str(DB_FILE))
-        # Again, in case a concurrent request reopened the old DB in between.
+        # The database is loaded *into* the live file through SQLite's backup
+        # API, not swapped underneath it. Requests keep arriving during a
+        # restore (the UI polls this very job), and replacing data.db while
+        # deleting its -wal/-shm by hand left two windows in which a
+        # connection could pair the new database with the old one's WAL —
+        # which SQLite would then replay onto it. The backup API takes the
+        # proper locks and goes through the WAL like any other write.
         engine.dispose()
-        for suffix in ("-wal", "-shm"):
-            Path(str(DB_FILE) + suffix).unlink(missing_ok=True)
+        src = sqlite3.connect(str(staging / "data.db"))
+        try:
+            dst = sqlite3.connect(str(DB_FILE), timeout=60)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        engine.dispose()
         restored_key = staging / _VENVY_KEY_FILE.name
         if restored_key.is_file():
             shutil.move(str(restored_key), str(_VENVY_KEY_FILE))
             _VENVY_KEY_FILE.chmod(0o600)
 
     try:
-        await asyncio.to_thread(_extract)
+        # Unpack and check the archive first: if it is unusable, nothing has
+        # been stopped or changed yet.
+        try:
+            await asyncio.to_thread(_extract)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except (tarfile.TarError, OSError, EOFError) as e:
+            raise HTTPException(400, f"Backup archive could not be read — restore aborted, nothing was changed: {e}")
         if not (staging / "data.db").is_file():
             raise HTTPException(400, "Backup archive is missing data.db — restore aborted, nothing was changed.")
+
+        # Stop every running app before touching apps/ or data.db out from under them.
+        with Session(engine) as session:
+            for a in session.exec(select(App)).all():
+                try:
+                    await stop_app_process_logic(a.id, session, manual=True)
+                except Exception as e:
+                    logging.warning(f"Failed to stop app {a.id} before restore: {e}")
+
         await asyncio.to_thread(_swap)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
     finally:
         await asyncio.to_thread(shutil.rmtree, staging, True)
 
