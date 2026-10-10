@@ -1620,12 +1620,7 @@ async def supervisor_task() -> None:
 
             if now_mono - _last_login_cleanup > 120:
                 _last_login_cleanup = now_mono
-                expired_keys = [
-                    k for k, v in list(_login_attempts.items())
-                    if not v.get('locked_until') or time.time() > v['locked_until'] + 300
-                ]
-                for k in expired_keys:
-                    _login_attempts.pop(k, None)
+                _purge_login_attempts()
 
             apps_to_check: List[App] = []
             try:
@@ -2614,6 +2609,7 @@ def _record_login_failure(key: str) -> None:
     with _login_lock:
         entry = _login_attempts.setdefault(key, {'count': 0, 'locked_until': None})
         entry['count'] += 1
+        entry['last'] = time.time()
         if entry['count'] >= _LOGIN_MAX_TRIES:
             entry['locked_until'] = time.time() + _LOGIN_LOCKOUT_SEC
             entry['count'] = 0
@@ -2621,6 +2617,24 @@ def _record_login_failure(key: str) -> None:
 def _clear_login_rate(key: str) -> None:
     with _login_lock:
         _login_attempts.pop(key, None)
+
+
+def _purge_login_attempts() -> None:
+    """Drop entries that no longer matter (called periodically). A failure
+    count is only forgotten once it has been quiet for a full lockout period:
+    this used to drop every not-yet-locked entry on each sweep, which reset
+    the count every two minutes and let a client guess indefinitely at four
+    tries per sweep without ever being locked out."""
+    now = time.time()
+    with _login_lock:
+        for key, entry in list(_login_attempts.items()):
+            locked_until = entry.get('locked_until')
+            if locked_until:
+                expired = now > locked_until + _LOGIN_LOCKOUT_SEC
+            else:
+                expired = now > entry.get('last', 0) + _LOGIN_LOCKOUT_SEC
+            if expired:
+                _login_attempts.pop(key, None)
 
 
 # ---------------------------------------------------------------------------
