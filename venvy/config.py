@@ -26,12 +26,15 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Where index.html, vendor/ and sw.js live: the repository root (or the
-# unpacked bundle of a frozen build).
+# Where the shipped, read-only files live: the repository root (or the
+# unpacked bundle of a frozen build). The UI is under web/, third-party
+# scripts under vendor/.
 if getattr(sys, 'frozen', False):
     ASSETS_DIR = Path(sys._MEIPASS)
 else:
     ASSETS_DIR = Path(__file__).parent.parent.resolve()
+
+WEB_DIR = ASSETS_DIR / "web"
 
 DATA_DIR = Path.cwd()
 APPS_BASE_DIR = DATA_DIR / "apps"

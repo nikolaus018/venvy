@@ -15,10 +15,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sqlmodel import select, Session
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.staticfiles import StaticFiles
 
 from venvy.config import (
     _ALLOWED_ORIGINS,
     ASSETS_DIR,
+    WEB_DIR,
     SESSION_COOKIE_SECURE,
     utc_now,
     _VENVY_BOOT_TIME,
@@ -281,11 +283,25 @@ async def serve_vendor(name: str):
                         headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
+class _RevalidatedStaticFiles(StaticFiles):
+    """The UI's own CSS and JS. Always revalidated (ETag / Last-Modified make
+    that cheap), so a browser never runs a stale script against a newer
+    server after an update."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", _RevalidatedStaticFiles(directory=WEB_DIR / "static", check_dir=False), name="static")
+
+
 @app.get("/sw.js")
 async def serve_service_worker():
     """The PWA service worker. Has to come from the site root to be allowed
     to control it, and must not be cached hard or updates never arrive."""
-    path = ASSETS_DIR / "sw.js"
+    path = WEB_DIR / "sw.js"
     if not path.is_file():
         raise HTTPException(404)
     return FileResponse(path, media_type="text/javascript",
@@ -294,7 +310,7 @@ async def serve_service_worker():
 
 @app.get("/")
 async def serve_spa():
-    html = ASSETS_DIR / "index.html"
+    html = WEB_DIR / "index.html"
     if html.exists():
         return FileResponse(html)
     return PlainTextResponse("Frontend not found.", status_code=404)

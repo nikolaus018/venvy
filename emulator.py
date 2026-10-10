@@ -1,7 +1,7 @@
 """
 Venvy Emulator — Windows-compatible fake backend for UI development.
 
-Serves index.html and responds to every API endpoint with realistic fake data.
+Serves the UI from web/ and responds to every API endpoint with realistic fake data.
 No database, no processes, no Linux-only deps (no pty/fcntl/psutil required).
 
 Usage:
@@ -9,7 +9,7 @@ Usage:
     python emulator.py
 
 Then open http://localhost:54783 in your browser.
-Put index.html in the same folder as this script.
+Run it from a checkout: it serves web/ and vendor/ next to this script.
 """
 
 import json
@@ -33,6 +33,7 @@ import uvicorn
 PORT = 54783
 HOST = "127.0.0.1"
 ASSETS_DIR = Path(__file__).parent.resolve()
+WEB_DIR = ASSETS_DIR / "web"
 
 app = FastAPI(title="Venvy Emulator")
 
@@ -296,9 +297,12 @@ def serve_vendor(name: str):
         raise HTTPException(404)
     return FileResponse(path, media_type="text/javascript")
 
+from fastapi.staticfiles import StaticFiles
+app.mount("/static", StaticFiles(directory=WEB_DIR / "static", check_dir=False), name="static")
+
 @app.get("/sw.js")
 def serve_service_worker():
-    path = ASSETS_DIR / "sw.js"
+    path = WEB_DIR / "sw.js"
     if not path.is_file():
         raise HTTPException(404)
     return FileResponse(path, media_type="text/javascript",
@@ -306,10 +310,10 @@ def serve_service_worker():
 
 @app.get("/")
 async def serve_spa():
-    html = ASSETS_DIR / "index.html"
+    html = WEB_DIR / "index.html"
     if html.exists():
         return FileResponse(html)
-    return PlainTextResponse("index.html not found. Put it next to emulator.py.", status_code=404)
+    return PlainTextResponse("web/index.html not found next to emulator.py.", status_code=404)
 
 # ---------------------------------------------------------------------------
 # License
@@ -1165,7 +1169,7 @@ def _banner():
     print(f"""
 {indigo}{bold}  Venvy Emulator — Windows Dev Mode{reset}
   {gray}All API endpoints return fake data.{reset}
-  {gray}Put index.html next to this script.{reset}
+  {gray}Serving the UI from web/ next to this script.{reset}
 
   {indigo}➜{reset}  {bold}Open:{reset}  http://127.0.0.1:{PORT}
 
