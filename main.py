@@ -4266,15 +4266,16 @@ def app_stats(
     if not app_row:
         raise HTTPException(404)
     stats: Dict = {"cpu": 0.0, "memory": 0.0, "uptime": 0.0}
-    if app_row.pid and psutil:
-        try:
-            p = psutil.Process(app_row.pid)
-            stats["cpu"] = p.cpu_percent(interval=None)
-            stats["memory"] = p.memory_info().rss / (1024 * 1024)
-            if app_row.last_start_time:
-                stats["uptime"] = (utc_now() - _make_tz_aware(app_row.last_start_time)).total_seconds()
-        except Exception:
-            pass
+    if _app_pid_alive(app_row):
+        # From the metrics collector: cpu_percent() on a freshly created
+        # psutil.Process always reads 0.0, which is all this used to return,
+        # and the collector's figures cover the app's child processes too.
+        metrics = _app_metrics.get(app_id)
+        if metrics:
+            stats["cpu"] = metrics["cpu"]
+            stats["memory"] = metrics["memory"] / (1024 * 1024)
+        if app_row.last_start_time:
+            stats["uptime"] = (utc_now() - _make_tz_aware(app_row.last_start_time)).total_seconds()
     return stats
 
 
