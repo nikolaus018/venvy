@@ -3177,6 +3177,12 @@ def _restore_tar_filter(member, dest_path):
     extracted earlier) would land outside the staging directory."""
     if member.issym():
         return tarfile.tar_filter(member, dest_path)
+    if not (member.isreg() or member.isdir() or member.islnk()):
+        # FIFOs, sockets, devices. "data" doesn't skip these, it aborts the
+        # whole extraction — so one named pipe in one app's directory made
+        # every backup taken since unrestorable. Nothing in them to restore.
+        logging.warning(f"Restore: skipping special file {member.name}")
+        return None
     return tarfile.data_filter(member, dest_path)
 
 
