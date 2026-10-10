@@ -36,7 +36,7 @@ from venvy.process import (
     start_app_process_logic,
     supervisor_task,
 )
-from venvy.startup import _ensure_python3_venv, _ensure_rust
+from venvy.startup import _check_python3_venv, _check_rust
 from venvy.webui import render_index
 from venvy.api import apps as api_apps
 from venvy.api import auth as api_auth
@@ -52,8 +52,8 @@ from venvy.api import users as api_users
 async def lifespan(app: FastAPI):
     create_db_and_tables()
 
-    await _ensure_python3_venv()
-    await _ensure_rust()
+    await _check_python3_venv()
+    await _check_rust()
 
     with Session(engine) as session:
         _boot_reset_time = utc_now()

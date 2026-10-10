@@ -1,19 +1,18 @@
-"""Startup checks for the host tools apps need (python3-venv, cargo)."""
+"""Startup checks for the host tools apps need (python3-venv, cargo).
+
+These only report. Installing system packages is the installer's job
+(install.sh) — a web server should not be running apt-get on its own.
+"""
 import asyncio
 import logging
-import os
 import shutil
 import sys
 
 from venvy.config import DATA_DIR
 
 
-# ---------------------------------------------------------------------------
-# Startup dependency checks
-# ---------------------------------------------------------------------------
-
-async def _ensure_python3_venv() -> None:
-    """Verify that `python -m venv` works, otherwise auto-install."""
+async def _check_python3_venv() -> None:
+    """Log whether `python3 -m venv` works; Python apps can't be created without it."""
     test_dir = DATA_DIR / ".venv_probe"
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -32,49 +31,14 @@ async def _ensure_python3_venv() -> None:
     finally:
         shutil.rmtree(test_dir, ignore_errors=True)
 
-    minor = sys.version_info.minor
-    packages_to_try = [f"python3.{minor}-venv", "python3-venv"]
-
-    logging.warning(
-        f"python3-venv is not available — attempting: "
-        f"apt-get install -y {' '.join(packages_to_try)}"
-    )
-
-    for pkg in packages_to_try:
-        try:
-            env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
-            proc = await asyncio.create_subprocess_exec(
-                "apt-get", "install", "-y", "--no-install-recommends", pkg,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-            if proc.returncode == 0:
-                logging.info(f"Successfully installed {pkg} via apt-get.")
-                return
-            
-            proc = await asyncio.create_subprocess_exec(
-                "sudo", "-n", "apt-get", "install", "-y", "--no-install-recommends", pkg,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-            if proc.returncode == 0:
-                logging.info(f"Successfully installed {pkg} via sudo apt-get.")
-                return
-        except Exception as exc:
-            logging.warning(f"apt-get install {pkg} error: {exc}")
-
     logging.error(
-        "Could not auto-install python3-venv. "
-        f"Please run: sudo apt-get install -y python3.{minor}-venv\n"
-        "App creation will fail until this is resolved."
+        "python3-venv is not available — creating Python apps will fail. "
+        f"Install it with: sudo apt-get install -y python3.{sys.version_info.minor}-venv"
     )
 
 
-async def _ensure_rust() -> None:
+async def _check_rust() -> None:
+    """Log whether cargo is available; only Rust apps need it."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "cargo", "-V",
@@ -87,30 +51,7 @@ async def _ensure_rust() -> None:
             return
     except Exception:
         pass
-
-    logging.warning("cargo is missing — attempting apt-get install -y cargo rustc")
-    try:
-        env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
-        proc = await asyncio.create_subprocess_exec(
-            "apt-get", "install", "-y", "--no-install-recommends", "cargo", "rustc",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        if proc.returncode == 0:
-            logging.info("Successfully installed cargo and rustc via apt-get.")
-            return
-        
-        proc = await asyncio.create_subprocess_exec(
-            "sudo", "-n", "apt-get", "install", "-y", "--no-install-recommends", "cargo", "rustc",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        if proc.returncode == 0:
-            logging.info("Successfully installed cargo and rustc via sudo apt-get.")
-            return
-    except Exception as exc:
-        logging.warning(f"Failed to install rust: {exc}")
+    logging.info(
+        "cargo is not installed — Rust apps are unavailable. "
+        "To enable them: sudo apt-get install -y cargo rustc build-essential"
+    )
