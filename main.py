@@ -161,43 +161,36 @@ from starlette.requests import HTTPConnection
 from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
-# psutil is optional — provides richer process introspection
-try:
-    import psutil
-except ImportError:
-    psutil = None
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+# venvy imports
+from venvy.config import (
+    ASSETS_DIR,
+    _ALLOWED_ORIGINS,
+    psutil,
+    DATA_DIR,
+    APPS_BASE_DIR,
+    BACKUP_DIR,
+    DB_FILE,
+    DATABASE_URL,
+    SESSION_TTL_SECONDS,
+    SESSION_COOKIE_SECURE,
+    _VENVY_KEY_FILE,
+    IP_ALLOWLIST_RAW,
+    IP_ALLOWLIST,
+    TRUSTED_PROXY_IPS,
+    PROXY_SECRET,
+    _PRIVATE_ENV_VARS,
+    utc_now,
+    _VENVY_BOOT_TIME,
+    _make_tz_aware,
+    TERMINAL_RC_DIR,
+    APP_LOGS_DIR,
+    _UPLOAD_TMP_DIR,
 )
-
-if getattr(sys, 'frozen', False):
-    ASSETS_DIR = Path(sys._MEIPASS)
-else:
-    ASSETS_DIR = Path(__file__).parent.resolve()
-
-DATA_DIR = Path.cwd()
-APPS_BASE_DIR = DATA_DIR / "apps"
-BACKUP_DIR = DATA_DIR / "backups"
-DB_FILE = DATA_DIR / "data.db"
-DATABASE_URL = f"sqlite:///{DB_FILE}"
-
-SESSION_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days — keeps PWA users signed in
-
-# Default False so plain-HTTP LAN deployments work out of the box.
-# Set SESSION_COOKIE_SECURE=1 in env when running behind HTTPS.
-SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0") == "1"
 
 # ---------------------------------------------------------------------------
 # Secrets-at-rest encryption
 # ---------------------------------------------------------------------------
 from cryptography.fernet import Fernet, InvalidToken
-
-_VENVY_KEY_FILE = DATA_DIR / ".venvy_key"
 _ENC_PREFIX = "enc:v1:"
 _fernet_instance: Optional[Fernet] = None
 _fernet_lock = threading.Lock()
@@ -282,42 +275,6 @@ _host_cpu_percent: float = 0.0
 # Track strongly-referenced background tasks to avoid garbage collection midway
 _running_tasks: Set[asyncio.Task] = set()
 
-# ---------------------------------------------------------------------------
-# ★  DEPLOYMENT CONFIGURATION — Edit before distributing to end-users
-# ---------------------------------------------------------------------------
-# Optional IP allowlist — comma-separated IPs, e.g. "192.168.1.5,10.0.0.1"
-IP_ALLOWLIST_RAW = os.getenv("IP_ALLOWLIST", "").strip()
-IP_ALLOWLIST: Optional[Set[str]] = (
-    {ip.strip() for ip in IP_ALLOWLIST_RAW.split(",") if ip.strip()} or None
-)
-
-
-# Peers allowed to tell us the real client IP via CF-Connecting-IP — i.e. where
-# cloudflared connects from. Default: cloudflared running on this same host.
-TRUSTED_PROXY_IPS: Set[str] = {
-    ip.strip() for ip in os.getenv("TRUSTED_PROXY_IPS", "127.0.0.1,::1").split(",") if ip.strip()
-}
-
-
-# Optional proof that a request really came through the tunnel. An address
-# can't provide it: with the default TRUSTED_PROXY_IPS, cloudflared and every
-# hosted app both connect from 127.0.0.1, so an app can send its own
-# CF-Connecting-IP and be taken for any client it likes — past the IP
-# allowlist, and past the per-IP login lockout. When this is set, the header
-# is only believed on requests that also carry X-Venvy-Proxy-Secret with the
-# same value (add it at the Cloudflare edge with a request-header transform
-# rule). Hosted apps never see it: it is stripped from their environment.
-PROXY_SECRET = os.getenv("VENVY_PROXY_SECRET", "")
-# Venvy's own settings that must not leak into the processes it starts.
-_PRIVATE_ENV_VARS = ("VENVY_PROXY_SECRET",)
-
-if IP_ALLOWLIST is not None and not PROXY_SECRET and TRUSTED_PROXY_IPS & {"127.0.0.1", "::1"}:
-    logging.warning(
-        "IP_ALLOWLIST is set, but CF-Connecting-IP is trusted from loopback without "
-        "VENVY_PROXY_SECRET: software running on this host (including hosted apps) "
-        "can claim any client IP. Set VENVY_PROXY_SECRET to close that.")
-
-
 def _resolve_client_ip(request: Union[Request, HTTPConnection]) -> str:
     """Resolve the real client IP.
 
@@ -348,22 +305,11 @@ def check_ip_allowlist(request: HTTPConnection) -> None:
         raise HTTPException(status_code=403, detail="Access from this IP is not allowed.")
 
 
-# ---------------------------------------------------------------------------
-# Database models
-# ---------------------------------------------------------------------------
-
-def utc_now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc)
-
-
 def audit_log(username: str, action: str, detail: str = "") -> None:
     """Lightweight audit trail — logs who did what. No dedicated table; these are
     plain INFO log lines an operator can grep/ship to their own log aggregator."""
     suffix = f" — {detail}" if detail else ""
     logging.info(f"AUDIT: user={username!r} action={action}{suffix}")
-
-# Tracks exactly when this Venvy instance started up.
-_VENVY_BOOT_TIME = utc_now()
 
 
 VALID_ROLES = ("admin", "operator", "viewer")
@@ -714,11 +660,6 @@ def _clean_app_name(name: str) -> str:
     return name_clean
 
 
-def _make_tz_aware(dt: datetime.datetime) -> datetime.datetime:
-    """Return *dt* with UTC tzinfo attached if it is naive."""
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=datetime.timezone.utc)
-
-
 def _hash_token(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -966,8 +907,6 @@ def _build_app_env(db_app: App) -> Dict[str, str]:
 # writes with a symlink.
 _APP_USERS_REQUESTED = os.getenv("VENVY_APP_USERS", "0") == "1"
 _APP_USERS_ACTIVE: Optional[bool] = None
-TERMINAL_RC_DIR = DATA_DIR / ".terminal"
-APP_LOGS_DIR = DATA_DIR / "app-logs"
 
 
 def _isolation_active() -> bool:
@@ -2897,15 +2836,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Venvy", lifespan=lifespan)
 
-_ALLOWED_ORIGINS_RAW = os.getenv("ALLOWED_ORIGINS", "").strip()
-_ALLOWED_ORIGINS: List[str] = [o.strip() for o in _ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
-
-if not _ALLOWED_ORIGINS:
-    logging.warning(
-        "ALLOWED_ORIGINS is not set. Defaulting to empty origins (Same-origin only). "
-        "For external access, set ALLOWED_ORIGINS='https://yourdomain.com' for security."
-    )
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS if _ALLOWED_ORIGINS else [],
@@ -3833,7 +3763,6 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
 _SINGLE_REQUEST_UPLOAD_MAX = 50 * 1024 * 1024
 _UPLOAD_CHUNK_MAX = 16 * 1024 * 1024
 _UPLOAD_FILE_MAX = int(os.getenv("VENVY_MAX_UPLOAD_MB", "10240")) * 1024 * 1024
-_UPLOAD_TMP_DIR = DATA_DIR / ".upload-tmp"
 _UPLOAD_STALE_SEC = 24 * 3600
 _UPLOAD_ID_RE = re.compile(r"[0-9a-f]{32}")
 _UPLOAD_COPY_BUF = 1024 * 1024
