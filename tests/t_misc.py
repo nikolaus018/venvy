@@ -120,7 +120,7 @@ if case == "key_perms":
         "import importlib.util as u;"
         f"spec=u.spec_from_file_location('m', os.path.join({repo!r}, {os.environ.get('SMOKE_ENTRY', 'main.py')!r}));"
         "m=u.module_from_spec(spec); spec.loader.exec_module(m);"
-        "c = getattr(m, '_crypto', m);"
+        "import venvy.crypto as c;"
         "out=[];"
         "ts=[threading.Thread(target=lambda: out.append(c._encrypt_secret('x'))) for _ in range(16)];"
         "[t.start() for t in ts]; [t.join() for t in ts];"
