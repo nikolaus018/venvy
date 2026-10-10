@@ -1065,6 +1065,18 @@ def _cancel_log_task(app_id: int) -> None:
         task.cancel()
 
 
+async def _finish_log_task(app_id: int, timeout: float = 2.0) -> None:
+    """Let the app's log streamer drain what the process wrote while it was
+    shutting down — its pipe reaches EOF once the process is gone — then make
+    sure the task is finished either way."""
+    task = _log_tasks.pop(app_id, None)
+    if not task or task.done():
+        return
+    await asyncio.wait({task}, timeout=timeout)
+    if not task.done():
+        task.cancel()
+
+
 _LOG_MAX_BYTES = int(os.getenv("VENVY_LOG_MAX_MB", "20")) * 1024 * 1024
 _LOG_KEEP_ROTATED = 5
 _LOG_MAX_LINE = 64 * 1024
@@ -1485,10 +1497,9 @@ async def stop_app_process_logic(app_id: int, session: Session, manual: bool = F
 
 async def _stop_app_process(app_id: int, session: Session, manual: bool = False) -> None:
     """Stop the app. Caller holds _app_lock(app_id)."""
-    _cancel_log_task(app_id)
-
     db_app = session.get(App, app_id, populate_existing=True)
     if not db_app:
+        _cancel_log_task(app_id)
         return
     # Recorded even when nothing is running: that is exactly the state of a
     # crash-looping app between two automatic restarts, and Stop has to end
@@ -1496,6 +1507,7 @@ async def _stop_app_process(app_id: int, session: Session, manual: bool = False)
     if manual:
         db_app.last_manually_stopped_at = utc_now()
     if not db_app.pid:
+        _cancel_log_task(app_id)
         db_app.status = "stopped"
         session.add(db_app)
         session.commit()
@@ -1506,6 +1518,7 @@ async def _stop_app_process(app_id: int, session: Session, manual: bool = False)
         # Already gone — or the PID now belongs to an unrelated process,
         # which must not be killed. Just record the app as stopped.
         logging.info(f"App '{db_app.name}' is not running (PID {pid} gone or reused)")
+        await _finish_log_task(app_id)
         db_app.status = "stopped"
         db_app.pid = None
         db_app.pid_start = None
@@ -1539,6 +1552,9 @@ async def _stop_app_process(app_id: int, session: Session, manual: bool = False)
         await _kill_pid_tree(pid)
     except Exception as exc:
         logging.warning(f"Error killing PID {pid}: {exc}")
+    # Only now: cancelling the streamer before the kill (as this used to)
+    # threw away everything the app printed while handling SIGTERM.
+    await _finish_log_task(app_id)
 
     db_app.status = "stopped"
     db_app.pid = None
