@@ -4470,6 +4470,17 @@ def _sanitize_cf_value(v: str) -> str:
     return v
 
 
+def _setting_for_storage(key: str, value: str) -> tuple:
+    """(cleaned value, value as stored) for a system setting — the one place
+    that decides which settings are encrypted at rest."""
+    if key.startswith("cf_"):
+        value = _sanitize_cf_value(value)
+        return value, _encrypt_secret(value)
+    if key == "gh_token":
+        return value, _encrypt_secret(value)
+    return value, value
+
+
 @api_router.put("/system/settings/{key}")
 def set_system_setting(
     key: str,
@@ -4477,14 +4488,7 @@ def set_system_setting(
     admin: User = Depends(check_admin),
     session: Session = Depends(get_session),
 ):
-    value = req.value
-    if key.startswith("cf_"):
-        value = _sanitize_cf_value(value)
-        stored_value = _encrypt_secret(value)
-    elif key == "gh_token":
-        stored_value = _encrypt_secret(value)
-    else:
-        stored_value = value
+    value, stored_value = _setting_for_storage(key, req.value)
     setting = session.get(SystemSetting, key)
     if setting:
         setting.value = stored_value
@@ -4509,12 +4513,7 @@ def set_system_settings_batch(
 ):
     """Save multiple settings in a single DB transaction."""
     for item in items:
-        value = item.value
-        if item.key.startswith("cf_"):
-            value = _sanitize_cf_value(value)
-            stored_value = _encrypt_secret(value)
-        else:
-            stored_value = value
+        _, stored_value = _setting_for_storage(item.key, item.value)
         setting = session.get(SystemSetting, item.key)
         if setting:
             setting.value = stored_value
