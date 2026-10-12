@@ -499,8 +499,8 @@ async def upload_app(
         "access_url": None,
         "url_source": None,
         "metrics": {"cpu": 0.0, "memory": 0},
-        "memory_limit_mb": 512,
-        "cpu_limit_percent": 50,
+        "memory_limit_mb": None,
+        "cpu_limit_percent": None,
         "resource_limits_enforced": False,
     }
     FAKE_APPS[app_id] = new_app
@@ -867,21 +867,92 @@ FAKE_BACKUPS: List[dict] = [
     },
 ]
 
+# A backup or restore here is only a clock: the status endpoint works out
+# which step "now" falls into, so the progress UI has something real to show
+# (including after a reload — the state is the emulator's, not the tab's).
+_FAKE_OP_STEPS = {
+    "backup": [("Measuring apps and database", 1.5), ("Snapshotting the database", 1.0),
+               ("Archiving app files", 9.0), ("Saving the backup", 1.0)],
+    "restore": [("Backing up the current state first", 6.0), ("Unpacking and checking the backup", 5.0),
+                ("Stopping running apps", 2.0), ("Replacing apps, database and key", 2.0),
+                ("Restarting Venvy", 4.0)],
+}
+FAKE_OP: Optional[dict] = None
+
+def _fake_op_begin(kind: str, filename: Optional[str] = None) -> None:
+    global FAKE_OP
+    if _fake_op_status() and FAKE_OP["status"] == "running":
+        raise HTTPException(409, f"A {FAKE_OP['kind']} is already running — wait for it to finish.")
+    FAKE_OP = {
+        "id": secrets.token_hex(8), "kind": kind, "status": "running", "step": 0, "detail": "",
+        "percent": None, "started": datetime.datetime.utcnow(), "finished_at": None,
+        "started_by": "admin", "filename": filename, "size_bytes": None, "error": None,
+    }
+
+def _fake_op_status() -> Optional[dict]:
+    op = FAKE_OP
+    if not op:
+        return None
+    steps = _FAKE_OP_STEPS[op["kind"]]
+    elapsed = (datetime.datetime.utcnow() - op["started"]).total_seconds()
+    if op["status"] == "running":
+        t = elapsed
+        for i, (_label, secs) in enumerate(steps):
+            if t < secs:
+                measured = op["kind"] == "backup" and i == 2 or op["kind"] == "restore" and i in (0, 1)
+                total = 84_000_000
+                op.update(step=i, percent=int(t / secs * 100) if measured else None,
+                          detail=f"FastAPI Demo — {t / secs * total / 1048576:.1f} MB of {total / 1048576:.1f} MB" if measured else "")
+                break
+            t -= secs
+        else:
+            op.update(status="done", step=len(steps) - 1, detail="", percent=None,
+                      finished_at=(op["started"] + datetime.timedelta(seconds=sum(d for _, d in steps))).isoformat() + "Z")
+            if op["kind"] == "backup":
+                ts = datetime.datetime.utcnow()
+                op["filename"] = f"full-{ts.strftime('%Y%m%d-%H%M%S')}.tar.gz"
+                op["size_bytes"] = random.randint(40_000_000, 120_000_000)
+                FAKE_BACKUPS.insert(0, {"filename": op["filename"], "size_bytes": op["size_bytes"],
+                                        "created_at": ts.isoformat() + "Z", "type": "full"})
+    out = {k: v for k, v in op.items() if k != "started"}
+    out["started_at"] = op["started"].isoformat() + "Z"
+    out["steps"] = [label for label, _ in steps]
+    out["elapsed_sec"] = int(min(elapsed, sum(d for _, d in steps)))
+    return out
+
 @app.post("/api/system/backup")
 def create_backup(request: Request):
     _check_auth(request)
+    _fake_op_begin("backup")
+    return _job({"ok": True, "path": "backups/full-emulated.tar.gz", "size_bytes": 84_000_000})
+
+@app.get("/api/system/backup/status")
+def backup_status(request: Request):
+    _check_auth(request)
+    return {"operation": _fake_op_status()}
+
+@app.post("/api/system/backups/upload/chunk")
+async def upload_backup_chunk(
+    request: Request,
+    upload_id: str = Form(...),
+    filename: str = Form(""),
+    offset: int = Form(...),
+    total: int = Form(...),
+    chunk: UploadFile = File(...),
+):
+    _check_auth(request)
+    received = offset + len(await chunk.read())
+    if received < total:
+        return {"ok": True, "received": received, "done": False}
     ts = datetime.datetime.utcnow()
-    filename = f"full-{ts.strftime('%Y%m%d-%H%M%S')}.tar.gz"
-    if any(b["filename"] == filename for b in FAKE_BACKUPS):
-        raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
-    entry = {
-        "filename": filename,
-        "size_bytes": random.randint(40_000_000, 120_000_000),
-        "created_at": ts.isoformat() + "Z",
-        "type": "full",
-    }
-    FAKE_BACKUPS.insert(0, entry)
-    return _job({"ok": True, "path": f"backups/{filename}", "size_bytes": entry["size_bytes"]})
+    name = f"full-{ts.strftime('%Y%m%d-%H%M%S')}.tar.gz"
+    FAKE_BACKUPS.insert(0, {"filename": name, "size_bytes": total, "created_at": ts.isoformat() + "Z", "type": "full"})
+    return {"ok": True, "received": received, "done": True, "filename": name, "size_bytes": total}
+
+@app.delete("/api/system/backups/upload/{upload_id}")
+def cancel_backup_upload(upload_id: str, request: Request):
+    _check_auth(request)
+    return {"ok": True}
 
 @app.get("/api/system/backups")
 def list_backups(request: Request):
@@ -921,15 +992,16 @@ def restore_backup(filename: str, req: RestoreBackupReq, request: Request):
         raise HTTPException(404, "Backup not found.")
     if entry.get("type") != "full":
         raise HTTPException(400, "Only full backups can be restored.")
-    # The emulator has no real files/process to restart — just report success
-    # so the UI's restore flow (confirm modal, in-progress overlay, then
-    # polling until the server answers again) can be exercised end to end.
+    # The emulator has no real files/process to restart — the fake operation
+    # plays the steps out and then reports "done", which is what the real
+    # server says once it is back up, so the UI's whole restore flow runs.
+    _fake_op_begin("restore", filename)
     return _job({"ok": True, "restarting": True})
 
 @app.get("/api/system/settings/{key}")
 def get_system_setting(key: str, request: Request):
     _check_auth(request)
-    if key in ("cf_api_token", "gh_token"):
+    if key == "cf_api_token":
         return {"key": key, "value": "", "is_set": bool(FAKE_SETTINGS.get(key))}
     return {"key": key, "value": FAKE_SETTINGS.get(key, "")}
 
@@ -993,149 +1065,6 @@ async def list_cf_zones(request: Request):
             {"name": "myapp.dev", "id": "zone-id-002"},
         ],
     }
-
-# ---------------------------------------------------------------------------
-# GitHub (fake device flow + per-app git state)
-# ---------------------------------------------------------------------------
-
-FAKE_GH_CONNECTED = False
-FAKE_GIT_REPOS: Dict[int, dict] = {}  # app_id -> {branch, remote_url, dirty_count, ahead, behind, last_commit}
-
-class GhClientIdReq(BaseModel):
-    client_id: str
-
-@app.put("/api/system/github/client-id")
-def set_gh_client_id(req: GhClientIdReq, request: Request):
-    _check_auth(request)
-    FAKE_SETTINGS["gh_client_id"] = req.client_id
-    return {"ok": True}
-
-@app.post("/api/system/github/device/start")
-def gh_device_start(request: Request):
-    _check_auth(request)
-    return {
-        "flow_id": secrets.token_hex(8),
-        "user_code": "WXYZ-1234",
-        "verification_uri": "https://github.com/login/device",
-        "expires_in": 900,
-        "interval": 1,
-    }
-
-@app.post("/api/system/github/device/poll")
-def gh_device_poll(request: Request):
-    global FAKE_GH_CONNECTED
-    _check_auth(request)
-    FAKE_GH_CONNECTED = True
-    return {"status": "complete", "username": "octocat", "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4"}
-
-@app.get("/api/system/github/status")
-def gh_status(request: Request):
-    _check_auth(request)
-    if not FAKE_GH_CONNECTED:
-        return {"connected": False, "client_id_set": bool(FAKE_SETTINGS.get("gh_client_id"))}
-    return {"connected": True, "client_id_set": True, "username": "octocat", "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4"}
-
-@app.get("/api/system/github/repos")
-def gh_list_repos(request: Request):
-    _check_auth(request)
-    if not FAKE_GH_CONNECTED:
-        raise HTTPException(400, "Not signed in to GitHub.")
-    return {"repos": [
-        {"full_name": "octocat/Hello-World", "clone_url": "https://github.com/octocat/Hello-World.git", "private": False, "default_branch": "master"},
-        {"full_name": "octocat/Spoon-Knife", "clone_url": "https://github.com/octocat/Spoon-Knife.git", "private": False, "default_branch": "main"},
-        {"full_name": "octocat/private-notes", "clone_url": "https://github.com/octocat/private-notes.git", "private": True, "default_branch": "main"},
-    ]}
-
-@app.post("/api/system/github/disconnect")
-def gh_disconnect(request: Request):
-    global FAKE_GH_CONNECTED
-    _check_auth(request)
-    FAKE_GH_CONNECTED = False
-    return {"ok": True}
-
-def _git_status_for(app_id: int) -> dict:
-    repo = FAKE_GIT_REPOS.get(app_id)
-    if not repo:
-        return {"is_repo": False}
-    return {"is_repo": True, **repo}
-
-@app.get("/api/apps/{app_id}/git/status")
-def git_status(app_id: int, request: Request):
-    _check_auth(request)
-    _app_or_404(app_id)
-    return _git_status_for(app_id)
-
-class GitCloneReq(BaseModel):
-    url: str
-    branch: Optional[str] = None
-
-@app.post("/api/apps/{app_id}/git/clone")
-def git_clone(app_id: int, req: GitCloneReq, request: Request):
-    _check_auth(request)
-    _app_or_404(app_id)
-    if app_id in FAKE_GIT_REPOS:
-        raise HTTPException(400, "This app is already connected to a repository.")
-    FAKE_GIT_REPOS[app_id] = {
-        "branch": req.branch or "main",
-        "remote_url": req.url,
-        "dirty_count": 0, "ahead": 0, "behind": 0,
-        "last_commit": "a1b2c3d Initial commit (2 minutes ago)",
-    }
-    return _job(_git_status_for(app_id))
-
-@app.post("/api/apps/{app_id}/git/fetch")
-def git_fetch(app_id: int, request: Request):
-    _check_auth(request)
-    _app_or_404(app_id)
-    if app_id not in FAKE_GIT_REPOS:
-        raise HTTPException(400, "Not a git repository.")
-    FAKE_GIT_REPOS[app_id]["behind"] = 2
-    return _job(_git_status_for(app_id))
-
-@app.post("/api/apps/{app_id}/git/pull")
-def git_pull(app_id: int, request: Request):
-    _check_auth(request)
-    _app_or_404(app_id)
-    if app_id not in FAKE_GIT_REPOS:
-        raise HTTPException(400, "Not a git repository.")
-    FAKE_GIT_REPOS[app_id]["behind"] = 0
-    return _job(_git_status_for(app_id))
-
-class GitPushReq(BaseModel):
-    force: bool = False
-
-@app.post("/api/apps/{app_id}/git/push")
-def git_push(app_id: int, req: GitPushReq, request: Request):
-    _check_auth(request)
-    _app_or_404(app_id)
-    if app_id not in FAKE_GIT_REPOS:
-        raise HTTPException(400, "Not a git repository.")
-    FAKE_GIT_REPOS[app_id]["ahead"] = 0
-    return _job(_git_status_for(app_id))
-
-class GitCommitReq(BaseModel):
-    message: str
-
-@app.post("/api/apps/{app_id}/git/commit")
-def git_commit(app_id: int, req: GitCommitReq, request: Request):
-    _check_auth(request)
-    _app_or_404(app_id)
-    if app_id not in FAKE_GIT_REPOS:
-        raise HTTPException(400, "Not a git repository.")
-    repo = FAKE_GIT_REPOS[app_id]
-    repo["dirty_count"] = 0
-    repo["ahead"] = repo.get("ahead", 0) + 1
-    repo["last_commit"] = f"e5f6a7b {req.message[:50]} (just now)"
-    return _job(_git_status_for(app_id))
-
-@app.delete("/api/apps/{app_id}/git")
-def git_disconnect(app_id: int, request: Request):
-    _check_auth(request)
-    _app_or_404(app_id)
-    if app_id not in FAKE_GIT_REPOS:
-        raise HTTPException(400, "Not a git repository.")
-    del FAKE_GIT_REPOS[app_id]
-    return {"ok": True}
 
 # ---------------------------------------------------------------------------
 # WebSocket terminal — send fake shell output

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Set
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlmodel import select, Session
@@ -23,9 +23,14 @@ from venvy.auth import (
     require_operator,
 )
 from venvy.backup import (
+    _adopt_uploaded_backup,
+    _backup_job,
     _BACKUP_TYPES,
-    _create_full_backup_archive,
+    _backup_upload_part,
+    _begin_operation,
     _FULL_BACKUP_FILENAME_RE,
+    operation_status,
+    _purge_stale_backup_uploads,
     _resolve_backup_path,
     _restore_job,
 )
@@ -43,6 +48,7 @@ from venvy.process import (
 )
 from venvy.safefs import is_safe_path
 from venvy.settings import _is_secret_setting, _reject_reserved_setting, _setting_for_storage
+from venvy.uploads import _append_upload_chunk
 
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
@@ -87,12 +93,59 @@ async def create_backup(
     _rl: None = Depends(rate_limit_mutations),
 ):
     """Create a full disaster-recovery backup — see _create_full_backup_archive().
-    Answers {"job_id"}; tarring every app can take well over a minute."""
-    async def _job() -> dict:
-        dest = await asyncio.to_thread(_create_full_backup_archive)
-        audit_log(admin.username, "system_full_backup", f"path={dest}")
-        return {"ok": True, "path": str(dest), "size_bytes": dest.stat().st_size}
-    return _start_job(admin, "backup", _job)
+    Answers {"job_id"}; tarring every app can take well over a minute. 409 if
+    a backup or restore is already running. Progress: GET /system/backup/status."""
+    _begin_operation("backup", admin.username)
+    return _start_job(admin, "backup", lambda: _backup_job(admin))
+
+
+@router.get("/system/backup/status")
+def backup_status(admin: User = Depends(check_admin)):
+    """What the running backup or restore is doing right now — or how the
+    last one ended. Not tied to whoever started it, so it still answers after
+    that browser is gone."""
+    return {"operation": operation_status()}
+
+
+@router.post("/system/backups/upload/chunk")
+async def upload_backup_chunk(
+    upload_id: str = Form(...),
+    filename: str = Form(""),
+    offset: int = Form(...),
+    total: int = Form(...),
+    chunk: UploadFile = File(...),
+    admin: User = Depends(check_admin),
+    # Not rate_limit_mutations, for the same reason as file upload chunks.
+):
+    """Append one chunk of a backup being uploaded (same protocol as
+    /apps/{id}/files/upload/chunk). The last chunk checks that the file is a
+    Venvy backup and adds it to the backup list; nothing is restored yet."""
+    if restore_in_progress():
+        raise HTTPException(409, "A restore is in progress.")
+    if total <= 0 or offset < 0 or offset > total:
+        raise HTTPException(400, "Invalid offset/total.")
+    part = _backup_upload_part(admin.id, upload_id)
+
+    def _append() -> int:
+        BACKUP_DIR.mkdir(mode=0o700, exist_ok=True)
+        if offset == 0:
+            _purge_stale_backup_uploads()
+        return _append_upload_chunk(part, chunk, offset, total)
+
+    received = await asyncio.to_thread(_append)
+    if received < total:
+        return {"ok": True, "received": received, "done": False}
+    dest = await asyncio.to_thread(_adopt_uploaded_backup, part, filename)
+    audit_log(admin.username, "system_backup_upload", f"path={dest}")
+    return {"ok": True, "received": received, "done": True,
+            "filename": dest.name, "size_bytes": dest.stat().st_size}
+
+
+@router.delete("/system/backups/upload/{upload_id}")
+def cancel_backup_upload(upload_id: str, admin: User = Depends(check_admin)):
+    """Drop the partial file of a backup upload that was cancelled."""
+    _backup_upload_part(admin.id, upload_id).unlink(missing_ok=True)
+    return {"ok": True}
 
 
 @router.get("/system/backups")
@@ -176,6 +229,7 @@ async def restore_backup(
     if not is_safe_path(BACKUP_DIR, archive_path) or not archive_path.is_file():
         raise HTTPException(404, "Backup not found.")
 
+    _begin_operation("restore", admin.username, filename)
     audit_log(admin.username, "system_restore_started", f"path={archive_path}")
     session.close()
     set_restore_in_progress(True)

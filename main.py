@@ -16,7 +16,7 @@ without it, those encrypted columns are unrecoverable; treat it like a
 private key).
 
 Normal case — Venvy is alive, you want a backup or to roll back: use the
-UI (System → Database Backups), or hit the API directly:
+UI (System → Backups), or hit the API directly:
   - `POST /api/system/backup` bundles a consistent `data.db` snapshot (via
     `VACUUM INTO` — safe on a live WAL-mode database, unlike a raw `cp`),
     `.venvy_key`, and all of `apps/` into one `full-*.tar.gz` in `backups/`.
@@ -25,11 +25,16 @@ UI (System → Database Backups), or hit the API directly:
     server back to one of those archives in place: stops every running
     app, swaps in the backup's files, and restarts the process. A safety
     backup of the pre-restore state is taken automatically first.
+  - `GET /api/system/backup/status` says what either of those is doing
+    right now, whoever started it and whether or not their browser is
+    still open.
 
 Disaster case — the host itself is gone and you're standing up a
-replacement, so there's no running Venvy to call the API on: this still
-requires manual file placement, same as always —
-  1. Stop Venvy on the new host (if it's already running against a fresh DB).
+replacement: install Venvy on the new host, create the first admin, then
+System → Backups → Upload Backup with the `full-*.tar.gz` you kept
+elsewhere, and restore it. (You will be signed out: the users and sessions
+are the backup's.) By hand, without the UI:
+  1. Stop Venvy on the new host.
   2. Untar a `full-*.tar.gz` backup (or place a manually-copied `data.db` +
      `.venvy_key` + `apps/`) into the new working directory.
   3. Start Venvy — it picks up the restored files.
@@ -76,7 +81,7 @@ def _print_banner(host: str, port: int):
     ╚██╗ ██╔╝██╔══╝  ██║╚██╗██║╚██╗ ██╔╝  ╚██╔╝  
      ╚████╔╝ ███████╗██║ ╚████║ ╚████╔╝    ██║   
       ╚═══╝  ╚══════╝╚═╝  ╚═══╝  ╚═══╝     ╚═╝   {reset}
-    {gray}Premium Application Manager — v4.1.1{reset}
+    {gray}Premium Application Manager — v4.2.0{reset}
     
     {indigo}➜{reset}  {bold}Local:{reset}    http://127.0.0.1:{port}
     {indigo}➜{reset}  {bold}Network:{reset}  http://{host}:{port}

@@ -399,7 +399,25 @@ Runs as a **background job** (§4.4a); the job's `result` is:
 ```json
 { "ok": true, "path": "/.../backups/full-20260802-143000.tar.gz", "size_bytes": 104857600 }
 ```
-Fails with `507` up front if free disk space looks insufficient. Only the newest `VENVY_BACKUP_KEEP` (default 10) full backups are kept; older ones are deleted after each new backup. `409` if a backup with the same second-resolution timestamp already exists (hard-linked into place atomically, so a losing concurrent request can never delete a winning one's file — see the source comment on `_create_full_backup_archive`). `500` on failure (disk full, tar error, etc).
+`409` if a backup or restore is already running — one runs at a time. Fails with `507` if free disk space looks insufficient. Only the newest `VENVY_BACKUP_KEEP` (default 10) full backups are kept; older ones are deleted after each new backup. `409` if a backup with the same second-resolution timestamp already exists (hard-linked into place atomically, so a losing concurrent request can never delete a winning one's file — see the source comment on `_create_full_backup_archive`). `500` on failure (disk full, tar error, etc).
+
+#### `GET /api/system/backup/status` — admin only
+What the running backup or restore is doing, or how the last one ended. The status belongs to the server, not to the request or job that started it: any admin session can read it, it is still there after the browser that started the operation is closed, and it survives the restart at the end of a restore.
+```json
+{ "operation": {
+    "id": "9f2c41d07a3be615", "kind": "backup", "status": "running",
+    "steps": ["Measuring apps and database", "Snapshotting the database", "Archiving app files", "Saving the backup"],
+    "step": 2, "detail": "My App — 412.0 MB of 1.1 GB", "percent": 36,
+    "started_at": "2026-08-02T14:30:00+00:00", "finished_at": null, "elapsed_sec": 41,
+    "started_by": "admin", "filename": null, "size_bytes": null, "error": null } }
+```
+`operation` is `null` if none has ever run. `kind` is `backup` or `restore`; `status` is `running`, `done` or `error` (then `error` holds the message). `step` indexes `steps`; `percent` is the progress of that step, or `null` when it can't be measured. `filename` is the finished archive for a backup (with `size_bytes`) and the archive being restored for a restore. A restore's steps are: backing up the current state, unpacking and checking the archive, stopping apps, replacing apps/database/key, restarting Venvy — it stays `running` on the last step until the restarted process is up, which then reports `done`. An operation cut short by Venvy stopping is reported as `error` after the next start.
+
+#### `POST /api/system/backups/upload/chunk` — admin only
+Uploads a backup file that is not on this server (the usual case — backups are kept elsewhere) so it can be restored. `multipart/form-data`, one chunk per request, same protocol as `POST /apps/{id}/files/upload/chunk`: `upload_id` (32 hex chars, chosen by the client), `filename` (the file's name), `offset`, `total`, `chunk` (≤ 16 MB). Answers `{ "ok": true, "received": n, "done": false }`; `409` with `detail.received` if `offset` is not what the server has. `507` if the disk has no room for `total`. The last chunk answers `{ "done": true, "filename": "full-….tar.gz", "size_bytes": n }` after checking that the file is a gzip'd tar containing `data.db` (`400` and the upload is discarded if not). The backup keeps its `full-YYYYMMDD-HHMMSS.tar.gz` name if that name is free, otherwise it gets one from the current time. Nothing is restored by uploading: the file joins the list, and `POST /system/backup/restore/{filename}` restores it.
+
+#### `DELETE /api/system/backups/upload/{upload_id}` — admin only
+Discards the partial file of a cancelled upload. Abandoned partial uploads are removed after 24 hours.
 
 #### `GET /api/system/backups` — admin only
 Lists existing backups: `[{ "filename", "size_bytes", "created_at", "type" }, ...]`. `type` is `"full"` (the current format — restorable) or `"database"` (a legacy DB-only snapshot from an older Venvy version, kept listed so upgrading doesn't orphan it, but download/delete only — not restorable).
@@ -411,11 +429,11 @@ Downloads a backup of either type. `filename` must match one of the fixed naming
 Permanently deletes a backup of either type. Same filename validation as the download endpoint.
 
 #### `POST /api/system/backup/restore/{filename}` — admin only
-Rolls this **live** server back to a full backup. `409` if a restore is already running; while one runs, `start`/`restart` of apps also answer `409`. The archive is unpacked and checked before anything is stopped, so an unreadable backup fails without touching the running instance. Only `type: "full"` backups are accepted (`400` for a legacy DB-only filename or anything not matching the naming scheme). **Body:** `{ "confirm": "RESTORE" }` — any other value is a `400` no-op, nothing is touched.
+Rolls this **live** server back to a full backup — one made here or one uploaded. `409` if a backup or restore is already running; while one runs, `start`/`restart` of apps also answer `409`. The archive is unpacked and checked before anything is stopped, so an unreadable backup fails without touching the running instance. Only `type: "full"` backups are accepted (`400` for a legacy DB-only filename or anything not matching the naming scheme). **Body:** `{ "confirm": "RESTORE" }` — any other value is a `400` no-op, nothing is touched.
 
 Sequence: (1) creates a fresh full backup of the *current* state first, so the restore itself can be undone if it turns out to be a mistake — if this safety backup fails, the request aborts here and nothing else is touched; (2) stops every running app; (3) extracts the target archive to a staging directory, rejecting any entry whose path would land outside it — including writes through symlinks extracted earlier (symlinks themselves are allowed: every venv has one to the system Python); (4) closes all database connections, removes the old `data.db-wal`/`-shm` (SQLite would otherwise replay them onto the restored database) and swaps `apps/`, `data.db`, and `.venvy_key` into place; (5) restarts the whole Venvy process (`os.execv` — same PID, fresh process image) so every piece of in-memory state (DB connections, the encryption-key cache, active-process tracking, background tasks) reinitializes cleanly against the restored files.
 
-Steps 1–5 run as a **background job** (§4.4a); its `result` is `{ "ok": true, "restarting": true }`. The process restarts ~3 s after the job reports `done`, so a polling client sees the result before the connection drops. Apps that were running are stopped and stay stopped — start them again manually after reconnecting.
+Steps 1–5 run as a **background job** (§4.4a); its `result` is `{ "ok": true, "restarting": true }`. The process restarts ~3 s after the job reports `done`, so a polling client sees the result before the connection drops. Progress through the steps, and the outcome after the restart, are at `GET /system/backup/status`. Sessions are part of the database: after restoring a backup from another server, or one older than your login, you have to sign in again. Apps that were running are stopped and stay stopped — start them again manually after reconnecting.
 
 #### `GET /api/system/info`
 Any role. Returns the server's LAN IPv4 address: `{ "ipv4": "192.168.1.20" }`.
@@ -562,8 +580,8 @@ This is the exact shape returned by `GET /api/apps` (array of these), `POST /api
 | `env_unreadable` | bool | **only present when secrets are shown** — `true` if env vars are stored but cannot be decrypted (the `.venvy_key` was lost or replaced). `env_json` is then `"{}"`; the app refuses to start until the variables are re-entered or the key restored, and clients must not save `{}` back |
 | `healthcheck_path` | string \| null | |
 | `url_source_pref` | string | `local` \| `public` — the operator's preference for which URL `access_url` should reflect |
-| `memory_limit_mb` | int \| null | default `512`; `null` = unlimited |
-| `cpu_limit_percent` | int \| null | default `50`; `null` = unlimited |
+| `memory_limit_mb` | int \| null | default `null` = unlimited |
+| `cpu_limit_percent` | int \| null | default `null` = unlimited |
 | `systemd_scope` | string \| null | set when launched under `systemd-run` |
 | `resource_limits_enforced` | bool | *(computed)* `true` if this host has `systemd-run`/`systemctl` and systemd as PID 1 — i.e. whether `memory_limit_mb`/`cpu_limit_percent` are actually enforced rather than just stored. `false` on non-systemd hosts (macOS, most containers). |
 | `local_url` | string \| null | *(computed)* `http://<server-lan-ip>:<port>`, or `null` if no port assigned |
@@ -619,9 +637,9 @@ Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed.
 main.py                 entry point: dependency check, banner, `python main.py --host … --port …`
 venvy/                  the backend package (see venvy/__init__.py for one line per module)
   config, crypto, models, db, auth, safefs, isolation, jobs, process, apps,
-  terminal, backup, cloudflare, settings, github, uploads, startup, webui, app
+  terminal, backup, cloudflare, settings, uploads, startup, webui, app
   api/                  one APIRouter per resource: auth, users, apps, files, system,
-                        cloudflare, github, terminal
+                        cloudflare, terminal
 web/
   index.html            page skeleton; `<!-- include: partials/x.html -->` lines are expanded
                         on the server (venvy/webui.py), so the browser gets one document
@@ -681,6 +699,9 @@ A frozen build must bundle `web/` and `vendor/` next to the executable's code.
 | GET | `/api/system/ports` | viewer |
 | GET | `/api/system/metrics` | admin |
 | POST | `/api/system/backup` | admin |
+| GET | `/api/system/backup/status` | admin |
+| POST | `/api/system/backups/upload/chunk` | admin |
+| DELETE | `/api/system/backups/upload/{upload_id}` | admin |
 | GET | `/api/system/backups` | admin |
 | GET | `/api/system/backups/{filename}/download` | admin |
 | DELETE | `/api/system/backups/{filename}` | admin |

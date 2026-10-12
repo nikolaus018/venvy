@@ -1641,6 +1641,46 @@
             background: var(--ov-soft);
         }
 
+        /* ── Backup / restore progress bar ───────────────────────────────── */
+        .op-bar {
+            height: 6px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: var(--ov);
+        }
+
+        .op-bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: var(--accent);
+            transition: width 0.4s ease;
+        }
+
+        /* No measurable progress: a segment that keeps moving. */
+        .op-bar-fill.op-bar-indeterminate {
+            width: 35%;
+            transition: none;
+            animation: op-bar-slide 1.3s ease-in-out infinite;
+        }
+
+        @keyframes op-bar-slide {
+            0% {
+                transform: translateX(-100%);
+            }
+
+            100% {
+                transform: translateX(290%);
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .op-bar-fill.op-bar-indeterminate {
+                animation: none;
+                width: 100%;
+                opacity: 0.45;
+            }
+        }
+
         /* Screen-reader-only utility */
         .sr-only {
             position: absolute;

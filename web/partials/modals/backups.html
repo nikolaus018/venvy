@@ -10,13 +10,24 @@
             </div>
             <p class="text-xs mb-4 leading-relaxed shrink-0" style="color:var(--text3)">
                 Each backup bundles everything — the database, every app's code and venv, and the encryption key —
-                into one file. Safe to create while Venvy is running. Restore rolls this server back to a backup
-                in place; nothing here ever requires touching the server's filesystem directly.
+                into one file. Safe to create while Venvy is running. Download backups and keep them somewhere
+                else; to roll back, restore one from the list or upload one you kept.
             </p>
-            <button onclick="createBackup(this)" id="btn-create-backup"
-                class="btn-primary shrink-0 w-full flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-xl mb-4">
-                <i data-feather="plus" class="w-4 h-4"></i> Create Backup
-            </button>
+            <div class="flex gap-2 mb-4 shrink-0">
+                <button onclick="createBackup()" id="btn-create-backup"
+                    class="btn-primary flex-1 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm font-bold rounded-xl whitespace-nowrap disabled:opacity-40">
+                    <i data-feather="plus" class="w-4 h-4"></i> Create Backup
+                </button>
+                <button onclick="document.getElementById('backup-upload-input').click()" id="btn-upload-backup"
+                    class="btn-ghost flex-1 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm font-bold rounded-xl whitespace-nowrap disabled:opacity-40">
+                    <i data-feather="upload" class="w-4 h-4"></i> Upload Backup
+                </button>
+                <input type="file" id="backup-upload-input" class="hidden" accept=".gz,.tgz,application/gzip"
+                    onchange="uploadBackupFile(this)">
+            </div>
+            <!-- What the server is doing right now (or how the last run ended) — filled by _paintBackupOp() -->
+            <div id="backup-op-panel" class="hidden shrink-0 mb-4 rounded-xl p-4" aria-live="polite"
+                style="background:var(--surface2);border:1px solid var(--border)"></div>
             <div id="sys-backups-list" class="flex-1 overflow-y-auto space-y-2 min-h-0">
                 <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
             </div>
@@ -42,7 +53,8 @@
                 </div>
             </div>
             <p class="text-sm mb-3" style="color:var(--text2)">
-                <strong id="restore-backup-filename" class="mono" style="color:var(--text)"></strong> will replace
+                <span id="restore-backup-uploaded-note" class="hidden">Upload finished and the file checks out.
+                </span><strong id="restore-backup-filename" class="mono" style="color:var(--text)"></strong> will replace
                 the current database, every app's files, and the encryption key. Every running app is stopped
                 first, and Venvy restarts automatically once this finishes.
             </p>
@@ -77,7 +89,9 @@
                 <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
             </svg>
         </div>
-        <h2 class="text-xl font-bold mb-2" style="color:var(--text)">Restoring backup…</h2>
-        <p class="text-sm max-w-sm" id="restore-progress-text" style="color:var(--text3)">Venvy is restarting. This
-            page will reload automatically once it's back.</p>
+        <h2 class="text-xl font-bold mb-1" style="color:var(--text)">Restoring backup…</h2>
+        <p class="text-xs mono mb-5" id="restore-progress-file" style="color:var(--text3)"></p>
+        <div id="restore-progress-steps" class="w-full max-w-sm text-left mb-5" aria-live="polite"></div>
+        <p class="text-sm max-w-sm" id="restore-progress-text" style="color:var(--text3)">This runs on the server —
+            closing this page does not stop it. It reloads by itself once Venvy is back.</p>
     </div>

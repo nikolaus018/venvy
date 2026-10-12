@@ -326,9 +326,6 @@
             _logRaw = ''; _logRenderedKey = ''; _logFollow = true;
             clearLogSearch();
 
-            // Reset the git clone form so a URL typed for one app never carries over.
-            const gitUrlInput = document.getElementById('git-clone-url');
-            if (gitUrlInput) gitUrlInput.value = '';
 
             activeAppId = id;
             if (logInterval) { clearInterval(logInterval); logInterval = null; }

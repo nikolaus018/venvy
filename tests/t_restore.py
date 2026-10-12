@@ -18,12 +18,15 @@ with server(repo, 54998) as (base, data, srv):
         r2 = cl.req("POST", f"/api/system/backup/restore/{name}", json={"confirm": "RESTORE"})
         print("second concurrent restore:", r2.status_code)
     cl.job(r)
-    # the window between the swap and the re-exec
+    # the window between the swap and the re-exec (3 s after the job is done).
+    # Bounded by the clock, not by a sample count: listing processes is slow
+    # on some hosts, and a late sample would see the app's proper boot start.
     mid = []
-    for _ in range(12):
+    window_end = time.time() + 2.5
+    while time.time() < window_end:
         mid.append(len(app_procs(data)))
         time.sleep(0.25)
-    time.sleep(3)
+    time.sleep(3.5)
     for _ in range(120):
         try:
             if httpx.get(base + "/api/health", timeout=1).status_code == 200:

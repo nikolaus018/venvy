@@ -8,7 +8,7 @@ from venvy.crypto import _encrypt_secret
 
 def _is_secret_setting(key: str) -> bool:
     """Settings whose value is never returned by the API once stored."""
-    return key in ("cf_api_token", "gh_token") or key.startswith("totp_pending_")
+    return key == "cf_api_token" or key.startswith("totp_pending_")
 
 
 def _reject_reserved_setting(key: str) -> None:
@@ -22,7 +22,5 @@ def _setting_for_storage(key: str, value: str) -> tuple:
     that decides which settings are encrypted at rest."""
     if key.startswith("cf_"):
         value = _sanitize_cf_value(value)
-        return value, _encrypt_secret(value)
-    if key == "gh_token":
         return value, _encrypt_secret(value)
     return value, value

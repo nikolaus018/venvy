@@ -25,9 +25,11 @@
                         _loadHostCapacity();
                     }
                     startPolling();
+                    startBackupOpWatch();
                 } else {
                     // Not authenticated — show login
                     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+                    stopBackupOpWatch();
                     _appInitialized = false;
                     document.getElementById('app-shell').classList.add('hidden');
                     document.getElementById('auth-screen').classList.remove('hidden');

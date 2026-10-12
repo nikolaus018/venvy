@@ -55,9 +55,9 @@ if case == "totp_nonascii":
 if case == "settings_secret":
     with server(repo, PORT) as (base, d, srv):
         cl = admin(base)
-        r = cl.req("POST", "/api/system/settings/batch", json=[{"key": "gh_token", "value": "ghp_plaintext_token"}])
+        r = cl.req("POST", "/api/system/settings/batch", json=[{"key": "cf_api_token", "value": "cf_plaintext_token"}])
         con = sqlite3.connect(Path(d) / "data.db")
-        raw = con.execute("select value from systemsetting where key='gh_token'").fetchone()[0]
+        raw = con.execute("select value from systemsetting where key='cf_api_token'").fetchone()[0]
         con.close()
         done(r.status_code == 200 and raw.startswith("enc:v1:"), raw[:20])
 

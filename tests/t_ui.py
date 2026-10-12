@@ -67,8 +67,6 @@ with server(repo, 55010) as (base, data, srv):
 
         pg.click("#tabbtn-packages"); pg.wait_for_timeout(4000)
         check("packages listed", pg.locator("#pkg-list tr").count() >= 1 and "pip" in pg.inner_text("#pkg-list").lower())
-        pg.click("#tabbtn-git"); pg.wait_for_timeout(1500)
-        check("git tab shows clone card", pg.is_visible("#git-clone-card"))
 
         pg.click("#tabbtn-settings"); pg.wait_for_timeout(1500)
         check("settings populated", pg.input_value("#setting-name") == "Alpha" and pg.input_value("#setting-entrypoint") == "main.py")
@@ -86,8 +84,20 @@ with server(repo, 55010) as (base, data, srv):
         pg.click("#system-nav-btn"); pg.wait_for_timeout(2500)
         check("system view", pg.is_visible("#system-view") and "%" in pg.inner_text("#sys-cpu-val") and pg.locator("#sys-used-ports span").count() >= 1)
         pg.evaluate("openBackupsModal()"); pg.wait_for_timeout(800)
-        pg.evaluate("createBackup(null)"); pg.wait_for_timeout(6000)
+        pg.evaluate("createBackup()"); pg.wait_for_timeout(6000)
         check("backup created from UI", len(cl.req("GET", "/api/system/backups").json()) == 1 and "full-" in pg.inner_text("#sys-backups-list"))
+        check("backup outcome shown", "Backup finished" in pg.inner_text("#backup-op-panel") and not pg.is_disabled("#btn-create-backup"))
+        pg.reload(); pg.wait_for_timeout(2500); pg.evaluate("openBackupsModal()"); pg.wait_for_timeout(1200)
+        check("backup outcome still shown after a reload", "Backup finished" in pg.inner_text("#backup-op-panel"))
+        pg.evaluate("dismissBackupOp()")
+        check("outcome can be dismissed", not pg.is_visible("#backup-op-panel"))
+        name = cl.req("GET", "/api/system/backups").json()[0]["filename"]
+        blob = cl.req("GET", f"/api/system/backups/{name}/download").content
+        cl.req("DELETE", f"/api/system/backups/{name}")
+        pg.set_input_files("#backup-upload-input", {"name": name, "mimeType": "application/gzip", "buffer": blob}); pg.wait_for_timeout(3000)
+        check("uploaded backup listed and offered for restore", name in pg.inner_text("#sys-backups-list")
+              and pg.is_visible("#restore-backup-modal") and pg.inner_text("#restore-backup-filename") == name)
+        pg.evaluate("closeModal('restore-backup-modal')")
         pg.evaluate("closeModal('backups-modal')")
         pg.evaluate("openUsersModal()"); pg.wait_for_timeout(800)
         check("users modal", "admin" in pg.inner_text("#users-list"))

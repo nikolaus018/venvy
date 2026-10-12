@@ -18,6 +18,7 @@ NTERM=30 run terminal_many "$PYB" t_misc.py "$R" terminal_db
 run terminal_session "$PYB" t_term2.py "$R"
 run restore_running_app "$PYB" t_restore.py "$R"
 run restore_integrity "$PYB" t_restore2.py "$R"
+run backup_status_upload "$PYB" t_backup.py "$R"
 run totp "$PYB" t_totp.py "$R"
 run login_timing "$PYB" t_timing.py "$R"
 run proxy_trust "$PYB" t_proxy.py "$R"

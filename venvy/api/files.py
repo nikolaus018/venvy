@@ -1,6 +1,5 @@
 """File manager routes: tree, file operations, download, uploads."""
 import asyncio
-import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -31,10 +30,9 @@ from venvy.safefs import (
     _upload_rel_path_error,
 )
 from venvy.uploads import (
+    _append_upload_chunk,
     _purge_stale_upload_parts,
     _SINGLE_REQUEST_UPLOAD_MAX,
-    _UPLOAD_CHUNK_MAX,
-    _UPLOAD_COPY_BUF,
     _UPLOAD_FILE_MAX,
     _upload_part_path,
 )
@@ -249,31 +247,7 @@ async def upload_file_chunk(
         _UPLOAD_TMP_DIR.mkdir(mode=0o700, exist_ok=True)
         if offset == 0:
             _purge_stale_upload_parts()
-            free = shutil.disk_usage(_UPLOAD_TMP_DIR).free
-            if total + 256 * 1024 * 1024 > free:
-                raise HTTPException(507, "Not enough free disk space for this upload.")
-            mode = "wb"
-        else:
-            try:
-                have = part.stat().st_size
-            except FileNotFoundError:
-                have = 0
-            if have != offset:
-                raise HTTPException(409, {"message": "Offset mismatch.", "received": have})
-            mode = "ab"
-        written = 0
-        with open(part, mode) as out:
-            while True:
-                buf = chunk.file.read(_UPLOAD_COPY_BUF)
-                if not buf:
-                    break
-                written += len(buf)
-                if written > _UPLOAD_CHUNK_MAX or offset + written > total:
-                    out.close()
-                    part.unlink(missing_ok=True)
-                    raise HTTPException(400, "Chunk is larger than allowed.")
-                out.write(buf)
-        return offset + written
+        return _append_upload_chunk(part, chunk, offset, total)
 
     received = await asyncio.to_thread(_append)
     if received < total:

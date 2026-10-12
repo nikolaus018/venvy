@@ -2,7 +2,7 @@
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
         // ── Tab Switching ─────────────────────────────────────────────────────────
-        const TABS = ['terminal', 'files', 'logs', 'packages', 'git', 'settings'];
+        const TABS = ['terminal', 'files', 'logs', 'packages', 'settings'];
         let currentTab = 'terminal';
 
         function switchTab(tab, opts = {}) {
@@ -40,7 +40,6 @@
             else if (tab === 'logs') loadLogs();
             if (tab === 'files') loadFiles(currentBrowserPath);
             if (tab === 'packages') loadPackages();
-            if (tab === 'git') loadGitStatus();
             if (tab === 'terminal' && window.term && window.fitAddon) setTimeout(_termFit, 100);
             if (tab === 'settings') {
                 loadCfRouteStatus();

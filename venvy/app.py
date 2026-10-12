@@ -25,6 +25,7 @@ from venvy.config import (
     utc_now,
     _VENVY_BOOT_TIME,
 )
+from venvy.backup import load_operation_state
 from venvy.db import create_db_and_tables, engine
 from venvy.models import App, SystemSetting
 from venvy.process import (
@@ -43,7 +44,6 @@ from venvy.api import apps as api_apps
 from venvy.api import auth as api_auth
 from venvy.api import cloudflare as api_cloudflare
 from venvy.api import files as api_files
-from venvy.api import github as api_github
 from venvy.api import system as api_system
 from venvy.api import terminal as api_terminal
 from venvy.api import users as api_users
@@ -52,6 +52,7 @@ from venvy.api import users as api_users
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
+    load_operation_state()
 
     await _check_python3_venv()
     await _check_rust()
@@ -205,7 +206,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
             "https://cdn.jsdelivr.net; "
             "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data: blob: https://avatars.githubusercontent.com; "
+            "img-src 'self' data: blob:; "
             "connect-src 'self' ws: wss: "
             "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
             "worker-src 'self' blob:; "
@@ -239,7 +240,6 @@ app.add_middleware(CSRFMiddleware)
 app.include_router(api_auth.router)
 app.include_router(api_users.router)
 app.include_router(api_files.router)
-app.include_router(api_github.router)
 app.include_router(api_cloudflare.router)
 app.include_router(api_system.router)
 app.include_router(api_apps.router)

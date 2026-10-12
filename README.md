@@ -59,11 +59,12 @@ Settings live in `/etc/venvy/venvy.env`, data in `/var/lib/venvy`, code in `/opt
 - **Files.** Tree, editor (Ace), upload, download, rename, copy, drag and drop.
 - **Logs.** Live tail with ANSI colours, filtering, follow and wrap, rotation on the server.
 - **Packages.** List, install and remove; a scanner that finds imports missing from the venv.
-- **Git.** Connect an app to a GitHub repo (device-flow sign-in), then fetch, pull, commit, push.
 - **Public URLs.** Publish an app on your own domain through a Cloudflare Tunnel; Venvy manages
   the tunnel ingress rule and the DNS record.
 - **Backups.** One archive holds the database, the encryption key and every app. Restore rolls
-  the live server back in place, after taking a safety backup first.
+  the live server back in place, after taking a safety backup first — from a backup on the
+  server or one you upload. Both show step-by-step progress that is kept on the server, so it
+  is still there after closing the browser.
 - **Users and roles.** Admin, operator and read-only viewer, with optional TOTP two-factor.
 - **Installable PWA** with light and dark themes, a command palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>)
   and keyboard shortcuts.
@@ -102,7 +103,7 @@ venvy/             backend package
   config  crypto  models  db  auth       settings, encryption, tables, sessions and roles
   safefs  isolation                      symlink-safe file access, per-app Unix users
   process  terminal  backup              lifecycle and supervisor, PTY terminal, backup/restore
-  cloudflare  github  settings  jobs     integrations, setting rules, background jobs
+  cloudflare  settings  jobs             integrations, setting rules, background jobs
   api/                                   one router per resource
   app                                    FastAPI app: lifespan, middleware, static routes
 web/
@@ -117,7 +118,7 @@ A few decisions worth pointing out:
 - **Two secrets per session.** Browsers send cookies to every port on a host, including the
   hosted apps. So the session cookie alone is not enough: each request also carries a
   per-session key from `localStorage`, which is scoped to Venvy's own origin.
-- **Secrets encrypted at rest.** App environment variables, the Cloudflare and GitHub tokens
+- **Secrets encrypted at rest.** App environment variables, the Cloudflare token
   and TOTP secrets are Fernet-encrypted with a key that never leaves the host and is never
   returned by the API.
 - **No path is trusted twice.** File operations resolve a request path once, then walk it from
@@ -154,7 +155,7 @@ against fake data.
 
 The suite boots a real server on a throwaway data directory and drives it over HTTP and
 WebSocket: login and roles, files and uploads, the process lifecycle under concurrency,
-backup and in-place restore, the terminal, and a Chrome pass over every view.
+backup, backup upload and in-place restore, the terminal, and a Chrome pass over every view.
 
 ```bash
 pip install -r tests/requirements.txt

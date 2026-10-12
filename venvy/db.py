@@ -94,6 +94,11 @@ def create_db_and_tables() -> None:
         # again; drop them rather than let them sit until expiry.
         conn.exec_driver_sql("DELETE FROM usersession WHERE key_hash IS NULL")
 
+        # The GitHub integration is gone; don't leave its stored token behind.
+        conn.exec_driver_sql(
+            "DELETE FROM systemsetting WHERE key IN ('gh_token', 'gh_client_id', 'gh_username', 'gh_avatar')"
+        )
+
     # TOTP secrets used to be stored as-is; anyone who could read data.db (or a
     # backup of it) could generate every user's codes. Encrypt what's there.
     with Session(engine) as session:

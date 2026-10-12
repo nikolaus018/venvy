@@ -75,9 +75,9 @@ class App(SQLModel, table=True):
     url_source_pref: str = Field(default="local")  # "local" or "public"
 
     # Resource isolation — enforced via systemd-run when available (see start_app_process_logic).
-    # Nullable = unlimited; new apps default to a sane cap.
-    memory_limit_mb: Optional[int] = Field(default=512)
-    cpu_limit_percent: Optional[int] = Field(default=50)
+    # Nullable = unlimited, which is what a new app starts with.
+    memory_limit_mb: Optional[int] = Field(default=None)
+    cpu_limit_percent: Optional[int] = Field(default=None)
     # Set when the app is launched under a systemd scope, so stop/kill logic knows
     # to use `systemctl stop` instead of (or in addition to) signal-based teardown.
     systemd_scope: Optional[str] = Field(default=None)

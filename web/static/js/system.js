@@ -1,4 +1,4 @@
-// System view: host metrics and ports, backups, restore.
+// System view: host metrics and ports, backups (create, upload, restore) and their live status.
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
         // ── System View ───────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@
             if (userTriggered && window.innerWidth < 768) closeSidebar();
             document.title = 'System · Venvy';
             if (userTriggered) syncHash();
-            loadSystemView(); loadCfCredsStatus(); loadBackups(); loadGhCardStatus();
+            loadSystemView(); loadCfCredsStatus(); loadBackups();
         }
         function closeSystemView() {
             document.getElementById('system-view').classList.add('hidden');
@@ -125,7 +125,6 @@
             card.classList.remove('hidden');
 
             const listEl = document.getElementById('sys-backups-list');
-            const summaryEl = document.getElementById('sys-backups-summary');
             const seq = ++_backupsReqSeq;
             try {
                 const res = await fetch(`${API}/system/backups`);
@@ -136,11 +135,10 @@
                 // clobber a fresher list with stale data.
                 if (seq !== _backupsReqSeq) return;
 
-                if (summaryEl) {
-                    summaryEl.textContent = backups.length
-                        ? `${backups.length} snapshot${backups.length !== 1 ? 's' : ''} · latest ${new Date(backups[0].created_at).toLocaleDateString()}`
-                        : 'No backups yet';
-                }
+                _backupsSummaryIdle = backups.length
+                    ? `${backups.length} snapshot${backups.length !== 1 ? 's' : ''} · latest ${new Date(backups[0].created_at).toLocaleDateString()}`
+                    : 'No backups yet';
+                _paintBackupOp();
 
                 if (!backups.length) {
                     listEl.innerHTML = `<span class="text-xs italic" style="color:var(--text3)">No backups yet — create one to get started.</span>`;
@@ -183,7 +181,8 @@
             } catch (e) {
                 if (seq === _backupsReqSeq) {
                     listEl.innerHTML = `<span class="text-xs" style="color:var(--red)">Failed to load backups.</span>`;
-                    if (summaryEl) summaryEl.textContent = 'Failed to load';
+                    _backupsSummaryIdle = 'Failed to load';
+                    _paintBackupOp();
                 }
             }
         }
@@ -193,30 +192,367 @@
             loadBackups();
         }
 
-        async function createBackup(btn) {
-            const original = btn ? btn.innerHTML : '';
-            if (btn) {
-                btn.disabled = true;
-                // A full backup tars the whole apps/ directory, so this can
-                // take a while for apps with large venvs — say so up front.
-                btn.innerHTML = '<i data-feather="loader" class="w-3.5 h-3.5 animate-spin"></i> Creating… this can take a bit';
-                _featherReplace();
-            }
+        async function createBackup() {
+            const btn = document.getElementById('btn-create-backup');
+            if (btn) btn.disabled = true;   // re-enabled by _paintBackupOp() once nothing is running
             try {
                 const res = await fetch(`${API}/system/backup`, { method: 'POST' });
-                await waitForJob(res);
-                showToast('Backup created.', 'success');
-                await loadBackups();
+                if (!res.ok) {
+                    const e = await res.json().catch(() => ({}));
+                    showToast('Backup not started: ' + (e.detail || `HTTP ${res.status}`), 'error', 6000);
+                }
             } catch (e) {
-                showToast('Backup failed: ' + e.message, 'error');
-            } finally {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = original;
-                    _featherReplace();
+                showToast('Network error: ' + e.message, 'error');
+            }
+            // Started or not, show what the server says is going on.
+            await _pollBackupOp();
+        }
+
+        // ── Backup / restore status ───────────────────────────────────────────────
+        // A backup or restore runs on the server and reports what it is doing at
+        // GET /system/backup/status. That is polled here for as long as an admin
+        // is signed in — not just by the tab that pressed the button — so the
+        // progress is still there after closing the modal, reloading, or coming
+        // back in another browser.
+        let _backupOp = null;            // the server's last answer
+        let _backupOpTimer = null;
+        let _backupOpPollSeq = 0;        // a poll that was overtaken by a newer one steps aside
+        let _backupOpWatching = false;
+        let _backupOpWatchedId = null;   // an operation this page saw while it was still running
+        let _backupOpOffline = 0;        // consecutive failed polls while the restore screen is up
+        let _backupUpload = null;        // { name, total, sent, startedAt, ctl, id } while a backup file uploads
+        let _backupsSummaryIdle = 'Loading…';
+        const _BACKUP_OP_DISMISSED = 'venvy_backup_op_dismissed';
+
+        function startBackupOpWatch() {
+            if (currentUser?.role !== 'admin') return;   // the endpoint is admin-only
+            _backupOpWatching = true;
+            _pollBackupOp();
+        }
+
+        function stopBackupOpWatch() {
+            _backupOpWatching = false;
+            _backupOpPollSeq++;
+            clearTimeout(_backupOpTimer);
+        }
+
+        function _restoreOverlayShown() {
+            return !document.getElementById('restore-progress-overlay').classList.contains('hidden');
+        }
+
+        async function _pollBackupOp() {
+            clearTimeout(_backupOpTimer);
+            if (!_backupOpWatching) return;
+            const seq = ++_backupOpPollSeq;
+            let delay = 10000;   // idle: just often enough to notice one started elsewhere
+            try {
+                const res = await fetch(`${API}/system/backup/status`, { cache: 'no-store' });
+                if (seq !== _backupOpPollSeq) return;
+                if (res.status === 401 || res.status === 403) {
+                    // A restore replaces the sessions too: if that is what just
+                    // happened, the page has to start over at the login screen.
+                    if (_restoreOverlayShown()) window.location.reload();
+                    return;   // otherwise signed out — the next login starts the watch again
+                }
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const body = await res.json();
+                if (seq !== _backupOpPollSeq) return;
+                _backupOpOffline = 0;
+                _onBackupOp(body.operation);
+                if (_backupOp?.status === 'running') delay = 1000;
+            } catch (e) {
+                if (seq !== _backupOpPollSeq) return;
+                if (_restoreOverlayShown()) {
+                    // Expected at the end of a restore: Venvy is restarting.
+                    delay = 2000;
+                    document.getElementById('restore-progress-text').textContent = ++_backupOpOffline > 90
+                        ? 'Still waiting for Venvy to come back — you can also refresh this page yourself.'
+                        : 'Venvy is restarting on the restored data — waiting for it to come back…';
+                } else if (_backupOp?.status === 'running') {
+                    delay = 2000;
                 }
             }
+            if (_backupOpWatching) {
+                clearTimeout(_backupOpTimer);
+                _backupOpTimer = setTimeout(_pollBackupOp, delay);
+            }
         }
+
+        function _onBackupOp(op) {
+            _backupOp = op;
+            const running = op?.status === 'running';
+            if (running) _backupOpWatchedId = op.id;
+
+            if (op?.kind === 'restore' && running) {
+                _showRestoreOverlay(op);
+            } else if (_restoreOverlayShown()) {
+                if (op?.kind === 'restore' && op.status === 'done') {
+                    document.getElementById('restore-progress-text').textContent = 'Restore finished — reloading…';
+                    _renderOpSteps(document.getElementById('restore-progress-steps'), op);
+                    stopBackupOpWatch();
+                    setTimeout(() => window.location.reload(), 800);
+                    return;
+                }
+                // The restore failed before anything restarted; Venvy carries on as it was.
+                const overlay = document.getElementById('restore-progress-overlay');
+                overlay.classList.add('hidden'); overlay.classList.remove('flex');
+                startPolling();
+            }
+
+            if (op && !running && _backupOpWatchedId === op.id) {
+                _backupOpWatchedId = null;
+                const what = op.kind === 'restore' ? 'Restore' : 'Backup';
+                if (op.status === 'error') showToast(`${what} failed: ${op.error}`, 'error', 10000);
+                else if (op.kind === 'backup') showToast(`Backup created — ${op.filename} (${formatBytes(op.size_bytes)}).`, 'success', 5000);
+                loadBackups();
+            }
+            _paintBackupOp();
+        }
+
+        function _showRestoreOverlay(op) {
+            const overlay = document.getElementById('restore-progress-overlay');
+            if (!_restoreOverlayShown()) {
+                overlay.classList.remove('hidden');
+                overlay.classList.add('flex');
+                // Everything is about to be replaced and the server restarts at
+                // the end — the 1s app-list poll would only report errors.
+                if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+                closeModal('restore-backup-modal');
+                closeModal('backups-modal');
+            }
+            document.getElementById('restore-progress-file').textContent =
+                `${op.filename} · started by ${op.started_by} · ${_formatDuration(op.elapsed_sec)}`;
+            document.getElementById('restore-progress-text').textContent =
+                'This runs on the server — closing this page does not stop it. It reloads by itself once Venvy is back.';
+            _renderOpSteps(document.getElementById('restore-progress-steps'), op);
+        }
+
+        function _formatDuration(sec) {
+            sec = Math.max(0, Math.round(sec || 0));
+            if (sec < 60) return `${sec}s`;
+            const pad = n => String(n).padStart(2, '0');
+            if (sec < 3600) return `${Math.floor(sec / 60)}m ${pad(sec % 60)}s`;
+            return `${Math.floor(sec / 3600)}h ${pad(Math.floor(sec % 3600 / 60))}m`;
+        }
+
+        const _OP_ICONS = {
+            done: '<svg class="w-3.5 h-3.5" fill="none" stroke="var(--green)" viewBox="0 0 24 24" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>',
+            active: '<div class="w-3.5 h-3.5 border-2 rounded-full animate-spin" style="border-color:var(--ov-border);border-top-color:var(--accent)"></div>',
+            failed: '<svg class="w-3.5 h-3.5" fill="none" stroke="var(--red)" viewBox="0 0 24 24" stroke-width="3"><path stroke-linecap="round" d="M6 6l12 12M18 6L6 18" /></svg>',
+            todo: '<div class="w-1.5 h-1.5 rounded-full" style="background:var(--text3);opacity:.5"></div>',
+        };
+
+        // The step list of a backup/restore. Rebuilt only when the step or the
+        // outcome changes; the line under the active step and its bar are
+        // updated in place, so the spinner and the bar don't restart every second.
+        function _renderOpSteps(el, op) {
+            const key = `${op.id}:${op.status}:${op.step}`;
+            if (el.dataset.key !== key) {
+                el.dataset.key = key;
+                el.innerHTML = op.steps.map((label, i) => {
+                    const state = op.status === 'done' || i < op.step ? 'done'
+                        : i > op.step ? 'todo' : op.status === 'error' ? 'failed' : 'active';
+                    const now = state === 'active';
+                    return `
+                    <div class="flex items-start gap-2.5 py-1">
+                        <div class="w-4 h-4 mt-px shrink-0 flex items-center justify-center">${_OP_ICONS[state]}</div>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-xs ${now ? 'font-bold' : 'font-medium'}" style="color:var(${state === 'todo' ? '--text3' : state === 'failed' ? '--red' : '--text'})">${escapeHtml(label)}</p>
+                            ${now ? `<p class="text-[11px] mt-0.5 truncate hidden" data-op-detail style="color:var(--text3)"></p>
+                            <div class="op-bar mt-1.5"><div class="op-bar-fill" data-op-fill></div></div>` : ''}
+                        </div>
+                    </div>`;
+                }).join('');
+            }
+            const detail = el.querySelector('[data-op-detail]');
+            if (detail) {
+                detail.textContent = op.detail || '';
+                detail.classList.toggle('hidden', !op.detail);
+            }
+            _setOpBar(el.querySelector('[data-op-fill]'), op.percent);
+        }
+
+        // percent == null: the work can't be measured, so show movement instead of a number.
+        function _setOpBar(fill, percent) {
+            if (!fill) return;
+            const unknown = percent == null;
+            fill.classList.toggle('op-bar-indeterminate', unknown);
+            fill.style.width = unknown ? '' : `${Math.max(2, Math.min(100, percent))}%`;
+        }
+
+        function dismissBackupOp() {
+            try { if (_backupOp) localStorage.setItem(_BACKUP_OP_DISMISSED, _backupOp.id); } catch { }
+            _paintBackupOp();
+        }
+
+        function _backupOpDismissed(op) {
+            try { return localStorage.getItem(_BACKUP_OP_DISMISSED) === op.id; } catch { return false; }
+        }
+
+        // Everything on the page that reflects the status: the panel in the
+        // Backups modal, its buttons, the Backups card and the System nav item.
+        function _paintBackupOp() {
+            const op = _backupOp, up = _backupUpload;
+            const running = op?.status === 'running';
+            const what = op?.kind === 'restore' ? 'Restore' : 'Backup';
+            const pct = p => p == null ? '…' : ` ${p}%`;
+
+            const busy = up ? `Uploading${pct(Math.floor(up.sent * 100 / up.total))}`
+                : running ? `${op.kind === 'restore' ? 'Restoring' : 'Backing up'}${pct(op.kind === 'backup' ? op.percent : null)}` : '';
+            const nav = document.getElementById('system-nav-op');
+            nav.textContent = busy;
+            nav.classList.toggle('hidden', !busy);
+            const summary = document.getElementById('sys-backups-summary');
+            if (summary) {
+                summary.textContent = up ? `Uploading ${up.name} — ${Math.floor(up.sent * 100 / up.total)}%`
+                    : running ? `${op.steps[op.step]}${op.percent != null ? ` — ${op.percent}%` : '…'}`
+                        : _backupsSummaryIdle;
+            }
+            for (const id of ['btn-create-backup', 'btn-upload-backup']) {
+                document.getElementById(id).disabled = running || !!up;
+            }
+
+            const panel = document.getElementById('backup-op-panel');
+            const show = up || (op && (running || !_backupOpDismissed(op)));
+            panel.classList.toggle('hidden', !show);
+            if (!show) { panel.dataset.key = ''; return; }
+
+            const key = up ? `upload:${up.id}` : `${op.id}:${op.status}`;
+            if (panel.dataset.key !== key) {
+                panel.dataset.key = key;
+                const head = (title, color = '--text') => `
+                    <div class="flex items-center justify-between gap-3 mb-2">
+                        <p class="text-sm font-bold truncate" style="color:var(${color})">${escapeHtml(title)}</p>
+                        <span class="text-[11px] mono shrink-0" data-op-side style="color:var(--text3)"></span>
+                    </div>`;
+                const dismiss = `<button onclick="dismissBackupOp()" class="btn-ghost shrink-0 px-2.5 py-1 text-[11px] font-bold rounded-lg">Dismiss</button>`;
+                if (up) {
+                    panel.innerHTML = head(`Uploading ${up.name}`) + `
+                        <div class="op-bar"><div class="op-bar-fill" data-op-fill></div></div>
+                        <p class="text-[11px] mt-2" data-op-detail style="color:var(--text3)"></p>
+                        <div class="flex items-center justify-between gap-3 mt-2">
+                            <p class="text-[11px]" style="color:var(--text3)">The upload comes from this tab — keep it open until it is done.</p>
+                            <button onclick="cancelBackupUpload()" class="shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-lg" style="color:var(--red)">Cancel</button>
+                        </div>`;
+                } else if (running) {
+                    panel.innerHTML = head(op.kind === 'restore' ? `Restoring ${op.filename}` : 'Creating backup…') + `
+                        <div data-op-steps></div>
+                        <p class="text-[11px] mt-2" style="color:var(--text3)">Started by ${escapeHtml(op.started_by)}. This runs
+                            on the server: you can close this window or the browser and come back — the progress will be here.</p>`;
+                } else if (op.status === 'done') {
+                    panel.innerHTML = `
+                        <div class="flex items-center gap-3">
+                            <div class="shrink-0">${_OP_ICONS.done.replace('w-3.5 h-3.5', 'w-4 h-4')}</div>
+                            <div class="flex-1 min-w-0">
+                                <p class="text-sm font-bold" style="color:var(--text)">${what} finished</p>
+                                <p class="text-[11px] mt-0.5 break-words" style="color:var(--text3)">${escapeHtml(op.filename || '')}${op.kind === 'backup' && op.size_bytes ? ` · ${formatBytes(op.size_bytes)}` : ''} · took ${_formatDuration(op.elapsed_sec)} · ${new Date(op.finished_at).toLocaleString()}</p>
+                            </div>
+                            ${dismiss}
+                        </div>`;
+                } else {
+                    panel.innerHTML = `
+                        <div class="flex items-center justify-between gap-3 mb-2">
+                            <p class="text-sm font-bold" style="color:var(--red)">${what} failed</p>
+                            ${dismiss}
+                        </div>
+                        <div data-op-steps></div>
+                        <p class="text-xs mt-2 break-words" style="color:var(--text2)">${escapeHtml(op.error || 'Unknown error')}</p>
+                        <p class="text-[11px] mt-1" style="color:var(--text3)">${new Date(op.finished_at).toLocaleString()} · after ${_formatDuration(op.elapsed_sec)}</p>`;
+                }
+            }
+
+            if (up) {
+                const sent = Math.min(up.sent, up.total), secs = (Date.now() - up.startedAt) / 1000;
+                const checking = sent >= up.total;
+                _setOpBar(panel.querySelector('[data-op-fill]'), checking ? null : Math.floor(sent * 100 / up.total));
+                panel.querySelector('[data-op-side]').textContent = checking ? '' : `${Math.floor(sent * 100 / up.total)}%`;
+                panel.querySelector('[data-op-detail]').textContent = checking
+                    ? 'Upload complete — the server is checking that this is a Venvy backup…'
+                    : `${formatBytes(sent)} of ${formatBytes(up.total)}${secs > 2 ? ` · ${formatBytes(sent / secs)}/s` : ''}`;
+                return;
+            }
+            const side = panel.querySelector('[data-op-side]');
+            if (side) side.textContent = _formatDuration(op.elapsed_sec);
+            const steps = panel.querySelector('[data-op-steps]');
+            if (steps) _renderOpSteps(steps, op);
+        }
+
+        // ── Upload a backup ───────────────────────────────────────────────────────
+        // Backups are meant to be kept somewhere else, so the one you want to
+        // restore is often not on this server. Sent in chunks like any other
+        // upload (see files.js); once the server has checked it, it is in the
+        // list and the usual restore confirmation opens for it.
+        async function uploadBackupFile(input) {
+            const file = input.files[0];
+            input.value = '';   // picking the same file again must fire onchange again
+            if (!file || _backupUpload) return;
+            if (!/\.(tar\.gz|tgz)$/i.test(file.name)) {
+                showToast('Choose the .tar.gz file that downloading a backup gave you.', 'error', 6000);
+                return;
+            }
+            const ctl = { cancelled: false, xhrs: new Set() };
+            const up = _backupUpload = { name: file.name, total: file.size, sent: 0, startedAt: Date.now(), ctl, id: _newUploadId() };
+            const progress = bytes => { up.sent = bytes; _paintBackupOp(); };
+            const url = `${API}/system/backups/upload/chunk`;
+            let offset = 0, retries = 0, result = null;
+            _paintBackupOp();
+            try {
+                while (!result) {
+                    if (ctl.cancelled) throw new Error('Upload aborted');
+                    const end = Math.min(offset + UPLOAD_CHUNK_BYTES, file.size);
+                    const fd = new FormData();
+                    fd.append('upload_id', up.id);
+                    fd.append('filename', file.name);
+                    fd.append('offset', String(offset));
+                    fd.append('total', String(file.size));
+                    fd.append('chunk', file.slice(offset, end), 'chunk');
+                    const start = offset, len = end - offset;
+                    let r = null;
+                    try {
+                        r = await _postChunk(url, fd, frac => progress(start + frac * len), ctl);
+                    } catch (e) {
+                        if (ctl.cancelled) throw e;
+                    }
+                    if (r && r.status >= 200 && r.status < 300 && r.body) {
+                        offset = r.body.received; retries = 0;
+                        if (r.body.done) result = r.body;
+                        progress(offset);
+                        continue;
+                    }
+                    if (r && r.status === 409 && typeof r.body?.detail?.received === 'number') {
+                        // A response got lost — carry on from what the server has.
+                        offset = r.body.detail.received; progress(offset);
+                        continue;
+                    }
+                    const retryable = !r || r.status >= 500 || r.status === 408 || r.status === 429;
+                    if (!retryable || r.status === 507 || ++retries > UPLOAD_MAX_RETRIES) throw new Error(_uploadErrorText(r));
+                    progress(start);
+                    await new Promise(res => setTimeout(res, Math.min(1000 * 2 ** (retries - 1), 15000)));
+                }
+            } catch (e) {
+                fetch(`${API}/system/backups/upload/${up.id}`, { method: 'DELETE' }).catch(() => { });
+                _backupUpload = null;
+                _paintBackupOp();
+                if (ctl.cancelled) showToast('Upload cancelled.', 'info');
+                else showToast('Upload failed: ' + e.message, 'error', 8000);
+                return;
+            }
+            _backupUpload = null;
+            _paintBackupOp();
+            await loadBackups();
+            showToast(`Backup uploaded — ${result.filename}.`, 'success', 5000);
+            openRestoreBackupModal(result.filename, true);
+        }
+
+        function cancelBackupUpload() {
+            const ctl = _backupUpload?.ctl;
+            if (!ctl) return;
+            ctl.cancelled = true;
+            for (const xhr of ctl.xhrs) xhr.abort();
+        }
+
+        // A backup upload dies with the tab, unlike everything else here.
+        window.addEventListener('beforeunload', e => { if (_backupUpload) { e.preventDefault(); e.returnValue = ''; } });
 
         function downloadBackup(filename) {
             triggerDownload(`${API}/system/backups/${encodeURIComponent(filename)}/download`, filename);
@@ -250,8 +586,9 @@
         // ── Restore ───────────────────────────────────────────────────────────────
         let _pendingRestoreFilename = null;
 
-        function openRestoreBackupModal(filename) {
+        function openRestoreBackupModal(filename, justUploaded = false) {
             _pendingRestoreFilename = filename;
+            document.getElementById('restore-backup-uploaded-note').classList.toggle('hidden', !justUploaded);
             document.getElementById('restore-backup-filename').textContent = filename;
             document.getElementById('restore-backup-confirm-input').value = '';
             document.getElementById('restore-backup-confirm-btn').disabled = true;
@@ -282,47 +619,13 @@
                     btn.innerHTML = original;
                     return;
                 }
-                closeModal('restore-backup-modal');
-                closeModal('backups-modal');
-                _showRestoreInProgressOverlay(res);
+                btn.innerHTML = original;
+                // The status poll takes it from here: it puts up the restore
+                // screen and follows the restore through the restart.
+                await _pollBackupOp();
             } catch (e) {
                 showToast('Network error: ' + e.message, 'error');
                 btn.disabled = false;
                 btn.innerHTML = original;
             }
-        }
-
-        async function _showRestoreInProgressOverlay(res) {
-            const overlay = document.getElementById('restore-progress-overlay');
-            overlay.classList.remove('hidden');
-            overlay.classList.add('flex');
-            // The server is about to restart — the normal 1s app-list poll
-            // would just spam connection-refused errors while it's down.
-            if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-            // The restore runs as a job; the server only restarts once it's done.
-            try { await waitForJob(res); }
-            catch (e) {
-                overlay.classList.add('hidden'); overlay.classList.remove('flex');
-                showToast('Restore failed: ' + e.message, 'error', 10000);
-                return;
-            }
-            document.getElementById('restore-progress-text').textContent = 'Restored — waiting for Venvy to restart…';
-            await new Promise(r => setTimeout(r, 5000));
-            let attempts = 0;
-            const check = setInterval(async () => {
-                attempts++;
-                try {
-                    const res = await fetch(`${API}/auth/status`, { cache: 'no-store' });
-                    if (res.ok) {
-                        clearInterval(check);
-                        document.getElementById('restore-progress-text').textContent = 'Back online — reloading…';
-                        setTimeout(() => window.location.reload(), 600);
-                    }
-                } catch (e) { /* still down — keep polling */ }
-                if (attempts > 60) { // ~2 minutes at 2s
-                    clearInterval(check);
-                    document.getElementById('restore-progress-text').textContent =
-                        "Still waiting for Venvy to come back — you can also just refresh this page manually.";
-                }
-            }, 2000);
         }

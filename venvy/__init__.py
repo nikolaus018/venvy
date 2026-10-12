@@ -14,15 +14,14 @@ The package is laid out by concern, lowest layer first:
     process     app lifecycle: start/stop, supervisor, logs, ports, metrics
     apps        app naming rules and the API representation of an app
     terminal    the in-browser PTY terminal
+    uploads     upload limits and chunk temp files
     backup      full backups and in-place restore
     cloudflare  Cloudflare API helpers for tunnel routes
     settings    storage rules for system settings (secret / reserved / encrypted)
-    github      GitHub sign-in state and git helpers
-    uploads     upload limits and chunk temp files
     startup     host tool checks run at boot
     webui       assembles the HTML document from web/index.html + web/partials/
     api/        HTTP route handlers, one router per resource:
-                auth, users, apps, files, system, cloudflare, github, terminal
+                auth, users, apps, files, system, cloudflare, terminal
     app         the FastAPI application: lifespan, middleware, static routes
 
 A module only imports from modules above it. `main.py` at the repository

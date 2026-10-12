@@ -1,6 +1,6 @@
 """Secrets-at-rest encryption.
 
-Cloudflare credentials, the GitHub token, TOTP secrets and each app's
+Cloudflare credentials, TOTP secrets and each app's
 environment variables are stored in data.db encrypted with a symmetric key
 kept in DATA_DIR/.venvy_key. Without that file those columns are
 unrecoverable — back it up alongside data.db and treat it like a private key.
