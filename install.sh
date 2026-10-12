@@ -45,6 +45,28 @@ KEEP_DB_SNAPSHOTS=5
 
 VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; APP_USERS=""; UNINSTALL=0
 
+# Printed from here rather than read back out of this file: piped into bash
+# from curl there is no file to read.
+usage() {
+  cat <<'USAGE'
+Venvy installer and updater for Debian / Ubuntu.
+
+  curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install.sh | sudo bash
+
+Options go after `bash -s --`:
+
+  --host ADDR       address to bind (default 0.0.0.0; 127.0.0.1 = tunnel only)
+  --port N          port (default 54783)
+  --version TAG     install a specific release (default: latest)
+  --with-rust       also install cargo/rustc so Rust apps can be hosted
+  --app-users       run Venvy as root with one Unix user per hosted app
+  --uninstall       remove the service and code (data and config are kept)
+
+Run it again at any time to update. Settings are in /etc/venvy/venvy.env,
+data in /var/lib/venvy, code in /opt/venvy.
+USAGE
+}
+
 say()  { printf '\033[1;34m[venvy]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[venvy]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[venvy]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -57,7 +79,7 @@ while [ $# -gt 0 ]; do
     --with-rust) WITH_RUST=1; shift ;;
     --app-users) APP_USERS=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
-    -h|--help)   sed -n '2,29p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   usage; exit 0 ;;
     *)           die "Unknown option: $1 (see --help)" ;;
   esac
 done

@@ -140,6 +140,19 @@ of the system, but not from each other or from Venvy's own data. Installing with
 runs Venvy as root and gives each app its own locked Unix user that owns only its directory;
 its process, terminal and package installs run as that user.
 
+### Locked out?
+
+If the only admin forgets the password or loses the authenticator, fix the account from a shell
+on the server — it works whether or not Venvy is running, and signs that user out everywhere:
+
+```bash
+cd /var/lib/venvy
+sudo -u venvy /opt/venvy/current/.venv/bin/python /opt/venvy/current/main.py --reset-password admin
+sudo -u venvy /opt/venvy/current/.venv/bin/python /opt/venvy/current/main.py --disable-2fa admin
+```
+
+(With `--app-users` the service runs as root: leave out `-u venvy`.)
+
 ## Development
 
 ```bash
@@ -155,7 +168,8 @@ against fake data.
 
 The suite boots a real server on a throwaway data directory and drives it over HTTP and
 WebSocket: login and roles, files and uploads, the process lifecycle under concurrency,
-backup, backup upload and in-place restore, the terminal, and a Chrome pass over every view.
+backup, backup upload and in-place restore, the terminal, request limits and the races around
+deleting an app or losing the server mid-run, and a Chrome pass over every view.
 
 ```bash
 pip install -r tests/requirements.txt

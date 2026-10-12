@@ -15,6 +15,7 @@ Run it from a checkout: it serves web/ and vendor/ next to this script.
 import json
 import random
 import secrets
+import time
 import datetime
 import os
 from pathlib import Path
@@ -316,17 +317,12 @@ async def serve_spa():
         return HTMLResponse(render_index(WEB_DIR))
     return PlainTextResponse("web/index.html not found next to emulator.py.", status_code=404)
 
-# ---------------------------------------------------------------------------
-# License
-# ---------------------------------------------------------------------------
+_BOOT = time.time()
 
-@app.get("/api/license/status")
-def license_status():
-    return {"valid": True}
 
-@app.post("/api/license/activate")
-async def license_activate(request: Request):
-    return {"ok": True}
+@app.get("/api/health")
+def health_check():
+    return {"ok": True, "status": "healthy", "uptime_seconds": int(time.time() - _BOOT)}
 
 # ---------------------------------------------------------------------------
 # Auth — /api/auth/*
@@ -597,7 +593,7 @@ async def delete_app(app_id: int, request: Request):
     del FAKE_APPS[app_id]
     FAKE_PACKAGES.pop(app_id, None)
     FAKE_FILE_TREE.pop(app_id, None)
-    return {"ok": True}
+    return {"ok": True, "warnings": []}
 
 @app.get("/api/apps/{app_id}/stats")
 def app_stats(app_id: int, request: Request):
@@ -789,10 +785,24 @@ class CfPublishReq(BaseModel):
     hostname: str
     local_port: int
 
-@app.put("/api/apps/{app_id}/tunnel/publish")
+@app.get("/api/apps/{app_id}/tunnel/check")
+def check_cf_hostname(app_id: int, hostname: str, request: Request, local_port: Optional[int] = None):
+    _check_auth(request)
+    _app_or_404(app_id)
+    owner = next((a for a in FAKE_APPS.values()
+                  if a["id"] != app_id and a.get("external_url") == f"https://{hostname.strip().lower()}"), None)
+    if owner:
+        return {"conflict": True, "conflict_type": "local", "owned_by": owner["name"],
+                "reason": f"This hostname is already published by '{owner['name']}'. Publishing here will remove it from that app."}
+    return {"conflict": False}
+
+@app.post("/api/apps/{app_id}/tunnel/publish")
 async def publish_cf_route(app_id: int, req: CfPublishReq, request: Request):
     _check_auth(request)
     a = _app_or_404(app_id)
+    for other in FAKE_APPS.values():   # a hostname belongs to one app
+        if other.get("external_url") == f"https://{req.hostname}":
+            other["external_url"] = None
     a["external_url"] = f"https://{req.hostname}"
     return {"ok": True, "hostname": req.hostname, "url": a["external_url"], "dns_record_id": "fake-dns-id"}
 
