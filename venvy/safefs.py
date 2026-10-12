@@ -373,8 +373,17 @@ def _file_download_response(fileobj, st: os.stat_result, filename: str, media_ty
     from starlette.responses import StreamingResponse
 
     def _iter():
+        # Exactly st_size bytes, as promised in Content-Length. A log or a
+        # database that grows while it is being sent would otherwise overrun
+        # the header, which the HTTP layer treats as a broken response.
+        remaining = st.st_size
         with fileobj:
-            yield from _fs_read_chunks(fileobj)
+            while remaining > 0:
+                buf = fileobj.read(min(_FS_COPY_BUF, remaining))
+                if not buf:
+                    return
+                remaining -= len(buf)
+                yield buf
 
     quoted = urllib.parse.quote(filename)
     disposition = (f'attachment; filename="{filename}"' if quoted == filename

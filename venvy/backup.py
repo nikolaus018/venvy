@@ -18,6 +18,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import stat
 import sys
 import tarfile
 import threading
@@ -28,11 +29,12 @@ from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from venvy.audit import audit_log
-from venvy.config import APPS_BASE_DIR, BACKUP_DIR, DB_FILE, _VENVY_KEY_FILE, utc_now
+from venvy.config import APPS_BASE_DIR, BACKUP_DIR, DATA_DIR, DB_FILE, _VENVY_KEY_FILE, utc_now
 from venvy.db import engine
 from venvy.models import App, User
 from venvy.process import set_restore_in_progress, stop_app_process_logic
 from venvy.safefs import is_safe_path
+from venvy.terminal import terminal_manager
 from venvy.uploads import _UPLOAD_ID_RE, _UPLOAD_STALE_SEC
 
 
@@ -190,6 +192,82 @@ def load_operation_state() -> None:
                     with contextlib.suppress(OSError):
                         leftover.unlink()
         _purge_stale_backup_uploads()
+    # The previous apps/ of a restore that was cut off right at the end (see
+    # _swap): the restored one is in place, this copy is only taking up space.
+    for leftover in DATA_DIR.glob(_REPLACED_APPS_PREFIX + "*"):
+        if leftover.is_dir() and not leftover.is_symlink():
+            shutil.rmtree(leftover, ignore_errors=True)
+
+
+_REPLACED_APPS_PREFIX = ".apps-replaced-"
+
+
+class _ExactSizeReader:
+    """Reads exactly *size* bytes from a file for tarfile.addfile(), padding
+    with zeros if the file turns out shorter. A member's size is fixed in its
+    header before its data is written; a file that an app truncates in that
+    moment would otherwise abort the whole backup with "unexpected end of
+    data" — after the header has already gone into the archive."""
+
+    def __init__(self, fileobj, size: int):
+        self._f = fileobj
+        self._left = size
+
+    def read(self, n: int = -1) -> bytes:
+        if n is None or n < 0 or n > self._left:
+            n = self._left
+        data = self._f.read(n) if n else b""
+        if len(data) < n:
+            data += b"\0" * (n - len(data))
+        self._left -= n
+        return data
+
+
+def _add_tree_to_tar(tar: tarfile.TarFile, path: str, arcname: str, track: Callable) -> int:
+    """tar.add(path, arcname, filter=track) for a directory that is in use
+    while it is being archived. Apps keep running during a backup, so files
+    disappear between being listed and being opened (temp files, caches,
+    journals) and change size while they are read. tar.add() gives up on the
+    first of those — which made a backup of a busy server a matter of luck.
+    Here such an entry is skipped (or, if it shrank, padded) and the backup
+    carries on. Symlinks are stored as links, never followed. Returns how
+    many entries had to be skipped."""
+    skipped = 0
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return 1
+    try:
+        if stat.S_ISREG(st.st_mode):
+            # O_NOFOLLOW/O_NONBLOCK: it was a plain file a moment ago; if it has
+            # been swapped for a link or a FIFO since, don't follow or hang.
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+            with os.fdopen(fd, "rb") as f:
+                info = tar.gettarinfo(name=path, arcname=arcname, fileobj=f)
+                if info is None:
+                    return 1
+                info = track(info)
+                if info.isreg():
+                    tar.addfile(info, _ExactSizeReader(f, info.size))
+                else:
+                    tar.addfile(info)   # a hard link to a file already in the archive
+            return 0
+        info = tar.gettarinfo(name=path, arcname=arcname)
+        if info is None:
+            return 1   # a socket: nothing to restore
+        tar.addfile(track(info))
+    except OSError as e:
+        logging.info(f"Backup: skipped {arcname} ({e.strerror or e})")
+        return 1
+    if stat.S_ISDIR(st.st_mode):
+        try:
+            names = sorted(os.listdir(path))
+        except OSError as e:
+            logging.info(f"Backup: could not list {arcname} ({e.strerror or e})")
+            return 1
+        for name in names:
+            skipped += _add_tree_to_tar(tar, os.path.join(path, name), f"{arcname}/{name}", track)
+    return skipped
 
 
 def _app_dir_labels() -> Dict[str, str]:
@@ -281,7 +359,10 @@ def _create_full_backup_archive(
             if _VENVY_KEY_FILE.exists():
                 tar.add(_VENVY_KEY_FILE, arcname=_VENVY_KEY_FILE.name)
             if APPS_BASE_DIR.exists():
-                tar.add(APPS_BASE_DIR, arcname="apps", filter=_track)
+                skipped = _add_tree_to_tar(tar, str(APPS_BASE_DIR), "apps", _track)
+                if skipped:
+                    logging.warning(f"Backup: {skipped} file(s) disappeared or could not be read while "
+                                    "the apps were being archived and are not in this backup.")
     except Exception as e:
         logging.error(f"Full backup failed: {e}")
         tmp_archive.unlink(missing_ok=True)
@@ -487,35 +568,89 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
             # on 3.12+, but this file supports older interpreters too, so
             # check explicitly regardless of Python version.
             total = 0
-            for member in tar.getmembers():
+            members = tar.getmembers()
+            links = {m.name.rstrip("/") for m in members if m.issym() or m.islnk()}
+            for member in members:
                 target = (staging / member.name).resolve()
                 if not is_safe_path(staging, target):
                     raise ValueError(f"Backup archive contains an unsafe path: {member.name}")
+                # Nothing may be written *through* a link stored earlier in
+                # the archive. Venvy's own backups never contain that (a real
+                # directory tree can't), so this only ever refuses a crafted
+                # file — and it holds whatever the interpreter's tarfile does.
+                parts = member.name.rstrip("/").split("/")
+                if any("/".join(parts[:i]) in links for i in range(1, len(parts))):
+                    raise ValueError(f"Backup archive contains a path through a link: {member.name}")
+                if member.islnk() and not is_safe_path(staging, (staging / member.linkname).resolve()):
+                    raise ValueError(f"Backup archive contains an unsafe hard link: {member.name}")
                 total += member.size if member.isreg() else 0
             unpacked = 0
             last = None
 
-            def _tracking_filter(member, dest_path):
+            def _tracking_filter_progress(member):
                 nonlocal unpacked, last
                 unpacked += member.size if member.isreg() else 0
                 percent = min(99, unpacked * 100 // total) if total else None
                 if percent != last:
                     last = percent
                     _op_step("unpack", f"{_fmt_size(unpacked)} of {_fmt_size(total)}", percent)
+
+            def _tracking_filter(member, dest_path):
+                _tracking_filter_progress(member)
                 return _restore_tar_filter(member, dest_path)
 
             _op_step("unpack", f"0 B of {_fmt_size(total)}", 0 if total else None)
-            try:
+            if hasattr(tarfile, "data_filter"):
                 tar.extractall(staging, filter=_tracking_filter)
-            except TypeError:
-                tar.extractall(staging)  # Python < 3.12 has no `filter` kwarg
+            else:
+                # An interpreter from before extraction filters existed
+                # (they were added in 3.12 and back-ported to 3.10.12 and
+                # 3.11.4). The checks above stand in for the filter; special
+                # files are left out, and nothing keeps set-uid bits.
+                safe = []
+                for member in members:
+                    if not (member.isreg() or member.isdir() or member.issym() or member.islnk()):
+                        logging.warning(f"Restore: skipping special file {member.name}")
+                        continue
+                    member.mode &= 0o755 if member.isdir() else 0o777
+                    safe.append(member)
+                for member in safe:
+                    _tracking_filter_progress(member)
+                    tar.extract(member, staging)
 
     def _swap():
         _op_step("replace", "Putting the backup's app files in place")
-        if (staging / "apps").is_dir():
-            if APPS_BASE_DIR.exists():
-                shutil.rmtree(APPS_BASE_DIR)
-            shutil.move(str(staging / "apps"), str(APPS_BASE_DIR))
+        # apps/ is moved aside, not deleted, until the database and the key
+        # are in as well: if one of those steps fails, the server would
+        # otherwise be left with the backup's apps under its own database —
+        # or, deleted first and then interrupted, with no apps at all. Two
+        # renames on one filesystem, so there is no moment without an apps/.
+        replaced: Optional[Path] = None
+        new_apps_in_place = False
+        try:
+            if (staging / "apps").is_dir():
+                if APPS_BASE_DIR.exists():
+                    replaced = DATA_DIR / f"{_REPLACED_APPS_PREFIX}{secrets.token_hex(4)}"
+                    os.rename(APPS_BASE_DIR, replaced)
+                new_apps_in_place = True
+                try:
+                    os.rename(staging / "apps", APPS_BASE_DIR)
+                except OSError:
+                    # backups/ is on another filesystem than apps/: copy.
+                    shutil.move(str(staging / "apps"), str(APPS_BASE_DIR))
+            _load_database_and_key()
+        except BaseException:
+            if replaced is not None:
+                if new_apps_in_place:
+                    shutil.rmtree(APPS_BASE_DIR, ignore_errors=True)
+                with contextlib.suppress(OSError):
+                    os.rename(replaced, APPS_BASE_DIR)
+            raise
+        if replaced is not None:
+            _op_step("replace", "Removing the previous app files")
+            shutil.rmtree(replaced, ignore_errors=True)
+
+    def _load_database_and_key():
         # The database is loaded *into* the live file through SQLite's backup
         # API, not swapped underneath it. Requests keep arriving during a
         # restore (the UI polls this very job), and replacing data.db while
@@ -524,21 +659,34 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
         # which SQLite would then replay onto it. The backup API takes the
         # proper locks and goes through the WAL like any other write.
         _op_step("replace", "Loading the backup's database")
-        engine.dispose()
-        src = sqlite3.connect(str(staging / "data.db"))
-        try:
-            dst = sqlite3.connect(str(DB_FILE), timeout=60)
-            try:
-                src.backup(dst)
-            finally:
-                dst.close()
-        finally:
-            src.close()
-        engine.dispose()
+        # The key is the last thing to change, and by then changing it is a
+        # rename within one directory: a new database under the old key (or
+        # the other way round) could not decrypt a single stored secret.
         restored_key = staging / _VENVY_KEY_FILE.name
-        if restored_key.is_file():
-            shutil.move(str(restored_key), str(_VENVY_KEY_FILE))
-            _VENVY_KEY_FILE.chmod(0o600)
+        key_tmp = _VENVY_KEY_FILE.with_name(_VENVY_KEY_FILE.name + ".restoring")
+        have_key = restored_key.is_file() and not restored_key.is_symlink()
+        try:
+            if have_key:
+                fd = os.open(key_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(restored_key.read_bytes())
+                    f.flush()
+                    os.fsync(f.fileno())
+            engine.dispose()
+            src = sqlite3.connect(str(staging / "data.db"))
+            try:
+                dst = sqlite3.connect(str(DB_FILE), timeout=60)
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
+            finally:
+                src.close()
+            engine.dispose()
+            if have_key:
+                os.replace(key_tmp, _VENVY_KEY_FILE)
+        finally:
+            key_tmp.unlink(missing_ok=True)
 
     try:
         # Unpack and check the archive first: if it is unusable, nothing has
@@ -562,6 +710,9 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
                     await stop_app_process_logic(a.id, session, manual=True)
                 except Exception as e:
                     logging.warning(f"Failed to stop app {a.id} before restore: {e}")
+        # Shells opened from the UI are working in the directories that are
+        # about to be replaced, and would outlive the restart as orphans.
+        await terminal_manager.close_for_app(None)
 
         await asyncio.to_thread(_swap)
     finally:

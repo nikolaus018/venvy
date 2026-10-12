@@ -34,7 +34,7 @@ from venvy.backup import (
     _resolve_backup_path,
     _restore_job,
 )
-from venvy.config import BACKUP_DIR, psutil
+from venvy.config import BACKUP_DIR, DATA_DIR, psutil
 from venvy.crypto import _decrypt_secret
 from venvy.db import get_session
 from venvy.jobs import _jobs, _start_job
@@ -67,7 +67,9 @@ def get_system_metrics(user: User = Depends(check_admin)):
     
     cpu_percent = host_cpu_percent()
     mem = psutil.virtual_memory()
-    disk = psutil.disk_usage('/')
+    # The filesystem Venvy's data is on — apps, uploads and backups fill
+    # that one, which need not be the root filesystem.
+    disk = psutil.disk_usage(str(DATA_DIR))
     load = [0.0, 0.0, 0.0]
     try:
         load = os.getloadavg()
@@ -191,6 +193,8 @@ def delete_backup(
     _rl: None = Depends(rate_limit_mutations),
 ):
     """Delete a backup."""
+    if restore_in_progress():
+        raise HTTPException(409, "A restore is in progress — backups can't be deleted until it has finished.")
     path = _resolve_backup_path(filename)
     path.unlink()
     audit_log(admin.username, "system_backup_delete", f"path={path}")
