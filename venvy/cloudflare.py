@@ -4,7 +4,7 @@ import logging
 import re
 import unicodedata
 import urllib.parse
-from typing import Optional
+from typing import Callable, List, Optional
 
 import aiohttp
 from fastapi import HTTPException
@@ -38,9 +38,15 @@ def _get_cf_creds(session: Session) -> dict:
     missing = [k for k, v in result.items() if not v]
     if missing:
         raise HTTPException(400, f"Cloudflare not configured. Missing: {', '.join(missing)}")
-    tok = result["cf_api_token"]
-    logging.info(f"CF creds loaded: token_len={len(tok)}")
+    # Both ids are pasted in by hand and end up inside API URLs.
+    for k in ("cf_account_id", "cf_tunnel_id"):
+        if not _CF_ID_RE.match(result[k]):
+            label = "Account ID" if k == "cf_account_id" else "Tunnel ID"
+            raise HTTPException(400, f"The saved Cloudflare {label} is not a valid id — re-enter it under System → Cloudflare.")
     return result
+
+
+_CF_ID_RE = re.compile(r"\A[A-Za-z0-9-]{1,64}\Z")
 
 
 # ---------------------------------------------------------------------------
@@ -58,10 +64,14 @@ async def _cf_request(method: str, url: str, token: str, payload: Optional[dict]
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.request(method, url, headers=headers, json=payload) as resp:
                 data = await resp.json()
-                if not (200 <= resp.status < 300):
+                if not isinstance(data, dict):
+                    raise HTTPException(502, f"Cloudflare API returned an unexpected response (HTTP {resp.status}).")
+                # Cloudflare also reports failures as 200 with success=false.
+                if not (200 <= resp.status < 300) or data.get("success") is False:
                     errs = data.get("errors") or []
-                    msg = errs[0].get("message") if errs else f"HTTP {resp.status}"
-                    raise HTTPException(resp.status, f"Cloudflare API Error: {msg}")
+                    msg = errs[0].get("message") if errs and isinstance(errs[0], dict) else f"HTTP {resp.status}"
+                    status = resp.status if resp.status >= 400 else 502
+                    raise HTTPException(status, f"Cloudflare API Error: {msg}")
                 return data
     except asyncio.TimeoutError:
         raise HTTPException(504, "Cloudflare API request timed out (10s).")
@@ -71,6 +81,44 @@ async def _cf_request(method: str, url: str, token: str, payload: Optional[dict]
         if isinstance(exc, HTTPException):
             raise
         raise HTTPException(500, f"Internal error during Cloudflare request: {str(exc)}")
+
+
+# The tunnel's ingress list is one document: every change is "read it all,
+# write it all back". Two of those interleaved (two apps published at the
+# same moment) and the second write silently dropped the first one's route.
+_ingress_lock = asyncio.Lock()
+
+
+_CATCH_ALL = [{"service": "http_status:404"}]
+
+
+async def _cf_update_ingress(creds: dict, change: Callable[[List[dict]], List[dict]]) -> List[dict]:
+    """Rewrite the tunnel's hostname rules: *change* receives the current
+    named rules and returns the new ones; the catch-all rule is kept (or
+    added) at the end, where Cloudflare requires it. Returns the complete
+    ingress list as it was before, for callers that may need to put it back
+    with _cf_put_ingress()."""
+    cfg_url = _cf_tunnel_cfg_url(creds)
+    async with _ingress_lock:
+        current = await _cf_request("GET", cfg_url, creds["cf_api_token"])
+        ingress = ((current.get("result") or {}).get("config") or {}).get("ingress") or []
+        named = [r for r in ingress if r.get("hostname")]
+        catch_all = [r for r in ingress if not r.get("hostname")]
+        new_ingress = change(named) + (catch_all or _CATCH_ALL)
+        await _cf_request("PUT", cfg_url, creds["cf_api_token"], {"config": {"ingress": new_ingress}})
+    return ingress
+
+
+async def _cf_put_ingress(creds: dict, ingress: List[dict]) -> None:
+    """Write a complete ingress list as it is (used to undo an update)."""
+    async with _ingress_lock:
+        await _cf_request("PUT", _cf_tunnel_cfg_url(creds), creds["cf_api_token"],
+                          {"config": {"ingress": ingress or _CATCH_ALL}})
+
+
+def _cf_tunnel_cfg_url(creds: dict) -> str:
+    return (f"https://api.cloudflare.com/client/v4/accounts/{creds['cf_account_id']}"
+            f"/cfd_tunnel/{creds['cf_tunnel_id']}/configurations")
 
 
 _CF_HOSTNAME_RE = re.compile(

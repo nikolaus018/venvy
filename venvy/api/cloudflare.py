@@ -19,7 +19,10 @@ from venvy.auth import (
 from venvy.cloudflare import (
     _cf_delete_dns_cname,
     _cf_find_zone_id,
+    _cf_put_ingress,
     _cf_request,
+    _cf_tunnel_cfg_url,
+    _cf_update_ingress,
     _cf_upsert_dns_cname,
     _clean_cf_hostname,
     _get_cf_creds,
@@ -174,7 +177,6 @@ async def list_cf_zones(
 ):
     """Return all active zones (domains) on the Cloudflare account."""
     creds      = _get_cf_creds(session)
-    # _account_id = creds["cf_account_id"]
     api_token  = creds["cf_api_token"]
 
     zones: List[Dict[str, str]] = []
@@ -285,15 +287,7 @@ async def check_cf_hostname(
 
     try:
         creds = _get_cf_creds(session)
-        account_id = creds["cf_account_id"]
-        tunnel_id  = creds["cf_tunnel_id"]
-        api_token  = creds["cf_api_token"]
-
-        cfg_url = (
-            f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
-            f"/cfd_tunnel/{tunnel_id}/configurations"
-        )
-        current_cfg = await _cf_request("GET", cfg_url, api_token)
+        current_cfg = await _cf_request("GET", _cf_tunnel_cfg_url(creds), creds["cf_api_token"])
         result_obj  = current_cfg.get("result") or {}
         ingress     = result_obj.get("config", {}).get("ingress") or []
 
@@ -342,11 +336,6 @@ async def publish_cf_route(
     tunnel_id  = creds["cf_tunnel_id"]
     api_token  = creds["cf_api_token"]
 
-    cfg_url = (
-        f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
-        f"/cfd_tunnel/{tunnel_id}/configurations"
-    )
-
     existing_route = session.exec(select(CfRoute).where(
         CfRoute.app_id == app_id,
         CfRoute.local_port == req.local_port
@@ -358,32 +347,41 @@ async def publish_cf_route(
     )
     is_hostname_change = old_hostname is not None and old_hostname != new_hostname
 
-    current_cfg = await _cf_request("GET", cfg_url, api_token)
-    if not current_cfg.get("success"):
-        errs = current_cfg.get("errors", [])
-        raise HTTPException(502, f"Cloudflare returned failure: {errs}")
-
-    result_obj = current_cfg.get("result") or {}
-    ingress    = result_obj.get("config", {}).get("ingress") or []
-    catch_all  = [r for r in ingress if not r.get("hostname")]
+    # The zone is looked up before anything is changed: a hostname on a
+    # domain that is not in this Cloudflare account can't be published, and
+    # finding that out first means there is nothing to undo.
+    new_zone_id = await _cf_find_zone_id(new_hostname, account_id, api_token)
+    if not new_zone_id:
+        raise HTTPException(
+            400,
+            f"Domain '{new_hostname}' was not found in your Cloudflare account. "
+            f"Make sure the root domain is added to Cloudflare and your API token "
+            f"has Zone:Read + DNS:Edit permissions."
+        )
 
     hostnames_to_strip = {new_hostname}
     if is_hostname_change:
         hostnames_to_strip.add(old_hostname)
-    named = [r for r in ingress if r.get("hostname") and r["hostname"] not in hostnames_to_strip]
+    service = f"http://{get_server_ipv4()}:{req.local_port}"
+    previous_ingress = await _cf_update_ingress(
+        creds,
+        lambda named: [r for r in named if r["hostname"] not in hostnames_to_strip]
+        + [{"hostname": new_hostname, "service": service}],
+    )
 
-    server_ip = get_server_ipv4()
-    named.append({
-        "hostname": new_hostname,
-        "service":  f"http://{server_ip}:{req.local_port}",
-    })
-    new_ingress = named + (catch_all or [{"service": "http_status:404"}])
+    try:
+        dns_record_id = await _cf_upsert_dns_cname(new_zone_id, new_hostname, tunnel_id, api_token)
+    except BaseException as exc:
+        # Put the tunnel back exactly as it was — including the old hostname
+        # of this route, which is still what the database says is published.
+        logging.warning(f"DNS upsert failed for {new_hostname!r}, rolling back ingress: {exc}")
+        try:
+            await _cf_put_ingress(creds, previous_ingress)
+        except Exception as rb_exc:
+            logging.warning(f"Ingress rollback failed: {rb_exc}")
+        raise
 
-    put_resp = await _cf_request("PUT", cfg_url, api_token, {"config": {"ingress": new_ingress}})
-    if not put_resp.get("success"):
-        errs = put_resp.get("errors", [])
-        raise HTTPException(502, f"Cloudflare tunnel update failed: {errs}")
-
+    # Only now that the new name works: drop the old one's DNS record.
     if is_hostname_change:
         try:
             old_zone_id = await _cf_find_zone_id(old_hostname, account_id, api_token)
@@ -393,60 +391,24 @@ async def publish_cf_route(
         except Exception as exc:
             logging.warning(f"Could not delete old DNS CNAME for {old_hostname!r}: {exc}")
 
-    try:
-        new_zone_id = await _cf_find_zone_id(new_hostname, account_id, api_token)
-    except HTTPException as exc:
-        logging.warning(f"Zone lookup failed for {new_hostname!r}, rolling back ingress: {exc.detail}")
-        try:
-            rollback = [r for r in ingress if r.get("hostname") and r["hostname"] not in hostnames_to_strip]
-            rollback += catch_all or [{"service": "http_status:404"}]
-            await _cf_request("PUT", cfg_url, api_token, {"config": {"ingress": rollback}})
-        except Exception as rb_exc:
-            logging.warning(f"Ingress rollback failed: {rb_exc}")
-        raise
-
-    if not new_zone_id:
-        logging.warning(f"Zone not found for {new_hostname!r}, rolling back ingress")
-        try:
-            rollback = [r for r in ingress if r.get("hostname") and r["hostname"] not in hostnames_to_strip]
-            rollback += catch_all or [{"service": "http_status:404"}]
-            await _cf_request("PUT", cfg_url, api_token, {"config": {"ingress": rollback}})
-        except Exception as rb_exc:
-            logging.warning(f"Ingress rollback failed: {rb_exc}")
-        raise HTTPException(
-            400,
-            f"Domain '{new_hostname}' was not found in your Cloudflare account. "
-            f"Make sure the root domain is added to Cloudflare and your API token "
-            f"has Zone:Read + DNS:Edit permissions."
-        )
-
-    try:
-        dns_record_id = await _cf_upsert_dns_cname(new_zone_id, new_hostname, tunnel_id, api_token)
-    except HTTPException as exc:
-        logging.warning(f"DNS upsert failed for {new_hostname!r}, rolling back ingress: {exc.detail}")
-        try:
-            rollback = [r for r in ingress if r.get("hostname") and r["hostname"] not in hostnames_to_strip]
-            rollback += catch_all or [{"service": "http_status:404"}]
-            await _cf_request("PUT", cfg_url, api_token, {"config": {"ingress": rollback}})
-        except Exception as rb_exc:
-            logging.warning(f"Ingress rollback failed: {rb_exc}")
-        raise
-
-    logging.info(f"DNS CNAME upserted: {new_hostname} → {tunnel_id}.cfargotunnel.com (record {dns_record_id})")
-
+    # The tunnel has one rule per hostname, and it now points here. Any other
+    # route that claimed this hostname — another app's, or this app's on a
+    # different port — no longer exists.
     conflicting = session.exec(
         select(CfRoute).where(CfRoute.hostname == new_hostname)
     ).all()
     for c in conflicting:
+        if existing_route is not None and c.id == existing_route.id:
+            continue
         if c.app_id != app_id:
             other_app = session.get(App, c.app_id)
             if other_app and other_app.external_url == f"https://{new_hostname}":
                 other_app.external_url = None
                 session.add(other_app)
-            c.cf_route_id = None
-            c.hostname    = ""
-            session.add(c)
-            logging.info(f"Cleared stale CfRoute ownership of {new_hostname!r} from app {c.app_id}")
+        c.cf_route_id = None
+        c.hostname    = ""
+        session.add(c)
+        logging.info(f"Cleared stale CfRoute ownership of {new_hostname!r} from app {c.app_id}")
 
     route = existing_route or CfRoute(app_id=app_id, local_port=req.local_port)
     route.hostname    = new_hostname
@@ -482,36 +444,16 @@ async def unpublish_cf_route(
         CfRoute.app_id == app_id,
         CfRoute.local_port == local_port
     )).first()
-    
+
     if not route or not route.cf_route_id:
         raise HTTPException(400, "No published route found for this app.")
 
     creds      = _get_cf_creds(session)
     account_id = creds["cf_account_id"]
-    tunnel_id  = creds["cf_tunnel_id"]
     api_token  = creds["cf_api_token"]
+    hostname   = route.hostname
 
-    cfg_url = (
-        f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
-        f"/cfd_tunnel/{tunnel_id}/configurations"
-    )
-
-    hostname = route.hostname
-
-    current_cfg = await _cf_request("GET", cfg_url, api_token)
-    if not current_cfg.get("success"):
-        errs = current_cfg.get("errors", [])
-        raise HTTPException(502, f"Cloudflare returned failure fetching tunnel config: {errs}")
-
-    result_obj  = current_cfg.get("result") or {}
-    ingress     = result_obj.get("config", {}).get("ingress") or []
-    named       = [r for r in ingress if r.get("hostname") and r["hostname"] != hostname]
-    catch_all   = [r for r in ingress if not r.get("hostname")]
-    new_ingress = named + (catch_all or [{"service": "http_status:404"}])
-
-    put_resp = await _cf_request("PUT", cfg_url, api_token, {"config": {"ingress": new_ingress}})
-    if not put_resp.get("success"):
-        raise HTTPException(502, f"Cloudflare tunnel update failed: {put_resp.get('errors')}")
+    await _cf_update_ingress(creds, lambda named: [r for r in named if r["hostname"] != hostname])
 
     try:
         zone_id = await _cf_find_zone_id(hostname, account_id, api_token)
@@ -526,12 +468,13 @@ async def unpublish_cf_route(
     route.cf_route_id = None
     route.hostname    = ""
     session.add(route)
-    
+
     other_active = session.exec(select(CfRoute).where(
         CfRoute.app_id == app_id,
+        CfRoute.id != route.id,
         CfRoute.cf_route_id != None
     )).first()
-    
+
     # external_url may be the hostname that was just removed; point it at a
     # route that still exists rather than leaving a dead link behind.
     app_row.external_url = f"https://{other_active.hostname}" if other_active else None
