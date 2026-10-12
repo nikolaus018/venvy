@@ -6,6 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
+from sqlalchemy import or_, update
 from sqlmodel import select, Session
 
 from venvy.audit import audit_log
@@ -22,6 +23,7 @@ from venvy.auth import (
     get_current_user,
     hash_password,
     _hash_token,
+    _login_gate,
     _LOGIN_MAX_TRIES_PER_USER,
     _login_rate_key,
     _login_user_key,
@@ -110,8 +112,11 @@ def login(
     response: Response,
     session: Session = Depends(get_session),
 ):
+    # Usernames are stored trimmed (see _clean_username); a trailing space
+    # from a phone keyboard must not read as "Invalid credentials".
+    username = payload.username.strip()
     rate_key = _login_rate_key(request)
-    user_key = _login_user_key(payload.username)
+    user_key = _login_user_key(username)
     _check_login_rate(rate_key)
     _check_login_rate(user_key)
 
@@ -122,7 +127,7 @@ def login(
         _check_login_rate(user_key)
         raise HTTPException(status, detail)
 
-    user = session.exec(select(User).where(User.username == payload.username)).first()
+    user = session.exec(select(User).where(User.username == username)).first()
     password_ok = verify_password(payload.password, user.password_hash if user else _DUMMY_PASSWORD_HASH)
     if not user or not password_ok:
         _fail(401, "Invalid credentials.")
@@ -133,8 +138,17 @@ def login(
         step = _totp_verify(_decrypt_secret(user.totp_secret), payload.totp_code, after=user.totp_last_counter)
         if step is None:
             _fail(401, "Invalid authenticator code.")
-        user.totp_last_counter = step
-        session.add(user)   # committed with the new session below
+        # Claim the step in one statement: two logins presenting the same
+        # code at the same moment both pass the check above, and only the
+        # first may win. Committed with the new session below.
+        claimed = session.exec(
+            update(User)
+            .where(User.id == user.id,
+                   or_(User.totp_last_counter.is_(None), User.totp_last_counter < step))
+            .values(totp_last_counter=step)
+        )
+        if claimed.rowcount != 1:
+            _fail(401, "Invalid authenticator code.")
 
     _clear_login_rate(user_key)
     _clear_login_rate(rate_key)
@@ -166,8 +180,11 @@ def change_own_password(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
+    wrong_password = _login_gate(f"pwd:{user.id}")
     if not verify_password(req.current_password, user.password_hash):
+        wrong_password()
         raise HTTPException(401, "Current password is incorrect.")
+    _clear_login_rate(f"pwd:{user.id}")
     if req.password != req.password_confirm:
         raise HTTPException(400, "New passwords do not match.")
     _validate_password_strength(req.password)
@@ -243,6 +260,7 @@ def totp_setup_confirm(
     session.add(user)
     session.delete(setting)
     session.commit()
+    audit_log(user.username, "totp_enable")
     return {"ok": True}
 
 
@@ -253,11 +271,15 @@ def totp_disable(
     user: User = Depends(get_current_user),
 ):
     """Disable TOTP after verifying current password."""
+    wrong_password = _login_gate(f"pwd:{user.id}")
     if not verify_password(req.password, user.password_hash):
+        wrong_password()
         raise HTTPException(401, "Incorrect password.")
+    _clear_login_rate(f"pwd:{user.id}")
     user.totp_enabled = False
     user.totp_secret = None
     user.totp_last_counter = None
     session.add(user)
     session.commit()
+    audit_log(user.username, "totp_disable")
     return {"ok": True}

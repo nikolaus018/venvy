@@ -1,5 +1,6 @@
 """User management routes (admin only)."""
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select, Session
 
 from venvy.api.auth import UserReq
@@ -12,7 +13,7 @@ from venvy.auth import (
     _validate_password_strength,
 )
 from venvy.db import get_session
-from venvy.models import User, UserSession, VALID_ROLES
+from venvy.models import SystemSetting, User, UserSession, VALID_ROLES
 
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
@@ -52,7 +53,12 @@ def create_user(
         password_hash=hash_password(req.password),
         role=role,
     ))
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # Lost a race with another request creating the same name.
+        session.rollback()
+        raise HTTPException(400, "Username taken.")
     audit_log(admin.username, "user_create", f"created user '{username}' with role '{role}'")
     return {"ok": True}
 
@@ -71,6 +77,12 @@ async def delete_user(
         # must never delete or stop any app. Only the account and its sessions go.
         for db_session_row in session.exec(select(UserSession).where(UserSession.user_id == user_id)).all():
             session.delete(db_session_row)
+        # An authenticator enrolment that was started and never confirmed.
+        # User ids are reused, so left behind it would be offered to
+        # whoever gets this id next.
+        pending_totp = session.get(SystemSetting, f"totp_pending_{user_id}")
+        if pending_totp:
+            session.delete(pending_totp)
         session.delete(user)
         session.commit()
         audit_log(current_user.username, "user_delete", f"deleted user '{user.username}' (id={user_id})")

@@ -314,7 +314,7 @@ def _check_login_rate(key: str) -> None:
             raise HTTPException(
                 429,
                 f'Too many failed attempts. Try again in {remaining} seconds.',
-                headers={'X-Retry-After': str(remaining)},
+                headers={'Retry-After': str(remaining), 'X-Retry-After': str(remaining)},
             )
 
 
@@ -332,6 +332,20 @@ def _record_login_failure(key: str, max_tries: int = _LOGIN_MAX_TRIES) -> None:
         if entry['count'] >= max_tries:
             entry['locked_until'] = time.time() + _LOGIN_LOCKOUT_SEC
             entry['count'] = 0
+
+
+def _login_gate(key: str, max_tries: int = _LOGIN_MAX_TRIES):
+    """For password prompts other than the login form (changing the
+    password, switching 2FA off): returns fail(), to be called when the
+    password was wrong, after answering 429 if *key* is locked out. A
+    signed-in session must not be a way to guess the password at leisure."""
+    _check_login_rate(key)
+
+    def fail() -> None:
+        _record_login_failure(key, max_tries)
+        _check_login_rate(key)
+
+    return fail
 
 
 def _clear_login_rate(key: str) -> None:
@@ -362,14 +376,16 @@ def _purge_login_attempts() -> None:
 # ---------------------------------------------------------------------------
 # Same sliding-window-of-attempts pattern as the login limiter above, but scoped
 # to a generous ceiling meant to catch a compromised/buggy frontend session or
-# script hammering the host, not to throttle normal interactive use.
+# script hammering the host, not to throttle normal interactive use. The file
+# manager sends one request per item, so selecting a few hundred files and
+# deleting or moving them has to fit under it.
 _mutation_hits: dict = {}
 
 
 _mutation_lock = threading.Lock()
 
 
-_MUTATION_MAX_PER_WINDOW = 60
+_MUTATION_MAX_PER_WINDOW = 600
 
 
 _MUTATION_WINDOW_SEC = 60
@@ -388,6 +404,15 @@ def rate_limit_mutations(request: Request) -> None:
             raise HTTPException(
                 429,
                 "Too many requests. Please slow down.",
-                headers={"X-Retry-After": str(_MUTATION_WINDOW_SEC)},
+                headers={"Retry-After": str(_MUTATION_WINDOW_SEC), "X-Retry-After": str(_MUTATION_WINDOW_SEC)},
             )
         hits.append(now)
+
+
+def _purge_mutation_hits() -> None:
+    """Forget clients whose window has emptied (called periodically). Without
+    it the table kept one entry for every address that ever made a request."""
+    cutoff = time.time() - _MUTATION_WINDOW_SEC
+    with _mutation_lock:
+        for key in [k for k, hits in _mutation_hits.items() if not hits or hits[-1] < cutoff]:
+            _mutation_hits.pop(key, None)
