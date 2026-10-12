@@ -49,6 +49,7 @@
         const _MAX_POLL_FAILURES = 3;
 
         let _pollInflight = false;
+        let _pollTick = 0;
         function startPolling() {
             if (pollInterval) clearInterval(pollInterval);
             _pollFailures = 0;
@@ -74,6 +75,14 @@
                     _pollFailures = 0;  // reset on success
                     const apps = await res.json();
                     setConnected(true);
+                    // The sidebar filter, the command palette, [ / ] and deep
+                    // links all read this list; it has to follow the server.
+                    _cachedApps = apps;
+                    // Deleted from another browser, or by a restore: don't
+                    // leave the dashboard of an app that no longer exists.
+                    if (activeAppId != null && !apps.some(a => a.id === activeAppId)) {
+                        deselectApp(`"${activeApp?.name || 'This application'}" no longer exists — it was deleted.`);
+                    }
                     apps.forEach(app => {
                         const m = statusMeta(app.status);
                         const dot = document.getElementById(`status-dot-${app.id}`);
@@ -122,8 +131,10 @@
                         applyStatusBadge(badge, activeApp?.status);
                     }
 
-                    // If system view is active, update system metrics
-                    if (!document.getElementById('system-view').classList.contains('hidden')) {
+                    // If system view is active, update system metrics. Every
+                    // third tick: the server samples them every 2.5 s, and
+                    // listing the host's ports is not free.
+                    if (++_pollTick % 3 === 0 && !document.getElementById('system-view').classList.contains('hidden')) {
                         loadSystemView();
                     }
 

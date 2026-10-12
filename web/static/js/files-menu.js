@@ -105,28 +105,31 @@
         document.getElementById('ctx-paste').onclick = async (e) => {
             e.stopPropagation();
             if (!fileClipboard || !fileClipboard.paths.length) return;
-            const op = fileClipboard.op;
+            closeCtxMenu();
+            const clip = fileClipboard, op = clip.op, appId = activeAppId;
+            const targetPath = currentBrowserPath, failed = [];
             let successCount = 0;
-            let targetPath = currentBrowserPath;
 
             // Sequential block for simplicity
-            for (let i = 0; i < fileClipboard.paths.length; i++) {
-                const srcPath = fileClipboard.paths[i];
-                const destPath = targetPath ? `${targetPath}/${fileClipboard.filenames[i]}` : fileClipboard.filenames[i];
+            for (let i = 0; i < clip.paths.length; i++) {
+                const srcPath = clip.paths[i];
+                const destPath = targetPath ? `${targetPath}/${clip.filenames[i]}` : clip.filenames[i];
 
                 if (destPath === srcPath) continue; // skip identical
-                try {
-                    const res = await fetch(`${API}/apps/${activeAppId}/files/op`, {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ operation: op, path: srcPath, new_path: destPath })
-                    });
-                    if (res.ok) successCount++;
-                } catch (err) { console.error(`Failed to ${op} ${srcPath}`, err); }
+                // A folder can't be put inside itself.
+                if (targetPath === srcPath || targetPath.startsWith(srcPath + '/')) {
+                    failed.push({ name: clip.filenames[i], error: 'a folder can\'t go inside itself' });
+                    continue;
+                }
+                const error = await _fileOp(appId, { operation: op, path: srcPath, new_path: destPath });
+                if (error) failed.push({ name: clip.filenames[i], error });
+                else { successCount++; if (op === 'rename') _onPathMoved(srcPath, destPath); }
             }
             if (successCount > 0) {
                 showToast(`Pasted ${successCount} item${successCount > 1 ? 's' : ''}`, 'success', 2000);
             }
-            if (fileClipboard.op === 'rename') fileClipboard = null;
-            loadFiles(currentBrowserPath);
-            closeCtxMenu();
+            _reportFileOpFailures(op === 'copy' ? 'copy' : 'move', failed);
+            // A cut is used up — unless nothing moved, so it can be retried elsewhere.
+            if (op === 'rename' && successCount > 0 && fileClipboard === clip) fileClipboard = null;
+            if (appId === activeAppId) loadFiles(currentBrowserPath);
         };

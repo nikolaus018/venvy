@@ -36,6 +36,9 @@
                     if (!data.user_exists) {
                         document.getElementById('setup-hint').classList.remove('hidden');
                         document.getElementById('login-form').dataset.mode = 'setup';
+                        // A password being chosen, not recalled: lets a
+                        // password manager offer to generate and save one.
+                        document.getElementById('password').autocomplete = 'new-password';
                     }
                 }
             } catch (e) {
@@ -295,7 +298,7 @@
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(data.detail || 'Verification failed');
                 closeModal('totp-setup-modal');
-                showToast('2FA enabled — protect your backup codes!', 'success', 4000);
+                showToast('Two-factor authentication is on. There are no backup codes — keep the authenticator app safe.', 'success', 7000);
                 // Update local state
                 if (currentUser) currentUser.totp_enabled = true;
             } catch (e) {

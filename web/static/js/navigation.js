@@ -5,8 +5,25 @@
         const TABS = ['terminal', 'files', 'logs', 'packages', 'settings'];
         let currentTab = 'terminal';
 
+        // A shell and the file manager need an operator; a viewer's app view
+        // starts (and stays) on what it may read.
+        function tabAllowed(tab) {
+            return currentUser?.role !== 'viewer' || (tab !== 'terminal' && tab !== 'files');
+        }
+
+        function defaultTab() {
+            return currentUser?.role === 'viewer' ? 'logs' : 'terminal';
+        }
+
+        const LOG_POLL_MS = 1000;
+        function startLogPolling() {
+            if (logInterval) { clearInterval(logInterval); logInterval = null; }
+            loadLogs();
+            if (!document.hidden) logInterval = setInterval(loadLogs, LOG_POLL_MS);
+        }
+
         function switchTab(tab, opts = {}) {
-            if (!TABS.includes(tab)) tab = 'terminal';
+            if (!TABS.includes(tab) || !tabAllowed(tab)) tab = defaultTab();
             currentTab = tab;
             document.querySelectorAll('.tab-content').forEach(el => {
                 el.classList.add('hidden');
@@ -36,8 +53,7 @@
             }
 
             if (logInterval) { clearInterval(logInterval); logInterval = null; _logsInflight = false; }
-            if (tab === 'logs' && !document.hidden) { loadLogs(); logInterval = setInterval(loadLogs, 1000); }
-            else if (tab === 'logs') loadLogs();
+            if (tab === 'logs') startLogPolling();
             if (tab === 'files') loadFiles(currentBrowserPath);
             if (tab === 'packages') loadPackages();
             if (tab === 'terminal' && window.term && window.fitAddon) setTimeout(_termFit, 100);

@@ -361,8 +361,10 @@
                 document.getElementById('dashboard').classList.remove('hidden');
             }
 
-            switchTab(opts.tab && TABS.includes(opts.tab) ? opts.tab : 'terminal');
-            initTerminal(id);
+            switchTab(opts.tab && TABS.includes(opts.tab) ? opts.tab : defaultTab());
+            // A viewer may not open a shell; connecting anyway only produced
+            // a row of failed reconnects.
+            if (tabAllowed('terminal')) initTerminal(id); else _termDestroy();
             syncHash();
             if (found) announce(`${found.name} selected, ${statusMeta(found.status).label}`);
 
@@ -372,8 +374,9 @@
                 if (!res.ok) return;
                 const apps = await res.json();
                 _cachedApps = apps;
+                if (activeAppId !== id) return;   // switched again while this was loading
                 activeApp = apps.find(a => a.id === id);
-                if (!activeApp) { activeAppId = null; return; }
+                if (!activeApp) { deselectApp('That application no longer exists.'); return; }
                 renderAppList(apps);
                 _renderDashboard(activeApp);
             } catch (e) {
@@ -402,6 +405,32 @@
                     } catch (e) { }
                 }, 2000);
             }
+        }
+
+        // Back to "no application selected": after deleting the open app, or
+        // when it turns out to be gone (deleted elsewhere, or by a restore).
+        function deselectApp(message) {
+            if (_portPollTimer) { clearInterval(_portPollTimer); _portPollTimer = null; }
+            if (logInterval) { clearInterval(logInterval); logInterval = null; }
+            _termDestroy();
+            _termAppId = null;
+            activeAppId = null; activeApp = null;
+            _resetEditor();
+            currentBrowserPath = ''; fileClipboard = null;
+            _logRaw = ''; _logRenderedKey = '';
+            // Nothing left that could be unsaved.
+            document.getElementById('save-status-dot')?.classList.add('hidden');
+            document.querySelector('#tabbtn-settings .settings-dirty-dot')?.remove();
+            ['delete-app-modal', 'remove-pkg-modal', 'file-name-modal', 'tunnel-conflict-modal'].forEach(closeModal);
+            _lastAppListHash = '';
+            document.getElementById('dashboard').classList.add('hidden');
+            if (!_isSystemViewActive()) {
+                document.getElementById('empty-state').classList.remove('hidden');
+                document.title = 'Venvy';
+            }
+            syncHash();
+            renderAppList(_cachedApps);
+            if (message) showToast(message, 'warn', 6000);
         }
 
         // Renders all dashboard fields from an app object — called on select and on poll update.

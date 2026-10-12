@@ -27,13 +27,16 @@
             const isPythonRuntime = _isPythonPackageRuntime();
             _syncPackagesTabRuntimeUi();
             tbody.innerHTML = `<tr><td colspan="${isPythonRuntime ? 3 : 2}" class="text-center py-8 text-sm" style="color:var(--text3)">Fetching environment...</td></tr>`;
+            const appId = activeAppId;
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}/packages`);
+                const res = await fetch(`${API}/apps/${appId}/packages`);
+                if (appId !== activeAppId) return;   // another app is on screen by now
                 if (!res.ok) {
                     tbody.innerHTML = `<tr><td colspan="${isPythonRuntime ? 3 : 2}" class="text-center py-8 text-sm" style="color:var(--red)">Failed to load packages.</td></tr>`;
                     return;
                 }
                 const pkgs = await res.json();
+                if (appId !== activeAppId) return;
                 tbody.innerHTML = pkgs.map(p => {
                     const rowHtml = `
             <tr class="transition" style="border-color:var(--border)">
@@ -42,7 +45,7 @@
                 ${isPythonRuntime ? `
                     <td class="px-3 md:px-5 py-3 text-right">
                         ${p.name.toLowerCase() === 'pip' ? `<span class="text-xs italic hidden sm:inline" style="color:var(--text3)">System</span>` :
-                            `<button data-pkg="${escapeHtml(p.name)}" class="pkg-rm-btn remove-btn btn-danger inline-flex items-center justify-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg transition">
+                            `<button data-pkg="${escapeHtml(p.name)}" data-requires-operator class="pkg-rm-btn remove-btn btn-danger inline-flex items-center justify-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg transition">
                             <svg class="w-3 h-3 remove-btn-icon shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                             <span class="hidden md:inline">Remove</span>
                         </button>`}
@@ -117,6 +120,7 @@
                         installBtn.className = 'text-xs font-bold px-3 py-1 rounded-lg transition';
                         installBtn.style.cssText = 'color:var(--blue);background:var(--ov);border:1px solid var(--ov-strong)';
                         installBtn.textContent = 'Install';
+                        installBtn.setAttribute('data-requires-operator', '');
                         installBtn.addEventListener('click', () => installSingle(pkg, installBtn));
                         li.appendChild(nameSpan); li.appendChild(installBtn);
                         missingList.appendChild(li);

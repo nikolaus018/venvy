@@ -11,18 +11,24 @@
             const cmds = [];
             const running = activeApp?.status === 'running';
 
+            // Read-only accounts are not offered what the server would refuse.
+            const canOperate = currentUser?.role !== 'viewer';
+
             if (activeApp) {
-                if (!running) cmds.push({ icon: 'play', label: 'Start application', hint: activeApp.name, run: () => controlApp('start') });
-                if (running) cmds.push({ icon: 'refresh-cw', label: 'Restart application', hint: activeApp.name, run: () => controlApp('restart') });
-                if (running) cmds.push({ icon: 'square', label: 'Stop application', hint: activeApp.name, run: () => controlApp('stop') });
-                TABS.forEach((t, i) => cmds.push({
-                    icon: 'chevron-right',
-                    label: 'Go to ' + t.charAt(0).toUpperCase() + t.slice(1),
-                    hint: String(i + 1),
-                    run: () => switchTab(t),
-                }));
+                if (canOperate && !running) cmds.push({ icon: 'play', label: 'Start application', hint: activeApp.name, run: () => controlApp('start') });
+                if (canOperate && running) cmds.push({ icon: 'refresh-cw', label: 'Restart application', hint: activeApp.name, run: () => controlApp('restart') });
+                if (canOperate && running) cmds.push({ icon: 'square', label: 'Stop application', hint: activeApp.name, run: () => controlApp('stop') });
+                TABS.forEach((t, i) => {
+                    if (!tabAllowed(t)) return;
+                    cmds.push({
+                        icon: 'chevron-right',
+                        label: 'Go to ' + t.charAt(0).toUpperCase() + t.slice(1),
+                        hint: String(i + 1),
+                        run: () => switchTab(t),
+                    });
+                });
             }
-            cmds.push({ icon: 'plus', label: 'New application', run: () => openModal('create-app-modal') });
+            if (canOperate) cmds.push({ icon: 'plus', label: 'New application', run: () => openModal('create-app-modal') });
             cmds.push({ icon: 'monitor', label: 'System overview', run: () => openSystemView(true) });
             if (currentUser?.role === 'admin') {
                 cmds.push({ icon: 'users', label: 'Manage users', run: () => openUsersModal() });
@@ -253,7 +259,7 @@
                         document.getElementById('app-search')?.focus();
                     }
                     return;
-                case '1': case '2': case '3': case '4': case '5': case '6':
+                case '1': case '2': case '3': case '4': case '5':
                     if (!activeAppId) return;
                     e.preventDefault(); switchTab(TABS[Number(e.key) - 1]); return;
                 case '[': case ']':

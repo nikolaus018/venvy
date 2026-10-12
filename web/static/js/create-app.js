@@ -142,13 +142,13 @@
                         fetch(`${API}/auth/status`).then(r => r.json()).then(d => {
                             if (d.authenticated) {
                                 startPolling();
-                                if (logsTabVisible && activeAppId) { loadLogs(); logInterval = setInterval(loadLogs, 2500); }
+                                if (logsTabVisible && activeAppId) startLogPolling();
                             } else {
                                 _showReAuthOverlay();
                             }
                         }).catch(() => { startPolling(); }); // network error — optimistically resume
                     } else {
-                        if (logsTabVisible && activeAppId && !logInterval) { loadLogs(); logInterval = setInterval(loadLogs, 2500); }
+                        if (logsTabVisible && activeAppId && !logInterval) startLogPolling();
                     }
                 }
             }

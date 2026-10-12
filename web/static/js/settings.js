@@ -13,6 +13,7 @@
         let _hostCapacity = { memMB: null, cores: null };
 
         async function _loadHostCapacity() {
+            if (currentUser?.role !== 'admin') return;   // admin-only endpoint: keep the generic bounds
             try {
                 const res = await fetch(`${API}/system/metrics`);
                 if (!res.ok) return; // non-admin (403) or psutil missing — keep the generic fallback bounds
@@ -189,6 +190,22 @@
             if (portsStr && manualPorts.length === 0) {
                 showToast('Invalid ports format. Use comma-separated numbers.', 'warn'); return;
             }
+            if (!name) {
+                showToast('The application needs a name.', 'warn');
+                document.getElementById('setting-name').focus();
+                return;
+            }
+            // The port box also shows a port that was only detected. Sending
+            // that back would pin it as a manual port: detection stops, and
+            // the app is told to use it (PORT=…) on every later start. Only
+            // send the ports when they are really set by hand.
+            let storedManualPorts = [];
+            try {
+                const parsed = JSON.parse(activeApp?.manual_ports || '[]');
+                if (Array.isArray(parsed)) storedManualPorts = parsed;
+            } catch { }
+            const portsUntouched = storedManualPorts.length === 0
+                && manualPorts.length === 1 && manualPorts[0] === activeApp?.port;
             if (memoryLimit !== 0 && (memoryLimit < 16 || memoryLimit > 1048576)) {
                 showToast('Memory limit must be between 16 and 1,048,576 MB (or 0 for unlimited).', 'warn'); return;
             }
@@ -220,7 +237,7 @@
                 start_on_boot: boot,
                 ...(envUntouched ? {} : { env_vars: env }),
                 entrypoint,
-                manual_ports: manualPorts,
+                ...(portsUntouched ? {} : { manual_ports: manualPorts }),
                 url_source_pref: _getOpenUrlPref(),
                 memory_limit_mb: memoryLimit,
                 cpu_limit_percent: cpuLimit
@@ -231,7 +248,7 @@
             _showAutosave('saving');
 
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}`, {
+                const res = await fetch(`${API}/apps/${targetAppId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
@@ -259,7 +276,7 @@
                 activeApp = saved;
 
                 // Sync UI
-                let portsDisplay = '';
+                let portsDisplay = activeApp.port ? String(activeApp.port) : '';
                 try {
                     const m_ports = JSON.parse(activeApp.manual_ports || '[]');
                     if (Array.isArray(m_ports) && m_ports.length > 0) {
@@ -267,6 +284,11 @@
                     }
                 } catch (e) { }
                 document.getElementById('setting-port').value = portsDisplay;
+                document.getElementById('setting-name').value = activeApp.name || '';
+                document.getElementById('dash-title').innerText = activeApp.name;
+                document.title = `${activeApp.name} · Venvy`;
+                _cachedApps = _cachedApps.map(a => a.id === activeApp.id ? activeApp : a);
+                renderAppList(_cachedApps);
                 document.getElementById('setting-entrypoint').value = activeApp.entrypoint || '';
                 const savedMemLimit = activeApp.memory_limit_mb ?? 0, savedCpuLimit = activeApp.cpu_limit_percent ?? 0;
                 _setResourceLimitsToggle(savedMemLimit > 0 || savedCpuLimit > 0);
@@ -299,6 +321,7 @@
             const portsStr = document.getElementById('setting-port').value.trim();
             const manualPorts = portsStr.split(/[\s,]+/).map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
             const entrypoint = document.getElementById('setting-entrypoint').value.trim();
+            const name = document.getElementById('setting-name').value.trim();
 
             let currentManualPorts = [];
             try {
@@ -330,6 +353,7 @@
             const { memoryLimit, cpuLimit } = _readResourceLimits();
 
             const isDirty = (
+                name !== (activeApp.name || '').trim() ||
                 runtime !== (activeApp.runtime || 'python') ||
                 policy !== activeApp.restart_policy ||
                 boot !== activeApp.start_on_boot ||
@@ -379,7 +403,7 @@
             ['setting-runtime', 'setting-policy', 'setting-boot'].forEach(id => {
                 document.getElementById(id)?.addEventListener('change', checkSettingsDirty);
             });
-            ['setting-entrypoint', 'setting-env', 'setting-port', 'setting-memory-limit', 'setting-cpu-limit'].forEach(id => {
+            ['setting-name', 'setting-entrypoint', 'setting-env', 'setting-port', 'setting-memory-limit', 'setting-cpu-limit'].forEach(id => {
                 document.getElementById(id)?.addEventListener('input', checkSettingsDirty);
             });
         }
@@ -398,30 +422,41 @@
         }
         async function downloadAppZip() {
             if (!activeAppId) return;
+            // Pinned for the whole export: it takes a while, and switching to
+            // another app halfway would otherwise finish the archive with
+            // that app's files.
+            const appId = activeAppId, appName = activeApp?.name || 'app';
             const btn = document.getElementById('btn-download-zip');
             const originalHTML = btn.innerHTML;
             btn.disabled = true;
             btn.innerHTML = `<div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> Compressing...`;
             try {
                 const zip = new JSZip();
+                const unreadable = [];
                 async function addFolderToZip(folderPath, zipInstance) {
-                    const res = await fetch(`${API}/apps/${activeAppId}/files/tree?path=${encodeURIComponent(folderPath)}`);
+                    const res = await fetch(`${API}/apps/${appId}/files/tree?path=${encodeURIComponent(folderPath)}`);
                     if (!res.ok) throw new Error("Failed to list files");
                     const items = await res.json();
                     const dirs = items.filter(i => i.is_dir), files = items.filter(i => !i.is_dir);
                     for (const dir of dirs) await addFolderToZip(dir.path, zipInstance.folder(dir.name));
                     await _batchedRun(files.map(file => async () => {
-                        const fileRes = await fetch(`${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(file.path)}`);
+                        const fileRes = await fetch(`${API}/apps/${appId}/files/download?path=${encodeURIComponent(file.path)}`);
                         if (fileRes.ok) zipInstance.file(file.name, await fileRes.blob());
+                        else unreadable.push(file.path);
                     }), 5);
                 }
                 await addFolderToZip("", zip);
                 const content = await zip.generateAsync({ type: "blob" });
                 const url = window.URL.createObjectURL(content);
                 const a = document.createElement('a');
-                a.href = url; a.download = `${activeApp?.name || 'app'}_source.zip`;
+                a.href = url; a.download = `${appName.replace(/[\\/:*?"<>|]+/g, '_')}_source.zip`;
                 document.body.appendChild(a); a.click();
-                window.URL.revokeObjectURL(url); document.body.removeChild(a);
+                // Not straight away: some browsers only start reading the
+                // blob after this handler has returned.
+                setTimeout(() => { window.URL.revokeObjectURL(url); a.remove(); }, 1000);
+                if (unreadable.length) {
+                    showToast(`${unreadable.length} file(s) could not be read and are not in the archive: ${unreadable.slice(0, 3).join(', ')}${unreadable.length > 3 ? '…' : ''}`, 'warn', 10000);
+                }
             } catch (e) { showToast("Export failed: " + e.message, "error"); }
             finally { btn.disabled = false; btn.innerHTML = originalHTML; _featherReplace(); }
         }
@@ -455,24 +490,24 @@
                 input.focus();
                 return;
             }
-            const deletedName = activeApp.name;
+            const deletedName = activeApp.name, deletedId = activeAppId;
             closeModal('delete-app-modal');
             // Clean up terminal resources before deleting
             _termDestroy();
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}`, { method: 'DELETE' });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || `Server returned ${res.status}`);
-                }
+                const res = await fetch(`${API}/apps/${deletedId}`, { method: 'DELETE' });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(body.detail || `Server returned ${res.status}`);
                 showToast(`Deleted "${deletedName}".`, 'success', 3000);
-                activeAppId = null; activeApp = null;
-                document.title = 'Venvy';
-                if (logInterval) { clearInterval(logInterval); logInterval = null; }
-                _lastAppListHash = '';
-                document.getElementById('dashboard').classList.add('hidden');
-                document.getElementById('empty-state').classList.remove('hidden');
-                syncHash();
+                // The app is gone, but something outside Venvy may still point
+                // at it (a tunnel hostname Cloudflare would not let go of).
+                (body.warnings || []).forEach(w => showToast(w, 'warn'));
+                _cachedApps = _cachedApps.filter(a => a.id !== deletedId);
+                if (activeAppId === deletedId) deselectApp();
                 loadApps();
-            } catch (e) { showToast('Delete failed: ' + (e.message || 'unknown error'), 'error'); }
+            } catch (e) {
+                showToast('Delete failed: ' + (e.message || 'unknown error'), 'error');
+                // Still there, so its terminal should be too.
+                if (activeAppId === deletedId && tabAllowed('terminal')) initTerminal(deletedId);
+            }
         }

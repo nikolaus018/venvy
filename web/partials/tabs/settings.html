@@ -300,7 +300,7 @@
                                         <!-- Button row — mutually exclusive states managed by loadCfRouteStatus() -->
                                         <div class="flex gap-3">
                                             <!-- UNPUBLISHED: single Publish button -->
-                                            <button onclick="publishCfRoute()" id="cf-publish-btn"
+                                            <button onclick="publishCfRoute()" id="cf-publish-btn" data-requires-operator
                                                 class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
                                                 style="display:flex">
                                                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -310,7 +310,7 @@
                                                 Publish
                                             </button>
                                             <!-- PUBLISHED: Republish + Remove side-by-side -->
-                                            <button onclick="publishCfRoute()" id="cf-republish-btn"
+                                            <button onclick="publishCfRoute()" id="cf-republish-btn" data-requires-operator
                                                 class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
                                                 style="display:none">
                                                 <svg class="w-4 h-4" fill="none" stroke="currentColor"
@@ -320,7 +320,7 @@
                                                 </svg>
                                                 Republish
                                             </button>
-                                            <button onclick="unpublishCfRoute()" id="cf-unpublish-btn"
+                                            <button onclick="unpublishCfRoute()" id="cf-unpublish-btn" data-requires-operator
                                                 class="btn-danger py-3 px-5 text-sm items-center justify-center gap-2"
                                                 style="display:none">
                                                 <svg class="w-4 h-4" fill="none" stroke="currentColor"
@@ -346,7 +346,7 @@
                                 </h3>
                                 <p class="text-sm mb-4" style="color:var(--text3)">Download a .zip archive with all
                                     source files for this application.</p>
-                                <button onclick="downloadAppZip()" id="btn-download-zip"
+                                <button onclick="downloadAppZip()" id="btn-download-zip" data-requires-operator
                                     class="btn-secondary w-full py-3 text-sm flex items-center justify-center gap-2">
                                     <i data-feather="archive" class="w-4 h-4"></i> Download Source Code
                                 </button>
@@ -359,7 +359,7 @@
                                 </h3>
                                 <p class="text-xs mb-4" style="color:var(--text3)">Permanently delete this application
                                     and all its files.</p>
-                                <button onclick="deleteApp()"
+                                <button onclick="deleteApp()" data-requires-operator
                                     class="btn-danger w-full py-3 rounded-xl text-sm font-medium">Delete
                                     Application</button>
                             </div>

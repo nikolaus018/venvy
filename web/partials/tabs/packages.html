@@ -3,7 +3,7 @@
                         class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
                         <div class="max-w-3xl mx-auto">
                             <!-- Install input -->
-                            <div id="pkg-install-controls" class="flex gap-3 mb-5 flex-col md:flex-row">
+                            <div id="pkg-install-controls" data-requires-operator class="flex gap-3 mb-5 flex-col md:flex-row">
                                 <input type="text" id="pkg-input" placeholder="Package name, e.g. numpy==1.26"
                                     class="inp flex-1 px-4 py-3 text-sm"
                                     onkeydown="if(event.key==='Enter') installPackage()">
@@ -34,7 +34,7 @@
                                                 style="color:var(--text)"><i data-feather="alert-triangle"
                                                     class="w-3.5 h-3.5"></i> <span id="scan-missing-count"></span>
                                                 missing</span>
-                                            <button onclick="installAllMissing()" id="install-all-btn"
+                                            <button onclick="installAllMissing()" id="install-all-btn" data-requires-operator
                                                 class="btn-secondary text-xs px-4 py-1.5 flex items-center gap-1.5">
                                                 <i data-feather="download" class="w-3 h-3"></i> Install All
                                             </button>

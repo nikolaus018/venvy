@@ -2,8 +2,63 @@
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
         // ── Files ─────────────────────────────────────────────────────────────────
+        // One request to the file API for a change (create, rename, copy,
+        // delete). Resolves to null on success, otherwise to why it failed.
+        async function _fileOp(appId, body) {
+            try {
+                const res = await fetch(`${API}/apps/${appId}/files/op`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (res.ok) return null;
+                const e = await res.json().catch(() => ({}));
+                return (typeof e.detail === 'string' && e.detail) || `HTTP ${res.status}`;
+            } catch (e) { return 'network error'; }
+        }
+
+        function _reportFileOpFailures(verb, failed) {
+            if (!failed.length) return;
+            const shown = failed.slice(0, 3).map(f => `${f.name} (${f.error})`).join('; ');
+            showToast(`Could not ${verb} ${shown}${failed.length > 3 ? ` …and ${failed.length - 3} more` : ''}`, 'error');
+        }
+
+        // The file in the editor is saved back by its path. When that path
+        // moves or goes away underneath it, the editor has to follow —
+        // otherwise the next Save quietly re-creates the old file.
+        function _onPathMoved(oldPath, newPath) {
+            if (!_openFilePath) return;
+            if (_openFilePath !== oldPath && !_openFilePath.startsWith(oldPath + '/')) return;
+            _openFilePath = newPath + _openFilePath.slice(oldPath.length);
+            const el = document.getElementById('current-filename');
+            if (el) { el.dataset.path = _openFilePath; el.innerText = _openFilePath.split('/').pop(); }
+        }
+
+        function _onPathDeleted(path) {
+            if (_openFilePath && (_openFilePath === path || _openFilePath.startsWith(path + '/'))) _resetEditor();
+        }
+
+        // Rows dragged inside the file manager, dropped on a folder.
+        async function _moveDraggedInto(dataStr, targetPath) {
+            let items;
+            try { items = JSON.parse(dataStr).items; } catch (e) { showToast('Move failed.', 'error'); return; }
+            const appId = activeAppId, failed = [];
+            let moved = 0;
+            for (const item of items || []) {
+                const destPath = targetPath ? `${targetPath}/${item.name}` : item.name;
+                // Onto itself, or a folder into its own subtree.
+                if (item.sourcePath === destPath || targetPath === item.sourcePath || targetPath.startsWith(item.sourcePath + '/')) continue;
+                const error = await _fileOp(appId, { operation: 'rename', path: item.sourcePath, new_path: destPath });
+                if (error) failed.push({ name: item.name, error });
+                else { moved++; _onPathMoved(item.sourcePath, destPath); }
+            }
+            _reportFileOpFailures('move', failed);
+            if ((moved || failed.length) && appId === activeAppId) loadFiles(currentBrowserPath);
+        }
+
+        let _filesReqSeq = 0;
         async function loadFiles(path = '') {
             currentBrowserPath = path || '';
+            const appId = activeAppId, seq = ++_filesReqSeq;
             selectedFiles.clear(); // Clear selections on navigation
             lastSelectedPath = null;
             const pathEl = document.getElementById('current-browser-path');
@@ -28,10 +83,14 @@
                 }
             }
             let res;
-            try { res = await fetch(`${API}/apps/${activeAppId}/files/tree?path=${encodeURIComponent(path)}`); }
-            catch (e) { showToast('Network error loading files.', 'error'); return; }
+            try { res = await fetch(`${API}/apps/${appId}/files/tree?path=${encodeURIComponent(path)}`); }
+            catch (e) { if (seq === _filesReqSeq) showToast('Network error loading files.', 'error'); return; }
+            // A slower answer for a folder (or an app) the user has already
+            // left must not replace the listing that is on screen now.
+            if (seq !== _filesReqSeq || appId !== activeAppId) return;
             if (!res.ok) { showToast('Failed to load file tree.', 'error'); return; }
             const files = await res.json();
+            if (seq !== _filesReqSeq || appId !== activeAppId) return;
             const tree = document.getElementById('file-tree');
             // Don't clear immediately to avoid flicker or empty state on network jitter
             let html = '';
@@ -200,21 +259,7 @@
                         try { dataStr = e.dataTransfer.getData('application/json') || e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text'); } catch (err) { }
 
                         if (dataStr && dataStr.includes('venvy_move')) {
-                            try {
-                                const data = JSON.parse(dataStr);
-                                let successCount = 0;
-                                const targetPath = rPath; // The folder we dropped ONTO
-                                for (const item of data.items) {
-                                    const destPath = targetPath ? `${targetPath}/${item.name}` : item.name;
-                                    if (item.sourcePath === destPath || targetPath.startsWith(item.sourcePath + '/') || targetPath === item.sourcePath) continue;
-                                    const res = await fetch(`${API}/apps/${activeAppId}/files/op`, {
-                                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ operation: 'rename', path: item.sourcePath, new_path: destPath })
-                                    });
-                                    if (res.ok) successCount++;
-                                }
-                                if (successCount > 0) loadFiles(currentBrowserPath);
-                            } catch (err) { showToast('Move failed.', 'error'); }
+                            await _moveDraggedInto(dataStr, rPath);   // the folder it was dropped onto
                             return;
                         }
 
@@ -309,11 +354,17 @@
             const restorePrev = () => { filenameEl.innerText = prevName; filenameEl.dataset.path = prevPath || ''; _openFilePath = prevOpen; };
             filenameEl.innerText = 'Loading…'; filenameEl.dataset.path = ''; _openFilePath = null;
             const ctrl = new AbortController();
+            // If the user switches to another app while this loads, the
+            // editor has been reset for that app: putting this file into it
+            // would have the next Save write it into the wrong application.
+            const appId = activeAppId;
+            const stale = () => appId !== activeAppId;
             // On any failure put the header back the way it was: the editor
             // still holds the previous file, and it must stay saveable.
             let res;
-            try { res = await fetch(`${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(path)}`, { signal: ctrl.signal }); }
-            catch (e) { restorePrev(); showToast('Network error opening file.', 'error'); return; }
+            try { res = await fetch(`${API}/apps/${appId}/files/download?path=${encodeURIComponent(path)}`, { signal: ctrl.signal }); }
+            catch (e) { if (!stale()) { restorePrev(); showToast('Network error opening file.', 'error'); } return; }
+            if (stale()) { ctrl.abort(); return; }
             if (!res.ok) { restorePrev(); showToast("File not found or unreadable", 'error'); return; }
             // Don't pull huge files into the editor — Ace freezes the tab on them.
             const size = parseInt(res.headers.get('content-length') || '0', 10);
@@ -324,14 +375,23 @@
             }
             let buf;
             try { buf = new Uint8Array(await res.arrayBuffer()); }
-            catch (e) { restorePrev(); showToast('Network error opening file.', 'error'); return; }
+            catch (e) { if (!stale()) { restorePrev(); showToast('Network error opening file.', 'error'); } return; }
+            if (stale()) return;
             // A NUL byte in the first 8 KB is the usual "this is binary" heuristic.
             if (buf.subarray(0, 8192).includes(0)) {
                 restorePrev();
                 _offerDownloadInstead(path, name, `${name} looks like a binary file and can't be edited here.`);
                 return;
             }
-            const text = new TextDecoder('utf-8').decode(buf);
+            // Strict: bytes that are not UTF-8 would be shown as "\ufffd" and
+            // then written back that way, destroying the original on Save.
+            let text;
+            try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+            catch (e) {
+                restorePrev();
+                _offerDownloadInstead(path, name, `${name} is not UTF-8 text. Editing it here would damage it.`);
+                return;
+            }
             if (aceEditor) {
                 const ext = name.split('.').pop().toLowerCase();
                 aceEditor.session.setMode('ace/mode/' + (_EDITOR_MODES[ext] || 'text'));
@@ -460,9 +520,9 @@
                     const fullPath = currentBrowserPath ? currentBrowserPath + '/' + name : name;
                     body = { operation: op, path: fullPath };
                 }
-                const res = await fetch(`${API}/apps/${activeAppId}/files/op`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-                if (!res.ok) { const e = await res.json().catch(() => ({ detail: 'Failed' })); showToast('Operation failed: ' + e.detail, 'error'); }
-                else if (op === 'rename') showToast(`Renamed to "${name}"`, 'success', 2000);
+                const error = await _fileOp(activeAppId, body);
+                if (error) showToast('Operation failed: ' + error, 'error');
+                else if (op === 'rename') { _onPathMoved(body.path, body.new_path); showToast(`Renamed to "${name}"`, 'success', 2000); }
             } catch (e) { showToast('Operation failed: ' + e.message, 'error'); }
             loadFiles(currentBrowserPath);
         }
@@ -482,18 +542,16 @@
                 danger: true,
             });
             if (!ok) return;
+            const appId = activeAppId, failed = [];
             let successCount = 0;
             for (const item of items) {
-                try {
-                    const res = await fetch(`${API}/apps/${activeAppId}/files/op`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ operation: 'delete', path: item.path })
-                    });
-                    if (res.ok) successCount++;
-                } catch (e) { console.error(`Failed to delete ${item.path}`, e); }
+                const error = await _fileOp(appId, { operation: 'delete', path: item.path });
+                if (error) failed.push({ name: item.filename, error });
+                else { successCount++; if (appId === activeAppId) _onPathDeleted(item.path); }
             }
             if (successCount > 0) showToast(`Deleted ${successCount} item(s)`, 'info', 2000);
+            _reportFileOpFailures('delete', failed);
+            if (appId !== activeAppId) return;
             selectedFiles.clear();
             loadFiles(currentBrowserPath);
         }
@@ -809,21 +867,7 @@
                     try { dataStr = e.dataTransfer.getData('application/json') || e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text'); } catch (err) { }
 
                     if (dataStr && dataStr.includes('venvy_move')) {
-                        try {
-                            const data = JSON.parse(dataStr);
-                            let successCount = 0;
-                            const targetPath = currentBrowserPath;
-                            for (const item of data.items) {
-                                const destPath = targetPath ? `${targetPath}/${item.name}` : item.name;
-                                if (item.sourcePath === destPath || targetPath.startsWith(item.sourcePath + '/') || targetPath === item.sourcePath) continue;
-                                const res = await fetch(`${API}/apps/${activeAppId}/files/op`, {
-                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ operation: 'rename', path: item.sourcePath, new_path: destPath })
-                                });
-                                if (res.ok) successCount++;
-                            }
-                            if (successCount > 0) loadFiles(currentBrowserPath);
-                        } catch (err) { showToast('Move failed.', 'error'); }
+                        await _moveDraggedInto(dataStr, currentBrowserPath);
                         return;
                     }
 

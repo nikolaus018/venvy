@@ -26,6 +26,13 @@
         const originalFetch = window.fetch;
         window.fetch = async function (resource, init) {
             init = init || {};
+            // The session key and the CSRF token are for Venvy's own API only.
+            // Anything else fetched from this page (a CDN, an app's URL) must
+            // never be handed them.
+            try {
+                const target = new URL(resource instanceof Request ? resource.url : String(resource), window.location.href);
+                if (target.origin !== window.location.origin) return originalFetch.call(this, resource, init);
+            } catch { }
             const method = (init.method || 'GET').toUpperCase();
             const headers = new Headers(init.headers || {});
             const key = getAuthKey();

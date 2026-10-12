@@ -193,10 +193,13 @@
         async function loadLogs() {
             if (!activeAppId || _logsInflight) return;
             _logsInflight = true;
+            const appId = activeAppId;
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}/logs`);
+                const res = await fetch(`${API}/apps/${appId}/logs`);
                 if (!res.ok) return;
                 const data = await res.json();
+                // Answered after the user moved on to another app: not its logs.
+                if (appId !== activeAppId) return;
                 if (!data.content && !data.truncated) {
                     _logRaw = '';
                 } else {

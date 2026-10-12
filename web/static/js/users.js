@@ -32,12 +32,15 @@
         }
         async function createUser() {
             const u = document.getElementById('new-user-name').value.trim();
-            const p = document.getElementById('new-user-pwd').value.trim();
+            // Not trimmed: a password is used exactly as typed, here and at login.
+            const p = document.getElementById('new-user-pwd').value;
             const role = document.getElementById('new-user-role').value;
             if (!u || !p) { showToast('Fill in both username and password.', 'warn'); return; }
-            const res = await fetch(`${API}/users`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p, role }) });
-            if (res.ok) { document.getElementById('new-user-name').value = ''; document.getElementById('new-user-pwd').value = ''; showToast('User created.', 'success'); loadUsers(); }
-            else { const e = await res.json().catch(() => ({ detail: 'Failed' })); showToast('Error: ' + (e.detail || 'Failed'), 'error'); }
+            try {
+                const res = await fetch(`${API}/users`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p, role }) });
+                if (res.ok) { document.getElementById('new-user-name').value = ''; document.getElementById('new-user-pwd').value = ''; showToast('User created.', 'success'); loadUsers(); }
+                else { const e = await res.json().catch(() => ({ detail: 'Failed' })); showToast('Error: ' + (e.detail || 'Failed'), 'error'); }
+            } catch (e) { showToast('Network error: ' + e.message, 'error'); }
         }
         async function deleteUser(id, username) {
             document.getElementById('delete-user-name').textContent = username || `User #${id}`;

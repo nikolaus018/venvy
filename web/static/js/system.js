@@ -13,7 +13,12 @@
             if (userTriggered && window.innerWidth < 768) closeSidebar();
             document.title = 'System · Venvy';
             if (userTriggered) syncHash();
-            loadSystemView(); loadCfCredsStatus(); loadBackups();
+            // Cloudflare credentials are an admin setting; anyone else would
+            // only get a form whose Save is refused.
+            const isAdmin = currentUser?.role === 'admin';
+            document.getElementById('sys-cf-card').classList.toggle('hidden', !isAdmin);
+            loadSystemView(); loadBackups();
+            if (isAdmin) loadCfCredsStatus();
         }
         function closeSystemView() {
             document.getElementById('system-view').classList.add('hidden');
@@ -27,7 +32,11 @@
             }
             syncHash();
         }
+        let _systemViewInflight = false;
         async function loadSystemView(btn = null) {
+            // The live poll must not pile requests up behind a slow answer.
+            if (_systemViewInflight && !btn) return;
+            _systemViewInflight = true;
             if (btn) {
                 btn.disabled = true;
                 const icon = btn.querySelector('svg');
@@ -36,6 +45,22 @@
             const usedEl = document.getElementById('sys-used-ports');
             const freeEl = document.getElementById('sys-free-ports');
             const countEl = document.getElementById('sys-used-count');
+            // What each role may read: host metrics are for admins, the port
+            // list for operators and admins. Asking anyway was a 403 a second.
+            const role = currentUser?.role;
+            const canMetrics = role === 'admin', canPorts = role !== 'viewer';
+            if (!canMetrics) {
+                ['sys-cpu-val', 'sys-mem-val'].forEach(id => { document.getElementById(id).textContent = '—'; });
+                document.getElementById('sys-disk-text').textContent = 'Shown to admins';
+                document.getElementById('sys-uptime-text').textContent = '—';
+            }
+            if (!canPorts) {
+                const note = `<span class="text-xs italic" style="color:var(--text3)">Not available to read-only accounts</span>`;
+                usedEl.innerHTML = note; freeEl.innerHTML = note; countEl.textContent = '';
+                _systemViewInflight = false;
+                if (btn) { btn.disabled = false; btn.querySelector('svg')?.classList.remove('animate-spin'); }
+                return;
+            }
 
             // Only show Loading state if the list is currently empty (initial load)
             if (!usedEl.innerHTML.includes('span')) {
@@ -46,7 +71,7 @@
             try {
                 const [pRes, mRes] = await Promise.all([
                     fetch(`${API}/system/ports`),
-                    fetch(`${API}/system/metrics`).catch(() => null)
+                    canMetrics ? fetch(`${API}/system/metrics`).catch(() => null) : null,
                 ]);
                 if (!pRes.ok) throw new Error('Failed');
                 const data = await pRes.json();
@@ -54,8 +79,8 @@
                 countEl.textContent = `${listening.length} port${listening.length !== 1 ? 's' : ''} in use`;
 
                 // Refresh metrics if available
-                if (mRes && mRes.ok) {
-                    const mData = await mRes.json();
+                const mData = mRes && mRes.ok ? await mRes.json() : null;
+                if (mData && mData.cpu && mData.memory && mData.disk) {   // {error} when psutil is missing
                     document.getElementById('sys-cpu-val').textContent = `${mData.cpu.percent.toFixed(1)}%`;
                     document.getElementById('sys-cpu-bar').style.width = `${mData.cpu.percent}%`;
                     document.getElementById('sys-mem-val').textContent = `${mData.memory.percent.toFixed(1)}%`;
@@ -103,6 +128,7 @@
                     freeEl.innerHTML = `<span class="text-xs" style="color:var(--red)">Failed to load</span>`;
                 }
             } finally {
+                _systemViewInflight = false;
                 if (btn) {
                     btn.disabled = false;
                     const icon = btn.querySelector('svg');

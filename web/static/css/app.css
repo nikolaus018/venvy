@@ -1673,6 +1673,13 @@
             }
         }
 
+        /* ANSI "blink" (SGR 5/6) in the log viewer — see _ansiToHtml(). */
+        @keyframes _logBlink {
+            50% {
+                opacity: 0;
+            }
+        }
+
         @media (prefers-reduced-motion: reduce) {
             .op-bar-fill.op-bar-indeterminate {
                 animation: none;

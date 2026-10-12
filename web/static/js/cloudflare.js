@@ -280,13 +280,32 @@
             }
             _skeleton.classList.remove('hidden');
 
+            const appId = activeAppId;
+            // A viewer can see where an app is published, but not publish:
+            // the credential status and the zone list are not theirs to read.
+            const isViewer = currentUser?.role === 'viewer';
             try {
                 // Both fetches run in parallel; creds uses 30s cache, route uses 30s cache.
                 const [creds, tunnelData] = await Promise.all([
-                    _loadCfCreds(),
-                    _loadCfRoute(activeAppId),
+                    isViewer ? { hasCreds: true } : _loadCfCreds(),
+                    _loadCfRoute(appId),
                 ]);
+                // Another app was opened while this loaded — its own call paints the card.
+                if (appId !== activeAppId || !activeApp) return;
                 const routeRes = tunnelData?.routes?.find(r => r.local_port === activeApp.port);
+
+                if (isViewer) {
+                    inputsSection.classList.add('hidden');
+                    if (routeRes?.published && routeRes?.hostname) {
+                        const url = `https://${routeRes.hostname}`;
+                        document.getElementById('cf-route-url-link').textContent = url;
+                        document.getElementById('cf-route-url-link').href = url;
+                        document.getElementById('cf-route-url-open').href = url;
+                        urlBanner.classList.remove('hidden');
+                        badge.classList.remove('hidden'); badge.classList.add('flex');
+                    }
+                    return;
+                }
 
                 const hasCreds = creds.hasCreds;
                 if (!hasCreds) {
@@ -302,6 +321,7 @@
 
                 // ── Load domain zones into the dropdown ────────────────────────────
                 await _loadCfZonesDropdown(domainSelect);
+                if (appId !== activeAppId || !activeApp) return;
 
                 const isPublished = !!(routeRes?.published && routeRes?.hostname);
 
