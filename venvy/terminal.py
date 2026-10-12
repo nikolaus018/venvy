@@ -11,8 +11,9 @@ import shutil
 import signal
 import struct
 import termios
+import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, Set
 
 from fastapi import WebSocket
 from sqlmodel import Session
@@ -92,7 +93,33 @@ alias ll='ls -la'
 _TERMINAL_RECHECK_SEC = float(os.getenv("VENVY_TERMINAL_RECHECK_SEC", "10"))
 
 
+# Every open terminal is a forked shell and a PTY; a page that keeps opening
+# them must run into a ceiling before the host runs out of either.
+_MAX_TERMINALS = max(1, int(os.getenv("VENVY_MAX_TERMINALS", "64")))
+
+
 class TerminalManager:
+
+    def __init__(self) -> None:
+        # app_id -> the stop event of each terminal open on that app.
+        self._open: Dict[int, Set[asyncio.Event]] = {}
+
+    def open_count(self) -> int:
+        return sum(len(stops) for stops in self._open.values())
+
+    async def close_for_app(self, app_id: Optional[int] = None, timeout: float = 5.0) -> None:
+        """End the terminals open on *app_id* (all of them when None) and
+        wait until their shells are gone. Used before an app's directory and
+        Unix user are removed — a shell left running in there would keep
+        both in use — and before Venvy shuts down or re-executes itself."""
+        def targets() -> list:
+            return [s for aid, stops in self._open.items() if app_id in (None, aid) for s in stops]
+
+        for stop in targets():
+            stop.set()
+        deadline = time.monotonic() + timeout
+        while targets() and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
 
     async def start_terminal(
         self,
@@ -113,6 +140,9 @@ class TerminalManager:
             db_app = session.get(App, app_id)
         if not db_app:
             await websocket.close(code=1008, reason="App not found.")
+            return
+        if self.open_count() >= _MAX_TERMINALS:
+            await websocket.close(code=1013, reason="Too many terminals are open — close one and try again.")
             return
 
         jail_root = Path(db_app.app_dir).resolve()
@@ -153,6 +183,9 @@ class TerminalManager:
         master_fd: int = -1
         slave_fd:  int = -1
         pid:       int = -1
+
+        stop = asyncio.Event()
+        self._open.setdefault(app_id, set()).add(stop)
 
         try:
             master_fd, slave_fd = pty.openpty()
@@ -209,7 +242,6 @@ class TerminalManager:
             slave_fd = -1
 
             loop = asyncio.get_running_loop()
-            stop = asyncio.Event()
 
             # PTY I/O is non-blocking and driven by the event loop. Reading
             # with a blocking os.read() in the default executor parked one of
@@ -321,14 +353,15 @@ class TerminalManager:
             t1 = asyncio.create_task(reader())
             t2 = asyncio.create_task(writer())
             t3 = asyncio.create_task(watchdog())
+            t4 = asyncio.create_task(stop.wait())   # close_for_app()
+            tasks = [t1, t2, t3, t4]
             try:
-                await asyncio.wait([t1, t2, t3], return_when=asyncio.FIRST_COMPLETED)
+                await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             finally:
                 stop.set()
-                t1.cancel()
-                t2.cancel()
-                t3.cancel()
-                await asyncio.gather(t1, t2, t3, return_exceptions=True)
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
                 
                 if pid > 0:
                     try:
@@ -381,6 +414,11 @@ class TerminalManager:
                     pass
                 with contextlib.suppress(Exception):
                     await asyncio.to_thread(os.waitpid, pid, 0)
+            stops = self._open.get(app_id)
+            if stops is not None:
+                stops.discard(stop)
+                if not stops:
+                    self._open.pop(app_id, None)
             try:
                 await websocket.close()
             except Exception:

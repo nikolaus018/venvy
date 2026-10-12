@@ -1,7 +1,10 @@
 """App routes: list, create, control, settings, delete, stats, packages, logs."""
+import ast
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import re
 import shutil
 import sys
@@ -16,7 +19,7 @@ from sqlmodel import select, Session
 from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
 from venvy.auth import check_ip_allowlist, get_current_user, rate_limit_mutations, require_operator
-from venvy.cloudflare import _cf_delete_dns_cname, _cf_find_zone_id, _cf_request, _get_cf_creds
+from venvy.cloudflare import _cf_delete_dns_cname, _cf_find_zone_id, _cf_update_ingress, _get_cf_creds
 from venvy.config import (
     APP_LOGS_DIR,
     APPS_BASE_DIR,
@@ -44,20 +47,24 @@ from venvy.process import (
     _app_metrics,
     _app_pid_alive,
     _cancel_log_task,
+    restart_app_process_logic,
     _restart_backoff,
     restore_in_progress,
-    _start_app_process,
     start_app_process_logic,
     _stop_app_process,
     stop_app_process_logic,
     _trigger_supervisor,
 )
 from venvy.safefs import AppPathError, _fs_open_file, _fs_save, is_safe_path, _upload_rel_path_error
+from venvy.terminal import terminal_manager
 from venvy.uploads import _save_upload_file, _SINGLE_REQUEST_UPLOAD_MAX
 
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
 )
+
+_REQUIREMENTS_MAX_BYTES = 1024 * 1024
+
 
 # Where venv/pip/cargo run from. Not Venvy's own working directory: under
 # per-app users the app's user can't enter it, and `python -m …` would put
@@ -109,6 +116,7 @@ def list_apps(
                 app_row.status = "stopped"
                 app_row.pid = None
                 app_row.pid_start = None
+                app_row.systemd_scope = None
                 app_row.last_stop_time = utc_now()
                 session.add(app_row)
                 changed = True
@@ -165,20 +173,30 @@ async def upload_app(
         await asyncio.to_thread((app_dir / "logs").mkdir, mode=0o750)
 
     skipped_files: List[Dict[str, str]] = []
-    for file in (files or []):
-        rel_path = file.filename or "upload"
-        reason = _upload_rel_path_error(rel_path)
-        dest = (app_dir / rel_path).resolve()
-        if not reason and not is_safe_path(app_dir, dest):
-            reason = "path escapes app directory"
-        if reason:
-            skipped_files.append({"path": rel_path, "reason": reason})
-            continue
-        await asyncio.to_thread(dest.parent.mkdir, parents=True, exist_ok=True)
-        if not await asyncio.to_thread(_save_upload_file, file, dest, _SINGLE_REQUEST_UPLOAD_MAX):
-            await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
-            raise HTTPException(413, f"File '{rel_path}' exceeds the {_SINGLE_REQUEST_UPLOAD_MAX // (1024 * 1024)} MB single-request limit.")
-    req_bytes = await requirements.read() if requirements and requirements.filename else None
+    try:
+        for file in (files or []):
+            rel_path = file.filename or "upload"
+            reason = _upload_rel_path_error(rel_path)
+            dest = (app_dir / rel_path).resolve()
+            if not reason and not is_safe_path(app_dir, dest):
+                reason = "path escapes app directory"
+            if reason:
+                skipped_files.append({"path": rel_path, "reason": reason})
+                continue
+            await asyncio.to_thread(dest.parent.mkdir, parents=True, exist_ok=True)
+            if not await asyncio.to_thread(_save_upload_file, file, dest, _SINGLE_REQUEST_UPLOAD_MAX):
+                raise HTTPException(413, f"File '{rel_path}' exceeds the {_SINGLE_REQUEST_UPLOAD_MAX // (1024 * 1024)} MB single-request limit.")
+        req_bytes = None
+        if requirements and requirements.filename:
+            req_bytes = await requirements.read(_REQUIREMENTS_MAX_BYTES + 1)
+            if len(req_bytes) > _REQUIREMENTS_MAX_BYTES:
+                raise HTTPException(413, "requirements.txt is larger than 1 MB.")
+    except BaseException:
+        # Nothing refers to this directory yet — the app's row is only
+        # created below — so a failure here (a full disk, an oversized file,
+        # the client hanging up) would leave it behind for good.
+        await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
+        raise
 
     venv_path = app_dir / "venv"
     new_app = App(
@@ -318,13 +336,7 @@ async def control_app(
 
     async def _do_restart():
         try:
-            # One lock hold for both halves, so nothing else can start the
-            # app in the gap between them.
-            async with _app_lock(app_id):
-                with Session(engine) as s:
-                    await _stop_app_process(app_id, s, manual=False)
-                with Session(engine) as s:
-                    await _start_app_process(app_id, s)
+            await restart_app_process_logic(app_id)
             _trigger_supervisor()
         except Exception as exc:
             logging.error(f"Background restart failed for app {app_id}: {exc}")
@@ -484,56 +496,65 @@ async def delete_app(
     if app_row.status == "installing":
         raise HTTPException(409, "This app is still being set up — wait for its install to finish.")
     app_name = app_row.name
-    _cancel_log_task(app_id)
-    await stop_app_process_logic(app_id, session)
+    warnings: List[str] = []
+    # The app's lock is held from the stop until its row is gone. Released in
+    # between (as it used to be, across the Cloudflare calls below), a start
+    # that was already queued — a click, or the supervisor applying a restart
+    # policy — ran in that gap and left a process in a directory that was
+    # then deleted from under it, belonging to no app at all.
+    async with _app_lock(app_id):
+        app_row = session.get(App, app_id, populate_existing=True)
+        if not app_row:
+            raise HTTPException(404)
+        _cancel_log_task(app_id)
+        await _stop_app_process(app_id, session)
+        # Shells opened on the app keep its directory and its Unix user busy.
+        await terminal_manager.close_for_app(app_id)
 
-    # An app has one route per published port. Every one of them has to go:
-    # a hostname left in the tunnel keeps forwarding to that port, where the
-    # next app to bind it would be exposed to the internet unasked.
-    cf_routes = session.exec(select(CfRoute).where(CfRoute.app_id == app_id)).all()
-    published = {r.hostname for r in cf_routes if r.cf_route_id and r.hostname}
-    if published:
-        try:
-            creds      = _get_cf_creds(session)
-            account_id = creds["cf_account_id"]
-            tunnel_id  = creds["cf_tunnel_id"]
-            api_token  = creds["cf_api_token"]
-            cfg_url = (
-                f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
-                f"/cfd_tunnel/{tunnel_id}/configurations"
-            )
-            current_cfg = await _cf_request("GET", cfg_url, api_token)
-            result_obj  = current_cfg.get("result") or {}
-            ingress     = result_obj.get("config", {}).get("ingress") or []
-            named       = [r for r in ingress if r.get("hostname") and r["hostname"] not in published]
-            catch_all   = [r for r in ingress if not r.get("hostname")]
-            new_ingress = named + (catch_all or [{"service": "http_status:404"}])
-            await _cf_request("PUT", cfg_url, api_token, {"config": {"ingress": new_ingress}})
-            for hostname in sorted(published):
-                try:
-                    zone_id = await _cf_find_zone_id(hostname, account_id, api_token)
-                    if zone_id:
-                        await _cf_delete_dns_cname(zone_id, hostname, api_token)
-                    logging.info(f"CF route cleaned up for deleted app {app_id} ({hostname})")
-                except Exception as exc:
-                    logging.warning(f"CF DNS cleanup failed for app {app_id} ({hostname}): {exc}")
-        except Exception as exc:
-            logging.warning(f"CF cleanup failed for app {app_id} during delete: {exc}")
-    for cf_route in cf_routes:
-        session.delete(cf_route)
+        # An app has one route per published port. Every one of them has to go:
+        # a hostname left in the tunnel keeps forwarding to that port, where the
+        # next app to bind it would be exposed to the internet unasked.
+        cf_routes = session.exec(select(CfRoute).where(CfRoute.app_id == app_id)).all()
+        published = {r.hostname for r in cf_routes if r.cf_route_id and r.hostname}
+        if published:
+            try:
+                creds      = _get_cf_creds(session)
+                account_id = creds["cf_account_id"]
+                api_token  = creds["cf_api_token"]
+                await _cf_update_ingress(
+                    creds, lambda named: [r for r in named if r["hostname"] not in published])
+                for hostname in sorted(published):
+                    try:
+                        zone_id = await _cf_find_zone_id(hostname, account_id, api_token)
+                        if zone_id:
+                            await _cf_delete_dns_cname(zone_id, hostname, api_token)
+                        logging.info(f"CF route cleaned up for deleted app {app_id} ({hostname})")
+                    except Exception as exc:
+                        logging.warning(f"CF DNS cleanup failed for app {app_id} ({hostname}): {exc}")
+                        warnings.append(f"The DNS record for {hostname} could not be removed — delete it in Cloudflare.")
+            except Exception as exc:
+                logging.warning(f"CF cleanup failed for app {app_id} during delete: {exc}")
+                detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+                warnings.append(
+                    "Cloudflare could not be updated, so " + ", ".join(sorted(published))
+                    + f" still point(s) at this server — remove the route(s) in the Cloudflare dashboard. ({detail})")
+        for cf_route in cf_routes:
+            session.delete(cf_route)
 
-    app_dir_path = Path(app_row.app_dir)
-    if await asyncio.to_thread(app_dir_path.exists):
-        await asyncio.to_thread(shutil.rmtree, app_row.app_dir, ignore_errors=True)
-    await asyncio.to_thread(shutil.rmtree, APP_LOGS_DIR / str(app_id), True)
-    (TERMINAL_RC_DIR / f"app-{app_id}.bashrc").unlink(missing_ok=True)
-    await asyncio.to_thread(_delete_app_user, app_id)
-    _restart_backoff.pop(app_id, None)
-    session.delete(app_row)
-    session.commit()
+        app_dir_path = Path(app_row.app_dir)
+        if await asyncio.to_thread(app_dir_path.exists):
+            await asyncio.to_thread(shutil.rmtree, app_row.app_dir, ignore_errors=True)
+        await asyncio.to_thread(shutil.rmtree, APP_LOGS_DIR / str(app_id), True)
+        (TERMINAL_RC_DIR / f"app-{app_id}.bashrc").unlink(missing_ok=True)
+        await asyncio.to_thread(_delete_app_user, app_id)
+        _restart_backoff.pop(app_id, None)
+        _app_metrics.pop(app_id, None)
+        _package_locks.pop(app_id, None)
+        session.delete(app_row)
+        session.commit()
     _app_locks.pop(app_id, None)
     audit_log(user.username, "app_delete", f"deleted app '{app_name}' (id={app_id})")
-    return {"ok": True}
+    return {"ok": True, "warnings": warnings}
 
 
 @router.get("/apps/{app_id}/stats")
@@ -603,6 +624,7 @@ async def list_packages(
     # so it runs as the app's user, never as Venvy's.
     proc = await asyncio.create_subprocess_exec(
         *_as_app_user(app_row, [str(venv_python), "-m", "pip", "list", "--format=json"]),
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
         env=_app_tool_env(app_row),
@@ -619,23 +641,32 @@ async def list_packages(
         return []
 
 
+# pip and cargo both rewrite shared state (site-packages, Cargo.toml and its
+# lock file). Two of them at once in the same app — "Install All" in one tab,
+# a manual install in another — can leave a half-written environment, so
+# package changes queue up per app.
+_package_locks: Dict[int, asyncio.Lock] = {}
+
+
 async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str) -> None:
     """Run a package-manager command for an app (as the app's user); raise
     HTTPException with its stderr on failure or timeout."""
-    proc = await asyncio.create_subprocess_exec(
-        *_as_app_user(app_row, argv),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=_app_tool_env(app_row),
-        cwd=_TOOL_CWD,
-    )
-    try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        raise HTTPException(500, f"{what} timed out after {timeout} seconds.")
-    if proc.returncode != 0:
-        raise HTTPException(500, f"{what} failed: {stderr.decode(errors='replace')}")
+    async with _package_locks.setdefault(app_row.id, asyncio.Lock()):
+        proc = await asyncio.create_subprocess_exec(
+            *_as_app_user(app_row, argv),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_app_tool_env(app_row),
+            cwd=_TOOL_CWD,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise HTTPException(500, f"{what} timed out after {timeout} seconds.")
+        if proc.returncode != 0:
+            raise HTTPException(500, f"{what} failed: {stderr.decode(errors='replace')}")
 
 
 @router.post("/apps/{app_id}/packages")
@@ -766,6 +797,53 @@ async def clear_app_logs(
     return {"ok": True}
 
 
+# Directories the import scanner does not descend into: none of them holds
+# the app's own code, and a virtualenv alone is tens of thousands of files.
+_SCAN_SKIP_DIRS = {"venv", ".venv", "__pycache__", "node_modules", "site-packages", "logs", "target",
+                   ".git", ".hg", ".svn", ".mypy_cache", ".pytest_cache", ".tox"}
+
+
+_SCAN_MAX_FILES = 5000
+
+
+_SCAN_MAX_FILE_BYTES = 2 * 1024 * 1024
+
+
+def _scan_imported_modules(root: Path) -> Set[str]:
+    """Top-level module names imported by the Python files under *root*.
+    Blocking — a large tree takes a while to read and parse."""
+    imported: Set[str] = set()
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SCAN_SKIP_DIRS]
+        for name in filenames:
+            if not name.endswith(".py"):
+                continue
+            seen += 1
+            if seen > _SCAN_MAX_FILES:
+                return imported
+            try:
+                parts = Path(dirpath, name).relative_to(root).parts
+                fileobj, st = _fs_open_file(root, parts)
+                with fileobj:
+                    if st.st_size > _SCAN_MAX_FILE_BYTES:
+                        continue
+                    text = fileobj.read().decode("utf-8", errors="replace")
+                tree = ast.parse(text)
+            except (AppPathError, OSError, SyntaxError, ValueError, RecursionError, MemoryError):
+                # Not a plain file we can reach without following a link, or not
+                # parseable Python (binary content raises ValueError, not SyntaxError).
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        imported.add(alias.name.split(".")[0])
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module and node.level == 0:
+                        imported.add(node.module.split(".")[0])
+    return imported
+
+
 @router.get("/apps/{app_id}/scan-imports")
 async def scan_imports(
     app_id: int,
@@ -773,8 +851,6 @@ async def scan_imports(
     user: User = Depends(get_current_user),
 ):
     """Scan imported packages to discover dependencies missing from the active venv."""
-    import ast as _ast
-
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
@@ -786,6 +862,7 @@ async def scan_imports(
     if venv_python.exists():
         proc = await asyncio.create_subprocess_exec(
             *_as_app_user(app_row, [str(venv_python), "-m", "pip", "list", "--format=json"]),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             env=_app_tool_env(app_row),
@@ -807,33 +884,23 @@ async def scan_imports(
 
     stdlib = set(sys.stdlib_module_names) if hasattr(sys, "stdlib_module_names") else set()
 
-    imported: Set[str] = set()
-    for py_file in root.rglob("*.py"):
-        parts = py_file.parts
-        if "venv" in parts or "__pycache__" in parts:
-            continue
-        try:
-            fileobj, _st = await asyncio.to_thread(_fs_open_file, root, py_file.relative_to(root).parts)
-            with fileobj:
-                text = (await asyncio.to_thread(fileobj.read)).decode("utf-8", errors="replace")
-            tree = _ast.parse(text)
-        except (AppPathError, OSError, SyntaxError, ValueError, RecursionError):
-            # Not a plain file we can reach without following a link, or not
-            # parseable Python (binary content raises ValueError, not SyntaxError).
-            continue
-        for node in _ast.walk(tree):
-            if isinstance(node, _ast.Import):
-                for alias in node.names:
-                    imported.add(alias.name.split(".")[0])
-            elif isinstance(node, _ast.ImportFrom):
-                if node.module and node.level == 0:
-                    imported.add(node.module.split(".")[0])
+    # Off the event loop: walking and parsing a big tree here froze every
+    # other request, terminal and log stream until it was done.
+    imported = await asyncio.to_thread(_scan_imported_modules, root)
+
+    # A module that is a file or package in the app itself is not a missing
+    # dependency.
+    local = set()
+    with contextlib.suppress(OSError):
+        for entry in os.scandir(root):
+            local.add(entry.name[:-3] if entry.name.endswith(".py") else entry.name)
 
     missing = sorted(
         name for name in imported
         if name
         and name not in stdlib
-        and name not in installed
+        and name.lower() not in installed
+        and name not in local
         and not name.startswith("_")
     )
 

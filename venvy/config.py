@@ -106,11 +106,8 @@ if IP_ALLOWLIST is not None and not PROXY_SECRET and TRUSTED_PROXY_IPS & {"127.0
 _ALLOWED_ORIGINS_RAW = os.getenv("ALLOWED_ORIGINS", "").strip()
 _ALLOWED_ORIGINS: List[str] = [o.strip() for o in _ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
 
-if not _ALLOWED_ORIGINS:
-    logging.warning(
-        "ALLOWED_ORIGINS is not set. Defaulting to empty origins (Same-origin only). "
-        "For external access, set ALLOWED_ORIGINS='https://yourdomain.com' for security."
-    )
+# Empty is the normal case: the UI is served by Venvy itself, so its requests
+# are same-origin and need no CORS allowance at all.
 
 
 def utc_now() -> datetime.datetime:

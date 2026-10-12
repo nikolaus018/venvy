@@ -2,13 +2,13 @@
 middleware, the API routers and the static routes that serve the UI."""
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
 import secrets
 import signal
-import time
-from typing import Dict, Set
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +19,7 @@ from starlette.staticfiles import StaticFiles
 
 from venvy.config import (
     _ALLOWED_ORIGINS,
+    APPS_BASE_DIR,
     ASSETS_DIR,
     WEB_DIR,
     SESSION_COOKIE_SECURE,
@@ -34,11 +35,16 @@ from venvy.process import (
     _log_tasks,
     metrics_collector_task,
     _pid_alive,
+    restart_app_process_logic,
     start_app_process_logic,
+    stop_app_process_logic,
+    _STOP_GRACE_SEC,
     _systemd_run_available,
     supervisor_task,
 )
 from venvy.startup import _check_python3_venv, _check_rust
+from venvy.terminal import terminal_manager
+from venvy.uploads import _SINGLE_REQUEST_UPLOAD_MAX, _UPLOAD_CHUNK_MAX
 from venvy.webui import render_index
 from venvy.api import apps as api_apps
 from venvy.api import auth as api_auth
@@ -47,6 +53,27 @@ from venvy.api import files as api_files
 from venvy.api import system as api_system
 from venvy.api import terminal as api_terminal
 from venvy.api import users as api_users
+
+
+def _rebase_app_paths(app_row: App) -> bool:
+    """App rows store absolute paths. After a backup is restored onto a host
+    whose data directory is somewhere else, they still name the old place;
+    the files are here, under this server's apps/. Point the row at them.
+    Returns True if it changed."""
+    old_dir = Path(app_row.app_dir)
+    if old_dir.exists() or APPS_BASE_DIR in old_dir.parents:
+        return False
+    here = APPS_BASE_DIR.joinpath(*old_dir.parts[-2:])   # apps/<user id>/<slug>
+    if len(old_dir.parts) < 3 or old_dir.parts[-3] != APPS_BASE_DIR.name or not here.is_dir():
+        return False
+    try:
+        venv_rel = Path(app_row.venv_path).relative_to(old_dir)
+    except ValueError:
+        venv_rel = Path("venv")
+    logging.warning(f"App '{app_row.name}': data directory moved, {old_dir} -> {here}")
+    app_row.app_dir = str(here)
+    app_row.venv_path = str(here / venv_rel)
+    return True
 
 
 @contextlib.asynccontextmanager
@@ -58,10 +85,16 @@ async def lifespan(app: FastAPI):
     await _check_rust()
     await asyncio.to_thread(_systemd_run_available)   # warm the (blocking) probe off the event loop
 
+    # Apps that are still running from a Venvy process that did not get to
+    # shut down (killed, out of memory, power loss with the apps in their own
+    # systemd scopes). Their output pipe died with that process — the next
+    # line they print is an EPIPE — and nothing is collecting their logs or
+    # metrics. They are restarted below, so that what runs is supervised.
+    orphaned = []
     with Session(engine) as session:
         _boot_reset_time = utc_now()
         for app_row in session.exec(select(App)).all():
-            modified = False
+            modified = _rebase_app_paths(app_row)
             if not app_row.start_on_boot:
                 app_row.last_manually_stopped_at = _boot_reset_time
                 modified = True
@@ -77,17 +110,26 @@ async def lifespan(app: FastAPI):
                 modified = True
 
             if app_row.status == "running" and app_row.pid:
-                if not _app_pid_alive(app_row):
+                if _app_pid_alive(app_row):
+                    orphaned.append((app_row.id, app_row.name))
+                else:
                     logging.info(f"Clearing stale status for '{app_row.name}'")
                     app_row.status = "stopped"
                     app_row.pid = None
                     app_row.pid_start = None
                     app_row.last_manually_stopped_at = _boot_reset_time
                     modified = True
-            
+
             if modified:
                 session.add(app_row)
         session.commit()
+
+    for app_id, name in orphaned:
+        logging.warning(f"'{name}' was left running by a previous Venvy process — restarting it under supervision.")
+        try:
+            await restart_app_process_logic(app_id)
+        except Exception as exc:
+            logging.error(f"Could not restart '{name}': {exc}")
 
     with Session(engine) as session:
         for app_row in session.exec(select(App).where(App.start_on_boot == True)).all():
@@ -103,73 +145,56 @@ async def lifespan(app: FastAPI):
     yield
     supervisor_task_handle.cancel()
     metrics_task_handle.cancel()
-    try:
-        await supervisor_task_handle
-    except asyncio.CancelledError:
-        pass
+    await asyncio.gather(supervisor_task_handle, metrics_task_handle, return_exceptions=True)
 
     logging.info("Venvy shutting down — stopping all managed apps…")
-    
-    pids_to_kill: Dict[int, Set[int]] = {}
-    with Session(engine) as session:
-        for app_row in session.exec(select(App).where(App.status == "running")).all():
-            if _app_pid_alive(app_row):
-                try:
-                    pgid = os.getpgid(app_row.pid)
-                    # SECURITY CRITICAL: Ensure we do not target Venvy's own PGID
-                    if pgid != os.getpgid(0):
-                        pids_to_kill.setdefault(pgid, set()).add(app_row.id)
-                except OSError:
-                    pass
-                
-        for aid, apid in _active_app_pids.items():
-            if _pid_alive(apid):
-                try:
-                    pgid = os.getpgid(apid)
-                    if pgid != os.getpgid(0):
-                        pids_to_kill.setdefault(pgid, set()).add(aid)
-                except OSError:
-                    pass
+    await terminal_manager.close_for_app(None, timeout=3.0)
 
-    for pgid in pids_to_kill:
+    # Every app goes through the same stop as the Stop button: its systemd
+    # scope if it has one, then its process group, SIGTERM first and SIGKILL
+    # after the grace period, with its last output drained into the log. All
+    # at once, and bounded: the service manager allows 30 s for all of this.
+    with Session(engine) as session:
+        to_stop = {a.id for a in session.exec(select(App)).all()
+                   if a.pid or a.status in ("running", "starting", "stopping")}
+    to_stop |= set(_active_app_pids)
+
+    async def _stop(app_id: int) -> None:
         try:
-            os.killpg(pgid, signal.SIGTERM)
-        except OSError:
-            pass
+            with Session(engine) as s:
+                await stop_app_process_logic(app_id, s)
+        except Exception as exc:
+            logging.warning(f"Could not stop app {app_id} cleanly: {exc}")
 
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        if not pids_to_kill:
-            break
-        still_alive = False
-        for pgid in list(pids_to_kill.keys()):
+    if to_stop:
+        stops = [asyncio.create_task(_stop(app_id)) for app_id in to_stop]
+        _done, unfinished = await asyncio.wait(stops, timeout=_STOP_GRACE_SEC + 15)
+        for t in unfinished:
+            t.cancel()
+        await asyncio.gather(*unfinished, return_exceptions=True)
+
+    # Whatever is still there after that is killed outright.
+    own_pgid = os.getpgid(0)
+    for apid in list(_active_app_pids.values()):
+        if _pid_alive(apid):
             try:
-                os.killpg(pgid, 0)
-                still_alive = True
+                pgid = os.getpgid(apid)
+                # Never Venvy's own process group.
+                if pgid != own_pgid:
+                    os.killpg(pgid, signal.SIGKILL)
             except OSError:
-                pids_to_kill.pop(pgid, None)
-        if not still_alive:
-            break
-        await asyncio.sleep(0.25)
+                pass
 
     with Session(engine) as session:
-        for app_row in session.exec(select(App).where(App.status == "running")).all():
+        for app_row in session.exec(select(App).where(App.status.in_(("running", "starting", "stopping")))).all():
             app_row.status = "stopped"
             app_row.pid = None
             app_row.pid_start = None
+            app_row.systemd_scope = None
             if app_row.last_stop_time is None:
                 app_row.last_stop_time = utc_now()
             session.add(app_row)
         session.commit()
-
-        for aid, apid in _active_app_pids.items():
-            if _pid_alive(apid):
-                try:
-                    pgid = os.getpgid(apid)
-                    if pgid != os.getpgid(0):
-                        os.killpg(pgid, signal.SIGKILL)
-                except OSError:
-                    pass
 
     for _log_task in list(_log_tasks.values()):
         if not _log_task.done():
@@ -189,15 +214,26 @@ app.add_middleware(
 )
 
 
+def _add_security_headers(response) -> None:
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    # "0", not "1; mode=block": the legacy XSS auditor this header drives
+    # was itself exploitable, and browsers that still honour the header
+    # are best told to keep it off. The CSP below is the real protection.
+    response.headers.setdefault("X-XSS-Protection", "0")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+    if SESSION_COOKIE_SECURE:
+        # Set by the operator once Venvy is only reached over HTTPS: from
+        # then on a browser should not try plain HTTP for this host at all.
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add conservative security headers to every response."""
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("X-Frame-Options", "DENY")
-        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        response.headers.setdefault("X-XSS-Protection", "1; mode=block")
-        response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+        _add_security_headers(response)
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; "
@@ -222,9 +258,12 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS", "TRACE"):
             csrf_cookie = request.cookies.get("csrf_token")
             csrf_header = request.headers.get("x-csrf-token")
-            if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
-                from fastapi.responses import JSONResponse
-                return JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
+            if not csrf_cookie or not csrf_header or not secrets.compare_digest(
+                    csrf_cookie.encode("utf-8"), csrf_header.encode("utf-8")):
+                # This answer never reaches SecurityHeadersMiddleware below.
+                response = JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
+                _add_security_headers(response)
+                return response
         response = await call_next(request)
         if "csrf_token" not in request.cookies:
             token = secrets.token_urlsafe(32)
@@ -232,6 +271,82 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(CSRFMiddleware)
+
+
+# Request bodies are read (and parsed, or spooled to disk) before a route's
+# own checks run — including the one for being signed in. Without a ceiling
+# anyone who can reach the port could post gigabytes at the login endpoint
+# and have the server hold them in memory.
+_BODY_LIMIT_DEFAULT = 16 * 1024 * 1024
+
+
+_BODY_LIMIT_CHUNK = _UPLOAD_CHUNK_MAX + 1024 * 1024   # one upload chunk plus its form fields
+
+
+# The single-request upload endpoints kept for API clients: several files of
+# up to _SINGLE_REQUEST_UPLOAD_MAX each.
+_BODY_LIMIT_SINGLE_UPLOAD = 8 * _SINGLE_REQUEST_UPLOAD_MAX
+
+
+_SINGLE_UPLOAD_PATH_RE = re.compile(r"\A/api/apps/(?:upload|\d+/files/upload)/?\Z")
+
+
+def _body_limit(path: str) -> int:
+    if path.rstrip("/").endswith("/upload/chunk"):
+        return _BODY_LIMIT_CHUNK
+    if _SINGLE_UPLOAD_PATH_RE.match(path):
+        return _BODY_LIMIT_SINGLE_UPLOAD
+    return _BODY_LIMIT_DEFAULT
+
+
+class BodySizeLimitMiddleware:
+    """Refuse request bodies over the limit for their path — by their
+    Content-Length when there is one, and by counting as they arrive when
+    there isn't (chunked transfer encoding). Outermost, so nothing has been
+    read by the time it says no."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] in ("GET", "HEAD", "OPTIONS"):
+            await self.app(scope, receive, send)
+            return
+        limit = _body_limit(scope["path"])
+        too_large = HTTPException(413, f"Request body is larger than the {limit // (1024 * 1024)} MB allowed here.")
+        declared = dict(scope["headers"]).get(b"content-length")
+        if declared is not None:
+            try:
+                over = int(declared) > limit
+            except ValueError:
+                over = False   # malformed: the HTTP layer rejects it itself
+            if over:
+                body = json.dumps({"detail": too_large.detail}).encode("utf-8")
+                await send({"type": "http.response.start", "status": 413, "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"connection", b"close"),
+                ]})
+                await send({"type": "http.response.body", "body": body})
+                return
+
+        received = 0
+
+        async def counting_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    # Surfaces in the route's body parsing, which turns an
+                    # HTTPException into the response.
+                    raise too_large
+            return message
+
+        await self.app(scope, counting_receive, send)
+
+
+app.add_middleware(BodySizeLimitMiddleware)
 
 # ---------------------------------------------------------------------------
 # Routes

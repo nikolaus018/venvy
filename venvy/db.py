@@ -36,7 +36,8 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 
 
 def create_db_and_tables() -> None:
-    """Create all tables. Called once at startup. Schema changes require a fresh DB."""
+    """Create missing tables and columns, and bring older data up to date.
+    Called once at startup; every step is safe to repeat."""
     SQLModel.metadata.create_all(engine)
     
     # Simple migration logic for existing DBs

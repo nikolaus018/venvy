@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Set, Union
 import aiofiles
 from sqlmodel import Session, select
 
-from venvy.auth import _purge_login_attempts
+from venvy.auth import _purge_login_attempts, _purge_mutation_hits
 from venvy.config import (
     APP_LOGS_DIR,
     child_base_env,
@@ -106,33 +106,33 @@ def _detect_ports_sync(app_pid: int) -> List[int]:
     detected_ports: Set[int] = set()
 
     # ── Primary: /proc fd inode matching ─────────────
+    socket_inodes: Set[str] = set()
     for check_pid in pids:
         try:
-            fd_dir = Path(f"/proc/{check_pid}/fd")
-            socket_inodes: Set[str] = set()
-            for fd_path in fd_dir.iterdir():
+            for fd_path in Path(f"/proc/{check_pid}/fd").iterdir():
                 try:
                     link = os.readlink(str(fd_path))
                     if link.startswith("socket:["):
                         socket_inodes.add(link[8:-1])
                 except OSError:
                     pass
-            if not socket_inodes:
-                continue
-            for tcp_file in ("/proc/net/tcp", "/proc/net/tcp6"):
-                try:
-                    for line in Path(tcp_file).read_text().splitlines()[1:]:
-                        parts = line.split()
-                        if len(parts) < 10:
-                            continue
-                        if parts[3] == "0A" and parts[9] in socket_inodes:
-                            port_num = int(parts[1].split(":")[1], 16)
-                            if port_num > 0:
-                                detected_ports.add(port_num)
-                except Exception:
-                    pass
         except (OSError, PermissionError):
             pass
+    if socket_inodes:
+        # The table is the same whichever process asks: read it once per
+        # scan, not once per process in the tree.
+        for tcp_file in ("/proc/net/tcp", "/proc/net/tcp6"):
+            try:
+                for line in Path(tcp_file).read_text().splitlines()[1:]:
+                    parts = line.split()
+                    if len(parts) < 10:
+                        continue
+                    if parts[3] == "0A" and parts[9] in socket_inodes:
+                        port_num = int(parts[1].rsplit(":", 1)[1], 16)
+                        if port_num > 0:
+                            detected_ports.add(port_num)
+            except Exception:
+                pass
 
     # ── Secondary: psutil net_connections ─────────────
     if not detected_ports and psutil:
@@ -421,6 +421,42 @@ def _systemd_run_available() -> bool:
     return _SYSTEMD_AVAILABLE
 
 
+async def _run_systemctl(*args: str, timeout: float = 10) -> None:
+    """Run `systemctl <args>`, best effort: the outcome is logged, never
+    raised, and a call that hangs is killed rather than left behind."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as exc:
+        logging.warning(f"systemctl {' '.join(args)} could not be run: {exc}")
+        return
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logging.warning(f"systemctl {' '.join(args)} timed out after {timeout:g}s")
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        return
+    if proc.returncode != 0:
+        logging.debug(f"systemctl {' '.join(args)}: {stderr.decode(errors='replace').strip()}")
+
+
+async def _clear_stale_scope(unit_name: str) -> None:
+    """Make sure no scope called *unit_name* is left over from an earlier
+    run of the app — whatever is still in it belongs to a process that has
+    already ended or been stopped. A few quick no-op systemctl calls when
+    there is none."""
+    await _run_systemctl("kill", "--signal=SIGKILL", f"{unit_name}.scope", timeout=5)
+    await _run_systemctl("stop", f"{unit_name}.scope")
+    await _run_systemctl("reset-failed", f"{unit_name}.scope", timeout=5)
+
+
 # One lock per app serialises start/stop/restart. Without it a manual start
 # racing the supervisor's automatic restart (or a double click) spawned two
 # processes, and only the second was tracked — the first ran on unmanaged.
@@ -434,6 +470,16 @@ def _app_lock(app_id: int) -> asyncio.Lock:
 async def start_app_process_logic(app_id: int, session: Session) -> App:
     async with _app_lock(app_id):
         return await _start_app_process(app_id, session)
+
+
+async def restart_app_process_logic(app_id: int) -> None:
+    """Stop, then start. One lock hold for both halves, so nothing else can
+    start the app in the gap between them."""
+    async with _app_lock(app_id):
+        with Session(engine) as s:
+            await _stop_app_process(app_id, s, manual=False)
+        with Session(engine) as s:
+            await _start_app_process(app_id, s)
 
 
 async def _start_app_process(app_id: int, session: Session) -> App:
@@ -513,7 +559,6 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         else:
             cmd = [db_app.entrypoint]
 
-        stdin_data = None
         effective_port = db_app.port
         if db_app.port:
             port_free = await asyncio.to_thread(_verify_port_free, db_app.port)
@@ -539,6 +584,12 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         launch_cmd = cmd
         used_systemd_scope = False
         if await asyncio.to_thread(_systemd_run_available):
+            # The unit name is fixed per app, and a scope outlives its first
+            # process for as long as anything it started is still running (a
+            # daemonised child, say) — or lingers as "failed" after an OOM
+            # kill. systemd-run then refuses the name ("Unit … already
+            # exists") and the app could never be started again.
+            await _clear_stale_scope(unit_name)
             scope_cmd = ["systemd-run", "--scope", "--quiet", f"--unit={unit_name}"]
             if db_app.memory_limit_mb:
                 scope_cmd += ["-p", f"MemoryMax={db_app.memory_limit_mb}M"]
@@ -558,7 +609,9 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         process = await asyncio.create_subprocess_exec(
             *launch_cmd,
             cwd=str(app_dir),
-            stdin=asyncio.subprocess.PIPE if stdin_data else None,
+            # Never Venvy's own stdin: started from a shell, an app that reads
+            # input would otherwise compete with it for the terminal.
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
@@ -624,6 +677,12 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         raise
 
 
+# How long an app gets to shut down after SIGTERM before it is killed. A web
+# server finishing its requests, or anything flushing to disk, needs more than
+# an instant; an app that exits at once is not held up by a longer allowance.
+_STOP_GRACE_SEC = max(0.5, float(os.getenv("VENVY_STOP_GRACE_SEC", "5")))
+
+
 async def _kill_pid_tree(pid: int) -> None:
     """Kill a process and its entire descendant tree, async-safely without self-killing."""
     def _get_pids_to_kill(target_pid: int) -> List[int]:
@@ -667,7 +726,7 @@ async def _kill_pid_tree(pid: int) -> None:
         except Exception:
             pass
 
-    _SIGTERM_GRACE = 1.0
+    _SIGTERM_GRACE = _STOP_GRACE_SEC
     _SIGKILL_WAIT  = 0.5
 
     # Snapshot the full descendant tree up front. A wrapper process (npm, a shell
@@ -742,20 +801,7 @@ async def _stop_app_process(app_id: int, session: Session, manual: bool = False)
     logging.info(f"Stopping app '{db_app.name}' (PID {pid})")
 
     if db_app.systemd_scope:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "systemctl", "stop", f"{db_app.systemd_scope}.scope",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, sd_stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
-            if proc.returncode != 0:
-                logging.debug(
-                    f"systemctl stop {db_app.systemd_scope}.scope: "
-                    f"{sd_stderr.decode(errors='replace').strip()}"
-                )
-        except Exception as exc:
-            logging.warning(f"systemctl stop failed for {db_app.systemd_scope}.scope: {exc}")
+        await _run_systemctl("stop", f"{db_app.systemd_scope}.scope", timeout=_STOP_GRACE_SEC + 10)
 
     # Always also run the signal-based teardown as a fallback/complement — the scope
     # unit shares the same PID (systemd-run --scope execs in place), so this is a
@@ -858,6 +904,7 @@ async def supervisor_task() -> None:
             if now_mono - _last_login_cleanup > 120:
                 _last_login_cleanup = now_mono
                 _purge_login_attempts()
+                _purge_mutation_hits()
 
             apps_to_check: List[App] = []
             try:
