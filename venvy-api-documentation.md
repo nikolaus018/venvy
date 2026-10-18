@@ -590,7 +590,7 @@ Any role with access to the app. `git` (repository, branch, `has_token`, `build_
 List (newest first; `kind` is `deploy`, `before-deploy` or `manual`; the last 10 are kept) / take a manual one (a snapshot job for apps without git). Snapshots are tar archives of the app's files without `venv`, `node_modules`, `target`, `vendor/bundle`, `logs` and `.git`.
 
 #### `POST /api/apps/{app_id}/releases/{release_id}/rollback`
-`require_operator`. Restores a release — a git commit, or a snapshot (which overwrites files; it deletes nothing) — then installs dependencies, builds and restarts like a deploy. Follow `state` (`trigger: "rollback"`).
+`require_operator`. Restores a release — a git commit, or a snapshot (which overwrites files; it deletes nothing, so files added since the snapshot stay) — then installs dependencies, builds and restarts like a deploy. Follow `state` (`trigger: "rollback"`).
 
 #### `POST /api/hooks/deploy/{app_id}`
 No login and no CSRF: the request proves itself. Accepts GitHub, Gitea and Forgejo (`X-Hub-Signature-256` / `X-Gitea-Signature`, an HMAC-SHA256 of the body with the secret), GitLab (`X-Gitlab-Token`), or `Authorization: Bearer <secret>` / `X-Venvy-Secret` from your own CI. Any failure answers `401` the same way. A `ping` answers `{ "pong": true }`; with `auto_deploy` off, for a push to another branch, or for an event other than a push (the host's `X-GitHub-Event` / `X-Gitea-Event` / `X-Forgejo-Event` / `X-Gitlab-Event` header; a request without one counts as a push), `{ "deployed": false, "reason": … }`; otherwise it deploys (`{ "deployed": true }`). 60 requests a minute per client address.

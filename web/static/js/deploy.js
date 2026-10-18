@@ -85,7 +85,7 @@
             const gitApp = !!d.git.url;
             $id('rel-help').textContent = gitApp
                 ? 'Each deploy is a git commit you can return to. Data files in the app folder are not touched.'
-                : 'Snapshots of the app\'s files (not its virtualenv or dependencies). Going back restores those files — including data stored in the app folder.';
+                : 'Snapshots of the app\'s files (not its virtualenv or dependencies). Going back puts those files back as they were — including data stored in the app folder — and leaves files added since in place.';
             const kinds = { deploy: 'Deployed', 'before-deploy': 'Before a deploy', manual: 'Snapshot' };
             $id('rel-list').innerHTML = rel.length ? rel.map(r => `
                 <div class="px-5 py-3 flex items-center gap-3">

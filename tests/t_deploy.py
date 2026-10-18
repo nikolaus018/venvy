@@ -196,6 +196,9 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     vw = login_as(base, "viewer1", "hunter2hunter2")
     vg = vw.req("GET", f"/api/apps/{app}/deploy").json()
     check("a viewer sees deploy state but not the webhook secret", vg["git"]["webhook_secret"] is None and vg["state"] is not None)
+    rtok = cl.req("POST", "/api/tokens", json={"name": "ro", "scope": "read"}).json()["token"]
+    tg = httpx.get(f"{base}/api/apps/{app}/deploy", headers={"Authorization": f"Bearer {rtok}"}).json()
+    check("an API token does not get the webhook secret", tg["git"]["webhook_secret"] is None and tg["git"]["has_webhook_secret"] is True, str(tg["git"]))
     check("a viewer cannot deploy or change git settings", vw.req("POST", f"/api/apps/{app}/deploy").status_code == 403 and vw.req("PUT", f"/api/apps/{app}/git", json={"git_branch": "x"}).status_code == 403)
 
     # ── an app that is not a git checkout: snapshots ────────────────────────

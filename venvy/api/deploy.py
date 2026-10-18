@@ -53,10 +53,14 @@ def _git_info(app: App, reveal: bool) -> dict:
 
 
 @router.get("/apps/{app_id}/deploy")
-def get_deploy(app_id: int, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+def get_deploy(app_id: int, request: Request, session: Session = Depends(get_session),
+               user: User = Depends(get_current_user)):
     app = _app_or_404(session, app_id)
+    # The secret lets anyone deploy: shown in the browser, never to an API token
+    # (a read-only one must not be a way to get hold of it).
+    reveal = user.role in ("admin", "operator") and not getattr(request.state, "via_token", False)
     return {
-        "git": _git_info(app, reveal=user.role in ("admin", "operator")),
+        "git": _git_info(app, reveal=reveal),
         "state": deploy.state(app_id),
         "last": {"at": app.last_deploy_at.isoformat() if app.last_deploy_at else None,
                  "status": app.last_deploy_status, "commit": app.last_deploy_commit},
