@@ -456,15 +456,7 @@
                 document.getElementById('setting-policy').value = app.restart_policy || 'never';
                 document.getElementById('setting-boot').checked = app.start_on_boot;
                 document.getElementById('setting-port').value = app.port || '';
-                document.getElementById('setting-env').value = app.env_redacted
-                    ? '// Hidden — operator or admin access is required to view or edit environment variables.'
-                    : app.env_unreadable
-                    ? '// These variables are stored but cannot be decrypted (the server\'s .venvy_key is missing or was replaced).\n// They are left untouched while this note is here. To set new ones, replace this whole text with a JSON object.'
-                    : (() => {
-                        try { return JSON.stringify(JSON.parse(app.env_json || '{}'), null, 2); }
-                        catch (e) { return app.env_json || '{}'; }
-                    })();
-                document.getElementById('setting-env').readOnly = !!app.env_redacted;
+                envEditor.load(app);
                 document.getElementById('setting-name').value = app.name || '';
                 if (document.getElementById('setting-runtime')) {
                     document.getElementById('setting-runtime').value = app.runtime || 'python';

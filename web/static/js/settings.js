@@ -258,22 +258,16 @@
                 showToast('CPU limit must be between 1 and 10,000% (or 0 for unlimited).', 'warn'); return;
             }
 
-            // A "//" note in the box (hidden from this role, or stored but
-            // undecryptable) means the variables are not being edited: leave
-            // them out of the request so saving anything else can't wipe them.
-            let env = {};
-            const envRaw = (document.getElementById('setting-env').value || '{}').trim();
-            const envUntouched = envRaw.startsWith('//');
-            if (!envUntouched) {
-                try {
-                    const parsed = JSON.parse(envRaw || '{}');
-                    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error();
-                    for (const [k, v] of Object.entries(parsed)) env[String(k)] = String(v);
-                } catch {
-                    showToast('Invalid JSON in Environment Variables.', 'error');
-                    return;
-                }
+            // Hidden or undecryptable variables are not being edited: leave them
+            // out of the request so saving anything else can't wipe them.
+            const envState = envEditor.state();
+            if (envState.error) {
+                showToast(envState.error, 'error');
+                envEditor.focusProblem();
+                return;
             }
+            const envUntouched = envState.untouched;
+            const env = envState.vars;
 
             const body = {
                 name: name,
@@ -378,19 +372,7 @@
             }
             const portsMatch = JSON.stringify(manualPorts) === JSON.stringify(currentManualPorts);
 
-            let envMatch = true;
-            try {
-                const raw = (document.getElementById('setting-env').value || '{}').trim();
-                if (raw && raw.startsWith('//')) {
-                    envMatch = true;
-                } else {
-                    const activeEnv = JSON.parse(activeApp.env_json || '{}');
-                    const inputEnv = JSON.parse(raw || '{}');
-                    if (JSON.stringify(activeEnv) !== JSON.stringify(inputEnv)) {
-                        envMatch = false;
-                    }
-                }
-            } catch { envMatch = false; }
+            const envMatch = !envEditor.differsFrom(activeApp);
 
             const fixedEntry = key => { const m = runtimeMeta(key); return m && m.entry === 'fixed' ? m.entry_default : null; };
             const currentEntryPoint = fixedEntry(activeApp.runtime) ?? fixedEntry(runtime) ?? (activeApp.entrypoint || '');
@@ -449,7 +431,7 @@
             ['setting-runtime', 'setting-policy', 'setting-boot'].forEach(id => {
                 document.getElementById(id)?.addEventListener('change', checkSettingsDirty);
             });
-            ['setting-name', 'setting-entrypoint', 'setting-env', 'setting-port', 'setting-memory-limit', 'setting-cpu-limit'].forEach(id => {
+            ['setting-name', 'setting-entrypoint', 'setting-port', 'setting-memory-limit', 'setting-cpu-limit'].forEach(id => {
                 document.getElementById(id)?.addEventListener('input', checkSettingsDirty);
             });
         }

@@ -72,7 +72,11 @@ with server(repo, 55010) as (base, data, srv):
         check("settings populated", pg.input_value("#setting-name") == "Alpha" and pg.input_value("#setting-entrypoint") == "main.py")
         pg.select_option("#setting-policy", "always"); pg.wait_for_timeout(300)
         check("settings dirty", pg.evaluate("isSettingsDirty()"))
-        pg.fill("#setting-env", '{"UI_VAR": "1"}'); pg.click("#settings-save-btn"); pg.wait_for_timeout(1500)
+        pg.click("text=Add variable"); pg.fill("#env-rows .env-key", "UI_VAR"); pg.fill("#env-rows .env-val", "1")
+        check("env row marks settings dirty", pg.evaluate("isSettingsDirty()"))
+        pg.fill("#env-rows .env-key", "bad name"); pg.click("#settings-save-btn"); pg.wait_for_timeout(500)
+        check("invalid env name blocks the save", '"UI_VAR"' not in cl.status(a)["env_json"] and "not a valid name" in pg.inner_text("#env-error"))
+        pg.fill("#env-rows .env-key", "UI_VAR"); pg.click("#settings-save-btn"); pg.wait_for_timeout(1500)
         st = cl.status(a)
         check("settings saved", st["restart_policy"] == "always" and '"UI_VAR"' in st["env_json"] and not pg.evaluate("isSettingsDirty()"))
 

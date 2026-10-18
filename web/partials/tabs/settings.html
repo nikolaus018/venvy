@@ -167,11 +167,55 @@
                                     </div>
                                 </details>
 
-                                <label class="block section-label mb-2">Environment Variables <span
-                                        style="color:var(--text3)" class="font-normal normal-case">(JSON)</span></label>
-                                <textarea id="setting-env"
-                                    class="inp textarea w-full px-4 py-3 h-36 mono text-xs leading-relaxed"
-                                    placeholder='{"DEBUG": "true"}'></textarea>
+                                <div class="flex items-center justify-between gap-3 mb-2">
+                                    <label class="block section-label">Environment Variables <span id="env-count"
+                                            class="font-normal normal-case ml-1" style="color:var(--text3)"></span></label>
+                                    <div class="flex items-center gap-1.5">
+                                        <button type="button" onclick="envEditor.toggleReveal()" id="env-reveal-btn"
+                                            class="btn-ghost text-xs font-semibold px-2.5 py-1 rounded-lg"><span
+                                                id="env-reveal-label">Show values</span></button>
+                                        <button type="button" onclick="envEditor.toggleImport()" data-requires-operator
+                                            class="btn-ghost text-xs font-semibold px-2.5 py-1 rounded-lg">Import .env</button>
+                                    </div>
+                                </div>
+
+                                <div id="env-editor" class="rounded-xl overflow-hidden"
+                                    style="background:var(--surface2);border:1px solid var(--border2)">
+                                    <!-- Hidden from this role, or stored but unreadable -->
+                                    <div id="env-note" class="hidden px-4 py-4 text-xs" style="color:var(--text3)">
+                                        <p id="env-note-text"></p>
+                                        <button type="button" id="env-replace" onclick="envEditor.replaceUnreadable()"
+                                            class="hidden btn-ghost text-xs font-semibold px-3 py-1.5 rounded-lg mt-3">Replace them with new variables</button>
+                                    </div>
+                                    <div id="env-body">
+                                        <div id="env-import" class="hidden p-3" style="border-bottom:1px solid var(--border)">
+                                            <textarea id="env-import-text" rows="5" spellcheck="false"
+                                                class="inp textarea w-full px-3 py-2 mono text-xs"
+                                                placeholder="Paste the contents of a .env file:&#10;API_KEY=abc123&#10;DEBUG=true"
+                                                style="min-height:0"></textarea>
+                                            <div class="flex justify-end gap-2 mt-2">
+                                                <button type="button" onclick="envEditor.toggleImport()"
+                                                    class="btn-ghost text-xs font-semibold px-3 py-1.5 rounded-lg">Cancel</button>
+                                                <button type="button" onclick="envEditor.runImport()"
+                                                    class="btn-secondary text-xs px-4 py-1.5">Import</button>
+                                            </div>
+                                        </div>
+                                        <div id="env-head" class="hidden grid gap-2 px-3 pt-2.5 pb-1 section-label"
+                                            style="grid-template-columns:minmax(0,2fr) minmax(0,3fr) 2.25rem">
+                                            <span>Name</span><span>Value</span><span></span>
+                                        </div>
+                                        <div id="env-rows"></div>
+                                        <p id="env-empty" class="px-4 py-5 text-xs text-center" style="color:var(--text3)">
+                                            No variables yet. Each one becomes an environment variable of the app.</p>
+                                        <div class="px-3 py-2.5" style="border-top:1px solid var(--border)">
+                                            <button type="button" onclick="envEditor.add()" data-requires-operator
+                                                class="btn-ghost text-xs font-semibold px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4" d="M12 5v14M5 12h14"/></svg>
+                                                Add variable</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <p id="env-error" class="hidden text-xs mt-1.5" style="color:var(--red)"></p>
                             </div>
 
                             <!-- Cloudflare per-app -->
