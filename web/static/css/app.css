@@ -199,9 +199,10 @@
             box-shadow: 0 0 0 3px var(--accent-glow);
         }
 
+        /* A text field is always :focus-visible when focused: the accent border
+           and glow above are its ring. An outline on top drew a second one. */
         .inp:focus-visible {
-            outline: 2px solid var(--accent);
-            outline-offset: 1px;
+            outline: none;
         }
 
         .inp::placeholder {
