@@ -22,6 +22,7 @@
                                             onchange="onRuntimeChange('settings')">
                                             <option value="python">Python 3 (Venv)</option>
                                             <option value="rust">Rust (Cargo)</option>
+                                            <option value="node">Node.js (npm)</option>
                                         </select>
                                     </div>
                                     <div>
@@ -49,8 +50,8 @@
                                     <label class="block section-label mb-2">Entrypoint File</label>
                                     <input type="text" id="setting-entrypoint" class="inp w-full px-4 py-3 mono text-sm"
                                         placeholder="main.py">
-                                    <p class="text-xs mt-1.5" style="color:var(--text3)">The Python file that launches
-                                        your app (e.g. <code class="px-1 py-0.5 rounded mono"
+                                    <p class="text-xs mt-1.5" style="color:var(--text3)">The file that launches your app
+                                        (Node.js: leave blank to run <code class="px-1 py-0.5 rounded mono" style="background:var(--surface2)">npm start</code>) (e.g. <code class="px-1 py-0.5 rounded mono"
                                             style="background:var(--surface2)">main.py</code>). Upload files first if
                                         the app has none yet.</p>
                                 </div>

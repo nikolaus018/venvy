@@ -1,7 +1,7 @@
 <h1 align="center">Venvy</h1>
 
 <p align="center">
-  <b>A self-hosted control panel for running your Python and Rust apps on one server.</b><br>
+  <b>A self-hosted control panel for running your Python, Node.js and Rust apps on one server.</b><br>
   Upload code, get a virtualenv, a process supervisor, a browser terminal, live logs and a public URL.
 </p>
 
@@ -43,6 +43,7 @@ curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install
 | `--port N` | Port. Default `54783`. |
 | `--version TAG` | Install a specific release instead of the latest. |
 | `--with-rust` | Also install `cargo`/`rustc` so Rust apps can be hosted. |
+| `--with-node` | Also install `nodejs`/`npm` so Node.js apps can be hosted. |
 | `--app-users` | Run as root with one Unix user per hosted app (see [Isolation](#isolation)). |
 | `--uninstall` | Remove the service and code. Data and config are kept. |
 

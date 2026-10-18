@@ -161,8 +161,15 @@
                 entryInp.disabled = true;
                 entryInp.style.opacity = '0.5';
                 entryInp.style.cursor = 'not-allowed';
+            } else if (runtime === 'node') {
+                if (entryInp.value === 'main.rs' || entryInp.value === 'main.py') entryInp.value = '';
+                entryInp.placeholder = 'server.js (blank = npm start)';
+                entryInp.disabled = false;
+                entryInp.style.opacity = '';
+                entryInp.style.cursor = '';
             } else {
                 if (entryInp.value === 'main.rs') entryInp.value = 'main.py';
+                entryInp.placeholder = 'main.py';
                 entryInp.disabled = false;
                 entryInp.style.opacity = '';
                 entryInp.style.cursor = '';

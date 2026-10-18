@@ -462,6 +462,8 @@ async def upload_app(
 ):
     global NEXT_APP_ID
     _check_auth(request)
+    if runtime not in ("python", "rust", "node"):
+        raise HTTPException(400, "runtime must be one of: python, rust, node")
     app_id = NEXT_APP_ID
     NEXT_APP_ID += 1
     slug = name.lower().replace(" ", "-")
@@ -476,7 +478,7 @@ async def upload_app(
         "port": None,
         "manual_ports": "[]",
         "detected_ports": "[]",
-        "entrypoint": entrypoint or "main.py",
+        "entrypoint": entrypoint or {"python": "main.py", "rust": "main.rs", "node": ""}[runtime],
         "start_on_boot": start_on_boot,
         "restart_policy": restart_policy,
         "last_exit_code": None,
@@ -563,6 +565,8 @@ async def update_app(app_id: int, req: AppUpdateReq, request: Request):
     if req.restart_policy is not None:
         a["restart_policy"] = req.restart_policy
     if req.runtime is not None:
+        if req.runtime not in ("python", "rust", "node"):
+            raise HTTPException(400, "runtime must be one of: python, rust, node")
         a["runtime"] = req.runtime
     if req.port is not None:
         a["port"] = req.port if req.port != 0 else None

@@ -65,8 +65,14 @@ router = APIRouter(
 
 _REQUIREMENTS_MAX_BYTES = 1024 * 1024
 
+_RUNTIMES = ("python", "rust", "node")
+_RUNTIME_ERROR = "runtime must be one of: python, rust, node"
+# Node packages: "name", "@scope/name", optionally "@version" or "@tag".
+_NPM_PKG_RE = r"(@[a-z0-9][a-z0-9_.\-]*/)?[a-z0-9][a-z0-9_.\-]*(@[A-Za-z0-9_.+\-^~<>=*]+)?"
+_NPM_NAME_RE = r"(@[a-z0-9][a-z0-9_.\-]*/)?[a-z0-9][a-z0-9_.\-]*"
 
-# Where venv/pip/cargo run from. Not Venvy's own working directory: under
+
+# Where venv/pip/cargo/npm run from. Not Venvy's own working directory: under
 # per-app users the app's user can't enter it, and `python -m …` would put
 # whatever directory it starts in on its import path.
 _TOOL_CWD = "/"
@@ -143,8 +149,8 @@ async def upload_app(
     user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
 ):
-    if runtime not in ("python", "rust"):
-        raise HTTPException(400, "runtime must be one of: python, rust")
+    if runtime not in _RUNTIMES:
+        raise HTTPException(400, _RUNTIME_ERROR)
     if restart_policy not in ("never", "on-failure", "always"):
         raise HTTPException(400, "restart_policy must be one of: never, on-failure, always")
     name = _clean_app_name(name)
@@ -259,6 +265,12 @@ async def upload_app(
                     raise HTTPException(500, "pip install timed out after 10 minutes.")
                 if proc.returncode != 0:
                     raise HTTPException(500, f"pip install failed: {pip_err.decode(errors='replace')}")
+
+            if runtime == "node" and await asyncio.to_thread((app_dir / "package.json").is_file):
+                await _run_app_tool(
+                    row, ["npm", "install", "--prefix", str(app_dir), "--no-audit", "--no-fund"],
+                    600, "npm install",
+                )
 
             with Session(engine) as s2:
                 row = s2.get(App, app_id)
@@ -444,8 +456,8 @@ async def update_app(
     # that switches a Rust app to Python *and* names its entrypoint used to
     # have that entrypoint overwritten with main.rs.
     if req.runtime is not None:
-        if req.runtime not in ("python", "rust"):
-            raise HTTPException(400, "runtime must be one of: python, rust")
+        if req.runtime not in _RUNTIMES:
+            raise HTTPException(400, _RUNTIME_ERROR)
         app_row.runtime = req.runtime
         if app_row.runtime == "rust":
             app_row.entrypoint = "main.rs"
@@ -613,8 +625,26 @@ async def list_packages(
             logging.error(f"Failed to parse Cargo.toml: {e}")
             return []
 
+    if app_row.runtime == "node":
+        try:
+            manifest, _ = _fs_open_file(Path(app_row.app_dir), ("package.json",))
+        except AppPathError:
+            return []
+        try:
+            with manifest as f:
+                data = json.load(f)
+            results = []
+            for section in ("dependencies", "devDependencies"):
+                deps = data.get(section) or {}
+                for name, version in deps.items():
+                    results.append({"name": name, "version": str(version)})
+            return results
+        except Exception as e:
+            logging.error(f"Failed to parse package.json: {e}")
+            return []
+
     if app_row.runtime != "python":
-        raise HTTPException(400, "Packages tab is only supported for Python/Rust.")
+        raise HTTPException(400, "Packages tab is only supported for Python/Rust/Node.")
         
     venv_python = Path(app_row.venv_path) / "bin" / "python"
     if not venv_python.exists():
@@ -688,6 +718,11 @@ async def install_package(
             raise HTTPException(400, "Invalid package name.")
         argv = ["cargo", "add", pkg_name, "--manifest-path", str(Path(app_row.app_dir) / "Cargo.toml")]
         timeout, what = 300, "cargo add"
+    elif app_row.runtime == "node":
+        if not re.fullmatch(_NPM_PKG_RE, pkg_name):
+            raise HTTPException(400, "Invalid package name.")
+        argv = ["npm", "install", "--prefix", str(app_row.app_dir), "--no-audit", "--no-fund", pkg_name]
+        timeout, what = 600, "npm install"
     elif app_row.runtime == "python":
         venv_python = Path(app_row.venv_path) / "bin" / "python"
         if not venv_python.exists():
@@ -699,7 +734,7 @@ async def install_package(
         argv = [str(venv_python), "-m", "pip", "install", "--no-input", pkg_name]
         timeout, what = 600, "pip install"
     else:
-        raise HTTPException(400, "Packages tab is only supported for Python/Rust.")
+        raise HTTPException(400, "Packages tab is only supported for Python/Rust/Node.")
 
     async def _job() -> dict:
         await _run_app_tool(app_row, argv, timeout, what)
@@ -721,12 +756,18 @@ async def uninstall_package(
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
-    if not re.fullmatch(r"[A-Za-z0-9_.+\-]+", name) or name.startswith("-"):
+    if app_row.runtime == "node":
+        if not re.fullmatch(_NPM_NAME_RE, name):
+            raise HTTPException(400, "Invalid package name.")
+    elif not re.fullmatch(r"[A-Za-z0-9_.+\-]+", name) or name.startswith("-"):
         raise HTTPException(400, "Invalid package name.")
 
     if app_row.runtime == "rust":
         argv = ["cargo", "remove", name, "--manifest-path", str(Path(app_row.app_dir) / "Cargo.toml")]
         timeout, what = 120, "cargo remove"
+    elif app_row.runtime == "node":
+        argv = ["npm", "uninstall", "--prefix", str(app_row.app_dir), "--no-audit", "--no-fund", name]
+        timeout, what = 300, "npm uninstall"
     elif app_row.runtime == "python":
         venv_python = Path(app_row.venv_path) / "bin" / "python"
         if not venv_python.exists():
@@ -734,7 +775,7 @@ async def uninstall_package(
         argv = [str(venv_python), "-m", "pip", "uninstall", "-y", name]
         timeout, what = 300, "pip uninstall"
     else:
-        raise HTTPException(400, "Packages tab is only supported for Python/Rust.")
+        raise HTTPException(400, "Packages tab is only supported for Python/Rust/Node.")
 
     async def _job() -> dict:
         await _run_app_tool(app_row, argv, timeout, what)

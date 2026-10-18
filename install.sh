@@ -11,6 +11,7 @@
 #   --port N          port (default 54783)
 #   --version TAG     install a specific release (default: latest)
 #   --with-rust       also install cargo/rustc so Rust apps can be hosted
+#   --with-node       also install nodejs/npm so Node.js apps can be hosted
 #   --app-users       run Venvy as root with one Unix user per hosted app
 #   --uninstall       remove the service and code (data and config are kept)
 #
@@ -43,7 +44,7 @@ UNIT_FILE="/etc/systemd/system/venvy.service"
 DEFAULT_DATA_DIR="/var/lib/venvy"
 KEEP_DB_SNAPSHOTS=5
 
-VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; APP_USERS=""; UNINSTALL=0
+VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; WITH_NODE=0; APP_USERS=""; UNINSTALL=0
 
 # Printed from here rather than read back out of this file: piped into bash
 # from curl there is no file to read.
@@ -59,6 +60,7 @@ Options go after `bash -s --`:
   --port N          port (default 54783)
   --version TAG     install a specific release (default: latest)
   --with-rust       also install cargo/rustc so Rust apps can be hosted
+  --with-node       also install nodejs/npm so Node.js apps can be hosted
   --app-users       run Venvy as root with one Unix user per hosted app
   --uninstall       remove the service and code (data and config are kept)
 
@@ -77,6 +79,7 @@ while [ $# -gt 0 ]; do
     --port)      [ $# -ge 2 ] || die "--port needs a value"; PORT="$2"; shift 2 ;;
     --version)   [ $# -ge 2 ] || die "--version needs a value"; VERSION="$2"; shift 2 ;;
     --with-rust) WITH_RUST=1; shift ;;
+    --with-node) WITH_NODE=1; shift ;;
     --app-users) APP_USERS=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)   usage; exit 0 ;;
@@ -147,6 +150,7 @@ say "Installing Venvy ($VERSION) — data in $DATA_DIR, service user $RUN_USER, 
 # ── 1. System packages (apt only runs if something is missing) ───────────────
 PKGS="python3 python3-venv curl ca-certificates git tar"
 [ "$WITH_RUST" -eq 1 ] && PKGS="$PKGS cargo rustc build-essential"
+[ "$WITH_NODE" -eq 1 ] && PKGS="$PKGS nodejs npm"
 MISSING=""
 for p in $PKGS; do dpkg -s "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"; done
 if [ -n "$MISSING" ]; then

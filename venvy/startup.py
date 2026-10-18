@@ -1,4 +1,4 @@
-"""Startup checks for the host tools apps need (python3-venv, cargo).
+"""Startup checks for the host tools apps need (python3-venv, cargo, node).
 
 These only report. Installing system packages is the installer's job
 (install.sh) — a web server should not be running apt-get on its own.
@@ -54,4 +54,26 @@ async def _check_rust() -> None:
     logging.info(
         "cargo is not installed — Rust apps are unavailable. "
         "To enable them: sudo apt-get install -y cargo rustc build-essential"
+    )
+
+
+async def _check_node() -> None:
+    """Log whether node and npm are available; only Node.js apps need them."""
+    try:
+        for tool in ("node", "npm"):
+            proc = await asyncio.create_subprocess_exec(
+                tool, "-v",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=5)
+            if proc.returncode != 0:
+                raise RuntimeError(f"{tool} -v failed")
+        logging.info("node/npm: OK")
+        return
+    except Exception:
+        pass
+    logging.info(
+        "node/npm is not installed — Node.js apps are unavailable. "
+        "To enable them: sudo apt-get install -y nodejs npm"
     )

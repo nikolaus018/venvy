@@ -204,12 +204,16 @@ def _build_app_env(db_app: App) -> Dict[str, str]:
         env["APP_PORT"] = str(effective_port)
         env["PORT"] = str(effective_port)
     env["PYTHONUNBUFFERED"] = "1"
+    if db_app.runtime == "node":
+        env.setdefault("NODE_ENV", "production")
     
     venv_bin = str(Path(db_app.venv_path) / "bin")
     cargo_bin = str(Path.home() / ".cargo" / "bin")
     
     existing_path = env.get("PATH", "")
     new_paths = [venv_bin]
+    if db_app.runtime == "node":
+        new_paths.insert(0, str(Path(db_app.app_dir) / "node_modules" / ".bin"))
     if cargo_bin not in existing_path:
         new_paths.append(cargo_bin)
     
@@ -500,7 +504,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
     db_app.pid = None
     db_app.pid_start = None
 
-    if not db_app.entrypoint and db_app.runtime != "rust":
+    if not db_app.entrypoint and db_app.runtime not in ("rust", "node"):
         db_app.status = "error"
         session.add(db_app)
         session.commit()
@@ -556,6 +560,9 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             cmd = [str(venv_python), db_app.entrypoint]
         elif db_app.runtime == "rust":
             cmd = ["cargo", "run"]
+        elif db_app.runtime == "node":
+            # No entrypoint: whatever package.json's "start" script says.
+            cmd = ["node", db_app.entrypoint] if db_app.entrypoint else ["npm", "start", "--silent"]
         else:
             cmd = [db_app.entrypoint]
 

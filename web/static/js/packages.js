@@ -5,8 +5,19 @@
             return (activeApp?.runtime || 'python') === 'python';
         }
 
+        // Python (pip) and Node.js (npm) packages can be installed and removed
+        // here; Rust's Cargo.toml dependencies are listed read-only.
+        function _canManagePackages() {
+            const rt = activeApp?.runtime || 'python';
+            return rt === 'python' || rt === 'node';
+        }
+
         function _syncPackagesTabRuntimeUi() {
             const isPythonRuntime = _isPythonPackageRuntime();
+            const canManage = _canManagePackages();
+            const pkgInput = document.getElementById('pkg-input');
+            if (pkgInput) pkgInput.placeholder = activeApp?.runtime === 'node'
+                ? 'Package name, e.g. express@4' : 'Package name, e.g. numpy==1.26';
             const installControls = document.getElementById('pkg-install-controls');
             const autoScanCard = document.getElementById('pkg-auto-scan-card');
             const actionHeader = document.getElementById('pkg-action-header');
@@ -14,9 +25,9 @@
             const scanMissingSection = document.getElementById('scan-missing-section');
             const scanOkSection = document.getElementById('scan-ok-section');
 
-            if (installControls) installControls.classList.toggle('hidden', !isPythonRuntime);
+            if (installControls) installControls.classList.toggle('hidden', !canManage);
             if (autoScanCard) autoScanCard.classList.toggle('hidden', !isPythonRuntime);
-            if (actionHeader) actionHeader.classList.toggle('hidden', !isPythonRuntime);
+            if (actionHeader) actionHeader.classList.toggle('hidden', !canManage);
             if (scanResults) scanResults.classList.add('hidden');
             if (scanMissingSection) scanMissingSection.classList.add('hidden');
             if (scanOkSection) scanOkSection.classList.add('hidden');
@@ -24,7 +35,7 @@
 
         async function loadPackages() {
             const tbody = document.getElementById('pkg-list');
-            const isPythonRuntime = _isPythonPackageRuntime();
+            const isPythonRuntime = _canManagePackages();   // has an action column
             _syncPackagesTabRuntimeUi();
             tbody.innerHTML = `<tr><td colspan="${isPythonRuntime ? 3 : 2}" class="text-center py-8 text-sm" style="color:var(--text3)">Fetching environment...</td></tr>`;
             const appId = activeAppId;

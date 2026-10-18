@@ -9,12 +9,12 @@
 
 ## 1. Overview
 
-Venvy is a self-hosted "premium application manager" — a control plane for running, isolating, and exposing multiple Python/Rust applications from a single host. The API lets a client:
+Venvy is a self-hosted "premium application manager" — a control plane for running, isolating, and exposing multiple Python/Rust/Node.js applications from a single host. The API lets a client:
 
 - Authenticate and manage user accounts (admin/operator/viewer roles)
 - Upload, configure, start/stop/restart, and delete hosted apps
 - Browse, edit, upload, and download app files in a sandboxed directory
-- Manage each app's Python (pip) or Rust (cargo) dependencies
+- Manage each app's Python (pip), Rust (cargo) or Node.js (npm) dependencies
 - Stream/tail app logs
 - Inspect host-level metrics and take database backups
 - Publish apps publicly through a Cloudflare Tunnel + DNS
@@ -248,12 +248,12 @@ Authenticated (any role). Returns every app on the instance as an array of the *
 | Field | Type | Notes |
 |---|---|---|
 | `name` | string | required |
-| `runtime` | string | default `python` (also supports `rust`) |
+| `runtime` | string | default `python` (also supports `rust` and `node`; a Node.js app with an empty `entrypoint` runs `npm start`, otherwise `node <entrypoint>`) |
 | `entrypoint` | string | default `""` |
 | `start_on_boot` | bool | default `false` |
 | `restart_policy` | string | `never` \| `on-failure` \| `always` |
 | `files` | file[] | optional app source files (50 MB each). The web UI sends none here and uploads them afterwards via `POST /files/upload/chunk` |
-| `requirements` | file | optional `requirements.txt` / `Cargo.toml` |
+| `requirements` | file | optional `requirements.txt` / `Cargo.toml`. For `node`, upload `package.json` among `files`; if present, `npm install` runs while the app is `installing` |
 
 Creates the app's directory and DB record right away (status `installing`), then builds the virtual environment and installs `requirements.txt` in a **background job** (§4.4a; 10-minute pip timeout). Response: `{ "job_id", "app_id", "skipped_files": [{ path, reason }] }`. The job's `result` is the full **App object** (§6.1) with status `stopped`. If the job fails, the app, its directory and (with per-app users) its OS user are removed again. Starting or deleting an app while it is `installing` answers `409`.
 
@@ -359,20 +359,21 @@ Chunks are appended to `DATA_DIR/.upload-tmp/`. Once `total` bytes are in, the f
 
 ### 5.5 Packages — `/api/apps/{app_id}/packages`
 
-Supports Python apps (via the app's venv `pip`) and Rust apps (via `cargo`). Any other runtime returns `400`.
+Supports Python apps (via the app's venv `pip`), Rust apps (via `cargo`) and Node.js apps (via `npm`). Any other runtime returns `400`.
 
 #### `GET /api/apps/{app_id}/packages`
 Any role. Response shape **differs by runtime**:
 - **Python:** raw output of `pip list --format=json` — `[{ "name": "requests", "version": "2.31.0" }, ...]`.
 - **Rust:** parsed from `Cargo.toml`'s `[dependencies]` + `[dev-dependencies]` — `[{ "name": "serde", "version": "1.0" }, ...]` (version string as written in the manifest, e.g. `"1.0"` or `"unknown"` if it's a table without a `version` key).
+- **Node.js:** parsed from `package.json`'s `dependencies` + `devDependencies` — `[{ "name": "express", "version": "^4.19.0" }, ...]` (the range as written in the manifest).
 - On any internal failure (missing venv, unparsable manifest, subprocess timeout) this endpoint returns `[]` rather than an error — a frontend should treat an empty array as "possibly failed, not necessarily zero packages" and not surface it as a hard error state.
 
 #### `POST /api/apps/{app_id}/packages`
-`require_operator`, rate-limited. **Body:** `{ "name": "package[extra]==1.2.3" }` (or `crate@version` for Rust).
-Package specifiers are validated against a strict allow-list regex (and may not start with `-`, so they can't be read as a pip/cargo option) before being passed to `pip install` / `cargo add` (no shell is invoked). Runs as a **background job** (§4.4a); timeout 600 s (pip) / 300 s (cargo).
+`require_operator`, rate-limited. **Body:** `{ "name": "package[extra]==1.2.3" }` (`crate@version` for Rust, `name`, `@scope/name` or `name@version` for Node.js).
+Package specifiers are validated against a strict allow-list regex (and may not start with `-`, so they can't be read as a pip/cargo option) before being passed to `pip install` / `cargo add` / `npm install --prefix <app dir>` (no shell is invoked). Runs as a **background job** (§4.4a); timeout 600 s (pip, npm) / 300 s (cargo).
 
 #### `DELETE /api/apps/{app_id}/packages/{name}`
-`require_operator`, rate-limited. Uninstalls via `pip uninstall -y` / `cargo remove` as a **background job** (§4.4a). Timeout: 300 s (Python) / 120 s (Rust).
+`require_operator`, rate-limited. Uninstalls via `pip uninstall -y` / `cargo remove` / `npm uninstall` as a **background job** (§4.4a). Timeout: 300 s (Python, Node.js) / 120 s (Rust).
 
 #### `GET /api/apps/{app_id}/scan-imports`
 Any role. Python-only static analysis: walks the app's `.py` files via `ast`, collects top-level imports, and diffs them against stdlib + the venv's installed packages + the app's own top-level modules. `venv`, `node_modules`, `.git` and similar directories are not searched; at most 5000 files of up to 2 MB each are read.
@@ -572,7 +573,7 @@ This is the exact shape returned by `GET /api/apps` (array of these), `POST /api
 | `id` | int | primary key |
 | `user_id` | int | **audit-only** — who created it. Not used for access control; any operator/admin can manage any app. |
 | `name`, `slug` | string | |
-| `runtime` | string | `python` \| `rust` |
+| `runtime` | string | `python` \| `rust` \| `node` |
 | `created_at`, `updated_at` | string (ISO‑8601, UTC) | |
 | `status` | string | `stopped` \| `starting` \| `running` \| `stopping` \| `error` |
 | `pid` | int \| null | OS process id when running |
@@ -633,7 +634,7 @@ curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install
 ```
 
 Options follow `bash -s --`, e.g. `… | sudo bash -s -- --host 127.0.0.1 --port 8080`
-(`--version TAG`, `--with-rust`, `--app-users`, `--uninstall`). The installer adds
+(`--version TAG`, `--with-rust`, `--with-node`, `--app-users`, `--uninstall`). The installer adds
 missing system packages, creates a `venvy` system user, puts the code in
 `/opt/venvy/releases/<version>/` (with its own Python venv), data in `/var/lib/venvy/`,
 settings in `/etc/venvy/venvy.env`, and a `venvy` systemd service that starts at boot.
