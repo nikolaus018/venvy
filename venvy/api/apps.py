@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from pydantic import BaseModel
 from sqlmodel import select, Session
 
+from venvy import runtimes
 from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
 from venvy.auth import check_ip_allowlist, get_current_user, rate_limit_mutations, require_operator
@@ -64,12 +66,6 @@ router = APIRouter(
 )
 
 _REQUIREMENTS_MAX_BYTES = 1024 * 1024
-
-_RUNTIMES = ("python", "rust", "node")
-_RUNTIME_ERROR = "runtime must be one of: python, rust, node"
-# Node packages: "name", "@scope/name", optionally "@version" or "@tag".
-_NPM_PKG_RE = r"(@[a-z0-9][a-z0-9_.\-]*/)?[a-z0-9][a-z0-9_.\-]*(@[A-Za-z0-9_.+\-^~<>=*]+)?"
-_NPM_NAME_RE = r"(@[a-z0-9][a-z0-9_.\-]*/)?[a-z0-9][a-z0-9_.\-]*"
 
 
 # Where venv/pip/cargo/npm run from. Not Venvy's own working directory: under
@@ -149,22 +145,18 @@ async def upload_app(
     user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
 ):
-    if runtime not in _RUNTIMES:
-        raise HTTPException(400, _RUNTIME_ERROR)
+    if runtime not in runtimes.RUNTIMES:
+        raise HTTPException(400, runtimes.RUNTIME_ERROR)
     if restart_policy not in ("never", "on-failure", "always"):
         raise HTTPException(400, "restart_policy must be one of: never, on-failure, always")
     name = _clean_app_name(name)
-
-    entrypoint_clean = ""
-    if runtime == "rust":
-        entrypoint_clean = "main.rs"
-    elif entrypoint.strip():
-        entrypoint_strip = entrypoint.strip()
-        entrypoint_clean = Path(entrypoint_strip).name
-        if not entrypoint_clean or entrypoint_clean != entrypoint_strip:
-            raise HTTPException(400, "Entrypoint must be a plain filename (e.g. main.py), not a path.")
-        if not re.fullmatch(r"[A-Za-z0-9_.\-]+", entrypoint_clean):
-            raise HTTPException(400, "Entrypoint filename contains invalid characters.")
+    missing = runtimes.tools_error(runtime)
+    if missing:
+        raise HTTPException(400, missing)
+    try:
+        entrypoint_clean = runtimes.clean_entrypoint(runtime, entrypoint)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
     slug = sanitize_slug(name)
     user_apps_dir = APPS_BASE_DIR / str(user.id)
@@ -266,11 +258,12 @@ async def upload_app(
                 if proc.returncode != 0:
                     raise HTTPException(500, f"pip install failed: {pip_err.decode(errors='replace')}")
 
-            if runtime == "node" and await asyncio.to_thread((app_dir / "package.json").is_file):
-                await _run_app_tool(
-                    row, ["npm", "install", "--prefix", str(app_dir), "--no-audit", "--no-fund"],
-                    600, "npm install",
-                )
+            if runtime != "python":
+                # Whatever the files uploaded with the app list, if any. Files
+                # that arrive afterwards are installed on the first start.
+                for step in await asyncio.to_thread(runtimes.setup_steps, runtime, app_dir):
+                    await _run_app_tool(row, step.argv, step.timeout, step.what,
+                                        cwd=str(app_dir) if step.in_app_dir else None)
 
             with Session(engine) as s2:
                 row = s2.get(App, app_id)
@@ -456,25 +449,19 @@ async def update_app(
     # that switches a Rust app to Python *and* names its entrypoint used to
     # have that entrypoint overwritten with main.rs.
     if req.runtime is not None:
-        if req.runtime not in _RUNTIMES:
-            raise HTTPException(400, _RUNTIME_ERROR)
-        app_row.runtime = req.runtime
-        if app_row.runtime == "rust":
-            app_row.entrypoint = "main.rs"
+        if req.runtime not in runtimes.RUNTIMES:
+            raise HTTPException(400, runtimes.RUNTIME_ERROR)
+        if req.runtime != app_row.runtime:
+            if runtimes.RUNTIMES[app_row.runtime if app_row.runtime in runtimes.RUNTIMES else "python"].entry == runtimes.FIXED:
+                app_row.entrypoint = ""     # the old runtime's main.rs means nothing to the new one
+            app_row.runtime = req.runtime
+        if runtimes.RUNTIMES[app_row.runtime].entry == runtimes.FIXED:
+            app_row.entrypoint = runtimes.RUNTIMES[app_row.runtime].entry_default
     if req.entrypoint is not None:
-        if app_row.runtime == "rust":
-            app_row.entrypoint = "main.rs"
-        else:
-            ep_strip = req.entrypoint.strip()
-            if ep_strip == "":
-                app_row.entrypoint = ""
-            else:
-                ep_clean = Path(ep_strip).name
-                if not ep_clean or ep_clean != ep_strip:
-                    raise HTTPException(400, "Entrypoint must be a plain filename (e.g. main.py).")
-                if not re.fullmatch(r"[A-Za-z0-9_.\-]+", ep_clean):
-                    raise HTTPException(400, "Entrypoint filename contains invalid characters.")
-                app_row.entrypoint = ep_clean
+        try:
+            app_row.entrypoint = runtimes.clean_entrypoint(app_row.runtime, req.entrypoint)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
     if req.url_source_pref is not None:
         if req.url_source_pref not in ("local", "public"):
             raise HTTPException(400, "url_source_pref must be 'local' or 'public'")
@@ -592,6 +579,26 @@ def app_stats(
     return stats
 
 
+def _read_manifest(app_row: App, name: str) -> Optional[str]:
+    """Text of a manifest in the app's directory (None if absent or unreadable),
+    opened the symlink-safe way, 1 MB at most."""
+    try:
+        f, _ = _fs_open_file(Path(app_row.app_dir), (name,))
+    except AppPathError:
+        return None
+    try:
+        with f:
+            return f.read(_REQUIREMENTS_MAX_BYTES).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+@router.get("/runtimes")
+async def list_runtimes(user: User = Depends(get_current_user)):
+    """The runtimes this Venvy can host and whether this host has what they need."""
+    return await asyncio.to_thread(runtimes.describe)
+
+
 @router.get("/apps/{app_id}/packages")
 async def list_packages(
     app_id: int,
@@ -625,27 +632,12 @@ async def list_packages(
             logging.error(f"Failed to parse Cargo.toml: {e}")
             return []
 
-    if app_row.runtime == "node":
-        try:
-            manifest, _ = _fs_open_file(Path(app_row.app_dir), ("package.json",))
-        except AppPathError:
-            return []
-        try:
-            with manifest as f:
-                data = json.load(f)
-            results = []
-            for section in ("dependencies", "devDependencies"):
-                deps = data.get(section) or {}
-                for name, version in deps.items():
-                    results.append({"name": name, "version": str(version)})
-            return results
-        except Exception as e:
-            logging.error(f"Failed to parse package.json: {e}")
-            return []
+    if app_row.runtime in runtimes.RUNTIMES and app_row.runtime != "python":
+        return runtimes.list_packages(app_row.runtime, lambda name: _read_manifest(app_row, name))
 
     if app_row.runtime != "python":
-        raise HTTPException(400, "Packages tab is only supported for Python/Rust/Node.")
-        
+        raise HTTPException(400, "This app's runtime is not known to this Venvy.")
+
     venv_python = Path(app_row.venv_path) / "bin" / "python"
     if not venv_python.exists():
         raise HTTPException(500, "Virtual environment python not found.")
@@ -678,25 +670,41 @@ async def list_packages(
 _package_locks: Dict[int, asyncio.Lock] = {}
 
 
-async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str) -> None:
+async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str,
+                        cwd: Optional[str] = None) -> None:
     """Run a package-manager command for an app (as the app's user); raise
-    HTTPException with its stderr on failure or timeout."""
+    HTTPException with its stderr on failure or timeout. *cwd* is for tools
+    that work on the directory they are started in."""
     async with _package_locks.setdefault(app_row.id, asyncio.Lock()):
-        proc = await asyncio.create_subprocess_exec(
-            *_as_app_user(app_row, argv),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_app_tool_env(app_row),
-            cwd=_TOOL_CWD,
-        )
         try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            proc = await asyncio.create_subprocess_exec(
+                *_as_app_user(app_row, argv),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_app_tool_env(app_row),
+                cwd=cwd or _TOOL_CWD,
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            raise HTTPException(500, runtimes.tools_error(app_row.runtime, packages=True)
+                                or f"{argv[0]} is not installed on this host.")
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)     # the tool and whatever it started
             raise HTTPException(500, f"{what} timed out after {timeout} seconds.")
         if proc.returncode != 0:
-            raise HTTPException(500, f"{what} failed: {stderr.decode(errors='replace')}")
+            # Some tools (go, composer, bundler) explain themselves on stdout.
+            detail = (stderr.decode(errors="replace").strip() or stdout.decode(errors="replace").strip())[-4000:]
+            raise HTTPException(500, f"{what} failed: {detail}")
+
+
+async def _run_steps(app_row: App, steps: List["runtimes.Step"]) -> None:
+    for step in steps:
+        await _run_app_tool(app_row, step.argv, step.timeout, step.what,
+                            cwd=app_row.app_dir if step.in_app_dir else None)
 
 
 @router.post("/apps/{app_id}/packages")
@@ -718,11 +726,6 @@ async def install_package(
             raise HTTPException(400, "Invalid package name.")
         argv = ["cargo", "add", pkg_name, "--manifest-path", str(Path(app_row.app_dir) / "Cargo.toml")]
         timeout, what = 300, "cargo add"
-    elif app_row.runtime == "node":
-        if not re.fullmatch(_NPM_PKG_RE, pkg_name):
-            raise HTTPException(400, "Invalid package name.")
-        argv = ["npm", "install", "--prefix", str(app_row.app_dir), "--no-audit", "--no-fund", pkg_name]
-        timeout, what = 600, "npm install"
     elif app_row.runtime == "python":
         venv_python = Path(app_row.venv_path) / "bin" / "python"
         if not venv_python.exists():
@@ -733,18 +736,27 @@ async def install_package(
             raise HTTPException(400, "Invalid package name.")
         argv = [str(venv_python), "-m", "pip", "install", "--no-input", pkg_name]
         timeout, what = 600, "pip install"
+    elif runtimes.can_install(app_row.runtime):
+        try:
+            steps = runtimes.install_steps(app_row.runtime, Path(app_row.app_dir), pkg_name)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        argv = None
     else:
-        raise HTTPException(400, "Packages tab is only supported for Python/Rust/Node.")
+        raise HTTPException(400, "This app's runtime has no packages to install.")
 
     async def _job() -> dict:
-        await _run_app_tool(app_row, argv, timeout, what)
+        if argv is None:
+            await _run_steps(app_row, steps)
+        else:
+            await _run_app_tool(app_row, argv, timeout, what)
         audit_log(user.username, "package_install", f"app '{app_row.name}' (id={app_id}): {pkg_name}")
         return {"ok": True}
 
     return _start_job(user, "package_install", _job)
 
 
-@router.delete("/apps/{app_id}/packages/{name}")
+@router.delete("/apps/{app_id}/packages/{name:path}")
 async def uninstall_package(
     app_id: int,
     name: str,
@@ -756,33 +768,63 @@ async def uninstall_package(
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
-    if app_row.runtime == "node":
-        if not re.fullmatch(_NPM_NAME_RE, name):
-            raise HTTPException(400, "Invalid package name.")
-    elif not re.fullmatch(r"[A-Za-z0-9_.+\-]+", name) or name.startswith("-"):
+    if not runtimes.can_install(app_row.runtime) and (
+            not re.fullmatch(r"[A-Za-z0-9_.+\-]+", name) or name.startswith("-")):
         raise HTTPException(400, "Invalid package name.")
 
     if app_row.runtime == "rust":
         argv = ["cargo", "remove", name, "--manifest-path", str(Path(app_row.app_dir) / "Cargo.toml")]
         timeout, what = 120, "cargo remove"
-    elif app_row.runtime == "node":
-        argv = ["npm", "uninstall", "--prefix", str(app_row.app_dir), "--no-audit", "--no-fund", name]
-        timeout, what = 300, "npm uninstall"
     elif app_row.runtime == "python":
         venv_python = Path(app_row.venv_path) / "bin" / "python"
         if not venv_python.exists():
             raise HTTPException(500, "Virtual environment python not found.")
         argv = [str(venv_python), "-m", "pip", "uninstall", "-y", name]
         timeout, what = 300, "pip uninstall"
+    elif runtimes.can_install(app_row.runtime):
+        try:
+            steps = runtimes.remove_steps(app_row.runtime, Path(app_row.app_dir), name)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        argv = None
     else:
-        raise HTTPException(400, "Packages tab is only supported for Python/Rust/Node.")
+        raise HTTPException(400, "This app's runtime has no packages to remove.")
 
     async def _job() -> dict:
-        await _run_app_tool(app_row, argv, timeout, what)
+        if argv is None:
+            await _run_steps(app_row, steps)
+        else:
+            await _run_app_tool(app_row, argv, timeout, what)
         audit_log(user.username, "package_uninstall", f"app '{app_row.name}' (id={app_id}): {name}")
         return {"ok": True}
 
     return _start_job(user, "package_uninstall", _job)
+
+
+@router.post("/apps/{app_id}/packages/sync")
+async def sync_packages(
+    app_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
+):
+    """Install everything the app's manifest (package.json, Gemfile, …) lists.
+    Answers {"job_id"} — poll GET /api/jobs/{id}."""
+    app_row = session.get(App, app_id)
+    if not app_row:
+        raise HTTPException(404)
+    if not runtimes.can_install(app_row.runtime):
+        raise HTTPException(400, "This app's runtime has no manifest to install from.")
+    steps = runtimes.sync_steps(app_row.runtime, Path(app_row.app_dir))
+    if not steps:
+        raise HTTPException(400, "There is no manifest in the app's folder to install from.")
+
+    async def _job() -> dict:
+        await _run_steps(app_row, steps)
+        audit_log(user.username, "package_sync", f"app '{app_row.name}' (id={app_id})")
+        return {"ok": True}
+
+    return _start_job(user, "package_sync", _job)
 
 
 @router.get("/apps/{app_id}/logs")

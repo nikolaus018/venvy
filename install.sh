@@ -12,6 +12,13 @@
 #   --version TAG     install a specific release (default: latest)
 #   --with-rust       also install cargo/rustc so Rust apps can be hosted
 #   --with-node       also install nodejs/npm so Node.js apps can be hosted
+#   --with-go         also install Go (the current release from go.dev)
+#   --with-bun        also install Bun
+#   --with-deno       also install Deno
+#   --with-php        also install php-cli and Composer
+#   --with-ruby       also install Ruby and Bundler
+#   --with-java       also install a headless Java runtime
+#   --with-all        all of the runtimes above, and Rust
 #   --app-users       run Venvy as root with one Unix user per hosted app
 #   --uninstall       remove the service and code (data and config are kept)
 #
@@ -44,7 +51,7 @@ UNIT_FILE="/etc/systemd/system/venvy.service"
 DEFAULT_DATA_DIR="/var/lib/venvy"
 KEEP_DB_SNAPSHOTS=5
 
-VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; WITH_NODE=0; APP_USERS=""; UNINSTALL=0
+VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; WITH_NODE=0; WITH_GO=0; WITH_BUN=0; WITH_DENO=0; WITH_PHP=0; WITH_RUBY=0; WITH_JAVA=0; APP_USERS=""; UNINSTALL=0
 
 # Printed from here rather than read back out of this file: piped into bash
 # from curl there is no file to read.
@@ -61,6 +68,13 @@ Options go after `bash -s --`:
   --version TAG     install a specific release (default: latest)
   --with-rust       also install cargo/rustc so Rust apps can be hosted
   --with-node       also install nodejs/npm so Node.js apps can be hosted
+  --with-go         also install Go (the current release from go.dev)
+  --with-bun        also install Bun
+  --with-deno       also install Deno
+  --with-php        also install php-cli and Composer
+  --with-ruby       also install Ruby and Bundler
+  --with-java       also install a headless Java runtime
+  --with-all        all of the runtimes above, and Rust
   --app-users       run Venvy as root with one Unix user per hosted app
   --uninstall       remove the service and code (data and config are kept)
 
@@ -80,6 +94,13 @@ while [ $# -gt 0 ]; do
     --version)   [ $# -ge 2 ] || die "--version needs a value"; VERSION="$2"; shift 2 ;;
     --with-rust) WITH_RUST=1; shift ;;
     --with-node) WITH_NODE=1; shift ;;
+    --with-go)   WITH_GO=1; shift ;;
+    --with-bun)  WITH_BUN=1; shift ;;
+    --with-deno) WITH_DENO=1; shift ;;
+    --with-php)  WITH_PHP=1; shift ;;
+    --with-ruby) WITH_RUBY=1; shift ;;
+    --with-java) WITH_JAVA=1; shift ;;
+    --with-all)  WITH_RUST=1; WITH_NODE=1; WITH_GO=1; WITH_BUN=1; WITH_DENO=1; WITH_PHP=1; WITH_RUBY=1; WITH_JAVA=1; shift ;;
     --app-users) APP_USERS=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)   usage; exit 0 ;;
@@ -151,6 +172,11 @@ say "Installing Venvy ($VERSION) — data in $DATA_DIR, service user $RUN_USER, 
 PKGS="python3 python3-venv curl ca-certificates git tar"
 [ "$WITH_RUST" -eq 1 ] && PKGS="$PKGS cargo rustc build-essential"
 [ "$WITH_NODE" -eq 1 ] && PKGS="$PKGS nodejs npm"
+[ "$WITH_PHP" -eq 1 ]  && PKGS="$PKGS php-cli composer unzip"
+[ "$WITH_RUBY" -eq 1 ] && PKGS="$PKGS ruby ruby-bundler build-essential"
+[ "$WITH_JAVA" -eq 1 ] && PKGS="$PKGS default-jre-headless"
+# Bun and Deno come as zip files; Go needs nothing beyond curl and tar.
+[ "$WITH_BUN" -eq 1 ] || [ "$WITH_DENO" -eq 1 ] && PKGS="$PKGS unzip"
 MISSING=""
 for p in $PKGS; do dpkg -s "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"; done
 if [ -n "$MISSING" ]; then
@@ -159,6 +185,80 @@ if [ -n "$MISSING" ]; then
   # shellcheck disable=SC2086
   apt-get install -y -q --no-install-recommends $MISSING
 fi
+# Runtimes that are not in Debian/Ubuntu's repositories, or too old there to be
+# any use (Go): the official release, checked against the checksum its
+# publisher lists. A tool that is already installed is left alone.
+case "$(uname -m)" in
+  x86_64|amd64)  ARCH_GO=amd64; ARCH_BUN=x64;     ARCH_DENO=x86_64 ;;
+  aarch64|arm64) ARCH_GO=arm64; ARCH_BUN=aarch64; ARCH_DENO=aarch64 ;;
+  *)             ARCH_GO="";    ARCH_BUN="";      ARCH_DENO="" ;;
+esac
+
+fetch_to() {  # URL FILE — or stop with a message
+  curl -fsSL --retry 3 -o "$2" "$1" || { rm -rf "${WORK:-}"; die "Could not download $1"; }
+}
+verify_sha256() {  # FILE EXPECTED NAME
+  [ -n "$2" ] || { rm -rf "${WORK:-}"; die "No checksum was published for $3."; }
+  [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ] || { rm -rf "${WORK:-}"; die "Checksum mismatch for $3 — nothing was installed."; }
+}
+
+install_go() {
+  command -v go >/dev/null 2>&1 && return 0
+  [ -n "$ARCH_GO" ] || die "Go: unsupported CPU architecture $(uname -m)."
+  say "Installing Go..."
+  WORK="$(mktemp -d)"
+  # shellcheck disable=SC2046
+  set -- $(python3 - "$ARCH_GO" <<'PY'
+import json, sys, urllib.request
+rel = json.load(urllib.request.urlopen("https://go.dev/dl/?mode=json", timeout=30))[0]
+for f in rel["files"]:
+    if f["os"] == "linux" and f["arch"] == sys.argv[1] and f["kind"] == "archive":
+        print(f["filename"], f["sha256"])
+        break
+PY
+  )
+  [ $# -eq 2 ] || { rm -rf "$WORK"; die "Could not find the current Go release on go.dev."; }
+  fetch_to "https://go.dev/dl/$1" "$WORK/go.tgz"
+  verify_sha256 "$WORK/go.tgz" "$2" "$1"
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf "$WORK/go.tgz"
+  ln -sf /usr/local/go/bin/go /usr/local/bin/go
+  ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+  rm -rf "$WORK"
+}
+
+install_bun() {
+  command -v bun >/dev/null 2>&1 && return 0
+  [ -n "$ARCH_BUN" ] || die "Bun: unsupported CPU architecture $(uname -m)."
+  say "Installing Bun..."
+  WORK="$(mktemp -d)"
+  base="https://github.com/oven-sh/bun/releases/latest/download"; zip="bun-linux-$ARCH_BUN.zip"
+  fetch_to "$base/$zip" "$WORK/$zip"
+  fetch_to "$base/SHASUMS256.txt" "$WORK/SHASUMS256.txt"
+  verify_sha256 "$WORK/$zip" "$(awk -v f="$zip" '$2 == f || $2 == "./" f {print $1}' "$WORK/SHASUMS256.txt")" "$zip"
+  unzip -q -o "$WORK/$zip" -d "$WORK"
+  install -m 0755 "$WORK/bun-linux-$ARCH_BUN/bun" /usr/local/bin/bun
+  rm -rf "$WORK"
+}
+
+install_deno() {
+  command -v deno >/dev/null 2>&1 && return 0
+  [ -n "$ARCH_DENO" ] || die "Deno: unsupported CPU architecture $(uname -m)."
+  say "Installing Deno..."
+  WORK="$(mktemp -d)"
+  base="https://github.com/denoland/deno/releases/latest/download"; zip="deno-$ARCH_DENO-unknown-linux-gnu.zip"
+  fetch_to "$base/$zip" "$WORK/$zip"
+  fetch_to "$base/$zip.sha256sum" "$WORK/$zip.sha256sum"
+  verify_sha256 "$WORK/$zip" "$(awk '{print $1; exit}' "$WORK/$zip.sha256sum")" "$zip"
+  unzip -q -o "$WORK/$zip" -d "$WORK"
+  install -m 0755 "$WORK/deno" /usr/local/bin/deno
+  rm -rf "$WORK"
+}
+
+[ "$WITH_GO" -eq 1 ]   && install_go
+[ "$WITH_BUN" -eq 1 ]  && install_bun
+[ "$WITH_DENO" -eq 1 ] && install_deno
+
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
   || die "Python 3.10 or newer is required (found $(python3 -V 2>&1)). Debian 12 / Ubuntu 22.04 or later have it."
 

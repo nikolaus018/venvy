@@ -11,6 +11,21 @@
                                     class="btn-primary px-8 py-3 text-sm">Install</button>
                             </div>
 
+                            <!-- Install everything the manifest lists -->
+                            <div id="pkg-sync-card" data-requires-operator
+                                class="card hidden items-center justify-between gap-3 px-5 py-4 mb-5">
+                                <div>
+                                    <p class="text-sm font-semibold" style="color:var(--text)">Install from manifest</p>
+                                    <p id="pkg-sync-hint" class="text-xs mt-0.5" style="color:var(--text3)"></p>
+                                </div>
+                                <button onclick="syncPackages()" id="pkg-sync-btn"
+                                    class="shrink-0 text-xs font-bold px-4 py-2 rounded-xl transition active:scale-95"
+                                    style="background:var(--surface2);color:var(--text);border:1px solid var(--border2)">Install</button>
+                            </div>
+
+                            <!-- Nothing to manage for this runtime -->
+                            <div id="pkg-note" class="card hidden px-5 py-4 mb-5 text-sm" style="color:var(--text3)"></div>
+
                             <!-- Auto-scan -->
                             <div id="pkg-auto-scan-card" class="card overflow-hidden mb-5">
                                 <div class="flex items-center justify-between px-5 py-4"
@@ -51,7 +66,7 @@
                             </div>
 
                             <!-- Package list -->
-                            <div class="card overflow-hidden">
+                            <div id="pkg-list-card" class="card overflow-hidden">
                                 <table class="w-full text-left text-sm">
                                     <thead class="section-label"
                                         style="background:var(--surface2);border-bottom:1px solid var(--border)">

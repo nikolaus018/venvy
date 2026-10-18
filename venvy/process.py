@@ -34,10 +34,12 @@ from venvy.crypto import _decrypt_secret, _try_decrypt_secret
 from venvy.db import engine
 from venvy.isolation import (
     _app_log_file,
+    _app_tool_env,
     _as_app_user,
     _app_username,
     _ensure_app_user,
 )
+from venvy import runtimes
 from venvy.jobs import _running_tasks
 from venvy.models import App, UserSession
 
@@ -204,16 +206,15 @@ def _build_app_env(db_app: App) -> Dict[str, str]:
         env["APP_PORT"] = str(effective_port)
         env["PORT"] = str(effective_port)
     env["PYTHONUNBUFFERED"] = "1"
-    if db_app.runtime == "node":
-        env.setdefault("NODE_ENV", "production")
+    run_vars, run_path = runtimes.run_env(db_app.runtime, Path(db_app.app_dir), effective_port)
+    for _k, _v in run_vars.items():
+        env.setdefault(_k, _v)      # the app's own settings win
     
     venv_bin = str(Path(db_app.venv_path) / "bin")
     cargo_bin = str(Path.home() / ".cargo" / "bin")
     
     existing_path = env.get("PATH", "")
-    new_paths = [venv_bin]
-    if db_app.runtime == "node":
-        new_paths.insert(0, str(Path(db_app.app_dir) / "node_modules" / ".bin"))
+    new_paths = run_path + [venv_bin]
     if cargo_bin not in existing_path:
         new_paths.append(cargo_bin)
     
@@ -486,6 +487,44 @@ async def restart_app_process_logic(app_id: int) -> None:
             await _start_app_process(app_id, s)
 
 
+def _venvy_log(log_file: Path, msg: str) -> None:
+    """A line from Venvy itself in the app's log."""
+    with contextlib.suppress(OSError):
+        with open(log_file, "a", encoding="utf-8") as lf:
+            lf.write(f"[{utc_now().strftime('%Y-%m-%d %H:%M:%S')}] [venvy] {msg}\n")
+
+
+async def _run_prestart_step(db_app: App, step: "runtimes.Step", log_file: Path) -> None:
+    """Run a dependency install before the first start, with its output in the
+    app's log. Raises if it fails — the app would only crash without it."""
+    _venvy_log(log_file, f"Dependencies are not installed yet — running {step.what}…")
+    proc = await asyncio.create_subprocess_exec(
+        *_as_app_user(db_app, step.argv),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env=_app_tool_env(db_app),
+        cwd=db_app.app_dir if step.in_app_dir else "/",
+        start_new_session=True,
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=step.timeout)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        _venvy_log(log_file, f"{step.what} timed out after {step.timeout} seconds.")
+        raise RuntimeError(f"{step.what} timed out after {step.timeout} seconds.")
+    text = out.decode(errors="replace").strip()
+    if text:
+        with contextlib.suppress(OSError):
+            with open(log_file, "a", encoding="utf-8") as lf:
+                lf.write(text[-6000:] + "\n")
+    if proc.returncode != 0:
+        _venvy_log(log_file, f"{step.what} failed (exit code {proc.returncode}).")
+        raise RuntimeError(f"{step.what} failed — see the Logs tab.")
+    _venvy_log(log_file, f"{step.what} finished.")
+
+
 async def _start_app_process(app_id: int, session: Session) -> App:
     """Start the app. Caller holds _app_lock(app_id)."""
     # populate_existing: the caller's session may hold a copy loaded before
@@ -504,11 +543,25 @@ async def _start_app_process(app_id: int, session: Session) -> App:
     db_app.pid = None
     db_app.pid_start = None
 
-    if not db_app.entrypoint and db_app.runtime not in ("rust", "node"):
+    if db_app.runtime not in runtimes.RUNTIMES:
+        db_app.status = "error"
+        session.add(db_app)
+        session.commit()
+        raise RuntimeError(f"Unknown runtime '{db_app.runtime}'.")
+
+    if runtimes.entry_missing(db_app.runtime, db_app.entrypoint):
         db_app.status = "error"
         session.add(db_app)
         session.commit()
         raise RuntimeError("No entrypoint configured. Set one in the app's Settings tab first.")
+
+    problem = runtimes.tools_error(db_app.runtime) or runtimes.start_problem(
+        db_app.runtime, Path(db_app.app_dir), db_app.entrypoint)
+    if problem:
+        db_app.status = "error"
+        session.add(db_app)
+        session.commit()
+        raise RuntimeError(problem)
 
     if db_app.runtime == "python":
         venv_python = Path(db_app.venv_path) / "bin" / "python"
@@ -549,22 +602,26 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         session.commit()
         raise RuntimeError(msg)
 
+    if runtimes.needs_port(db_app.runtime, db_app.entrypoint) and not db_app.port:
+        # The command line names the port (a static site, php -S), so there has
+        # to be one before the app starts rather than one found afterwards.
+        db_app.port = await asyncio.to_thread(find_free_port)
+        if not db_app.port:
+            db_app.status = "error"
+            session.add(db_app)
+            session.commit()
+            raise RuntimeError("No free port is available for this app.")
+        session.add(db_app)
+        session.commit()
+
     env = _build_app_env(db_app)
     if ids:
         env.update(HOME=str(app_dir), USER=_app_username(app_id), LOGNAME=_app_username(app_id))
     _cancel_log_task(app_id)
 
     try:
-        if db_app.runtime == "python":
-            venv_python = Path(db_app.venv_path) / "bin" / "python"
-            cmd = [str(venv_python), db_app.entrypoint]
-        elif db_app.runtime == "rust":
-            cmd = ["cargo", "run"]
-        elif db_app.runtime == "node":
-            # No entrypoint: whatever package.json's "start" script says.
-            cmd = ["node", db_app.entrypoint] if db_app.entrypoint else ["npm", "start", "--silent"]
-        else:
-            cmd = [db_app.entrypoint]
+        for step in runtimes.first_run_steps(db_app.runtime, app_dir):
+            await _run_prestart_step(db_app, step, log_file)
 
         effective_port = db_app.port
         if db_app.port:
@@ -586,6 +643,11 @@ async def _start_app_process(app_id: int, session: Session) -> App:
                         pass
                     env["APP_PORT"] = str(new_port)
                     env["PORT"] = str(new_port)
+                    if env.get("SERVER_PORT") == str(effective_port):
+                        env["SERVER_PORT"] = str(new_port)      # Java apps
+
+        cmd = runtimes.start_command(
+            db_app.runtime, app_dir, db_app.entrypoint, db_app.port, db_app.venv_path)
 
         unit_name = f"venvy-app-{app_id}"
         launch_cmd = cmd

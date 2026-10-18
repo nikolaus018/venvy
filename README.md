@@ -1,7 +1,7 @@
 <h1 align="center">Venvy</h1>
 
 <p align="center">
-  <b>A self-hosted control panel for running your Python, Node.js and Rust apps on one server.</b><br>
+  <b>A self-hosted control panel for running your apps on one server — Python, Node.js, Bun, Deno, Go, Rust, PHP, Ruby, Java and static sites.</b><br>
   Upload code, get a virtualenv, a process supervisor, a browser terminal, live logs and a public URL.
 </p>
 
@@ -44,10 +44,37 @@ curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install
 | `--version TAG` | Install a specific release instead of the latest. |
 | `--with-rust` | Also install `cargo`/`rustc` so Rust apps can be hosted. |
 | `--with-node` | Also install `nodejs`/`npm` so Node.js apps can be hosted. |
+| `--with-go` | Also install Go (the current release from go.dev, checksum-verified). |
+| `--with-bun` / `--with-deno` | Also install Bun / Deno (the official release, checksum-verified). |
+| `--with-php` | Also install `php-cli` and Composer. |
+| `--with-ruby` | Also install Ruby and Bundler. |
+| `--with-java` | Also install a headless Java runtime. |
+| `--with-all` | All of the above, and Rust. Python and static sites need nothing extra. |
 | `--app-users` | Run as root with one Unix user per hosted app (see [Isolation](#isolation)). |
 | `--uninstall` | Remove the service and code. Data and config are kept. |
 
 Settings live in `/etc/venvy/venvy.env`, data in `/var/lib/venvy`, code in `/opt/venvy`.
+
+## Runtimes
+
+Pick one when you create an app; it can be changed later in Settings. Venvy tells you at start-up
+(and in the dropdown) which ones this host is missing.
+
+| Runtime | Starts with | Packages tab |
+|---|---|---|
+| Python | the entrypoint, in its own virtualenv | pip |
+| Node.js | `node <entrypoint>`, or `npm start` if blank | npm |
+| Bun | `bun run <entrypoint>`, or the `start` script if blank | `bun add` / `bun remove` |
+| Deno | `deno run --allow-all <entrypoint>`, or `deno task start` | `deno add` / `deno remove` |
+| Go | `go run .` | `go get` / `go mod` |
+| Rust | `cargo run` | listed from `Cargo.toml` |
+| PHP | PHP's built-in server on the app folder (or `public/`), or your router script | Composer |
+| Ruby | `ruby <entrypoint>`, `rackup` for a `config.ru`; `bundle exec` with a Gemfile | Bundler |
+| Java | `java -jar <entrypoint>` | – |
+| Static site | a small file server on a folder (`public`, `dist`, `build`, … or the one you name) | – |
+
+Dependencies are installed when the app is created if its manifest is uploaded with it, and
+otherwise on the first start (or with "Install from manifest" in the Packages tab).
 
 ## What it does
 

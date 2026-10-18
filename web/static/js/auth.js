@@ -21,6 +21,7 @@
                     if (!_appInitialized) {
                         _appInitialized = true;
                         initAceEditor();
+                        loadRuntimes();
                         loadApps();
                         _loadHostCapacity();
                     }

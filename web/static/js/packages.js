@@ -5,32 +5,62 @@
             return (activeApp?.runtime || 'python') === 'python';
         }
 
-        // Python (pip) and Node.js (npm) packages can be installed and removed
-        // here; Rust's Cargo.toml dependencies are listed read-only.
-        function _canManagePackages() {
-            const rt = activeApp?.runtime || 'python';
-            return rt === 'python' || rt === 'node';
+        // What the Packages tab offers for the open app's runtime: 'manage'
+        // (list, install, remove), 'list' (read-only) or 'none'.
+        function _packageMode() {
+            const key = activeApp?.runtime || 'python';
+            return runtimeMeta(key)?.packages || (key === 'python' ? 'manage' : 'list');
         }
+        function _canManagePackages() { return _packageMode() === 'manage'; }
+
+        const _MANIFEST_NAMES = { node: 'package.json', bun: 'package.json', deno: 'deno.json', go: 'go.mod', php: 'composer.json', ruby: 'Gemfile' };
 
         function _syncPackagesTabRuntimeUi() {
+            const key = activeApp?.runtime || 'python';
+            const meta = runtimeMeta(key);
+            const mode = _packageMode();
             const isPythonRuntime = _isPythonPackageRuntime();
-            const canManage = _canManagePackages();
+            const canManage = mode === 'manage';
             const pkgInput = document.getElementById('pkg-input');
-            if (pkgInput) pkgInput.placeholder = activeApp?.runtime === 'node'
-                ? 'Package name, e.g. express@4' : 'Package name, e.g. numpy==1.26';
-            const installControls = document.getElementById('pkg-install-controls');
-            const autoScanCard = document.getElementById('pkg-auto-scan-card');
-            const actionHeader = document.getElementById('pkg-action-header');
+            if (pkgInput) pkgInput.placeholder = meta?.pkg_example || 'Package name';
+            const toggle = (id, show) => { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', !show); };
+            toggle('pkg-install-controls', canManage);
+            toggle('pkg-auto-scan-card', isPythonRuntime);          // the import scanner reads Python imports
+            toggle('pkg-action-header', canManage);
+            toggle('pkg-list-card', mode !== 'none');
+            const canSync = canManage && !isPythonRuntime && !!meta?.can_sync;
+            const syncCard = document.getElementById('pkg-sync-card');
+            if (syncCard) {
+                syncCard.classList.toggle('hidden', !canSync);
+                syncCard.classList.toggle('flex', canSync);
+            }
+            const syncHint = document.getElementById('pkg-sync-hint');
+            if (syncHint) syncHint.textContent = `Installs everything ${_MANIFEST_NAMES[key] || 'the manifest'} lists`;
+            const note = document.getElementById('pkg-note');
+            if (note) {
+                note.textContent = mode === 'none' ? (meta?.pkg_help || 'There is nothing to manage here.')
+                    : (canManage && meta && !meta.packages_installed ? `The package manager is not installed on this host. ${meta.install_hint}` : '');
+                note.classList.toggle('hidden', !note.textContent);
+            }
             const scanResults = document.getElementById('scan-results');
             const scanMissingSection = document.getElementById('scan-missing-section');
             const scanOkSection = document.getElementById('scan-ok-section');
-
-            if (installControls) installControls.classList.toggle('hidden', !canManage);
-            if (autoScanCard) autoScanCard.classList.toggle('hidden', !isPythonRuntime);
-            if (actionHeader) actionHeader.classList.toggle('hidden', !canManage);
             if (scanResults) scanResults.classList.add('hidden');
             if (scanMissingSection) scanMissingSection.classList.add('hidden');
             if (scanOkSection) scanOkSection.classList.add('hidden');
+        }
+
+        async function syncPackages() {
+            const btn = document.getElementById('pkg-sync-btn');
+            const appId = activeAppId;
+            btn.disabled = true; const label = btn.innerText; btn.innerText = 'Installing…';
+            try {
+                const res = await fetch(`${API}/apps/${appId}/packages/sync`, { method: 'POST' });
+                await waitForJob(res);
+                showToast('Dependencies installed', 'success');
+                if (appId === activeAppId) loadPackages();
+            } catch (e) { showToast('Install failed: ' + e.message, 'error'); }
+            finally { btn.disabled = false; btn.innerText = label; }
         }
 
         async function loadPackages() {

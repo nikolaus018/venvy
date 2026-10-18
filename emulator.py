@@ -30,7 +30,7 @@ import uvicorn
 # Config
 # ---------------------------------------------------------------------------
 
-PORT = 54783
+PORT = int(os.getenv("PORT", "54783"))
 HOST = "127.0.0.1"
 ASSETS_DIR = Path(__file__).parent.resolve()
 WEB_DIR = ASSETS_DIR / "web"
@@ -462,8 +462,8 @@ async def upload_app(
 ):
     global NEXT_APP_ID
     _check_auth(request)
-    if runtime not in ("python", "rust", "node"):
-        raise HTTPException(400, "runtime must be one of: python, rust, node")
+    if runtime not in {r["key"] for r in FAKE_RUNTIMES}:
+        raise HTTPException(400, "unknown runtime")
     app_id = NEXT_APP_ID
     NEXT_APP_ID += 1
     slug = name.lower().replace(" ", "-")
@@ -478,7 +478,7 @@ async def upload_app(
         "port": None,
         "manual_ports": "[]",
         "detected_ports": "[]",
-        "entrypoint": entrypoint or {"python": "main.py", "rust": "main.rs", "node": ""}[runtime],
+        "entrypoint": entrypoint or next(r["entry_default"] for r in FAKE_RUNTIMES if r["key"] == runtime),
         "start_on_boot": start_on_boot,
         "restart_policy": restart_policy,
         "last_exit_code": None,
@@ -565,8 +565,8 @@ async def update_app(app_id: int, req: AppUpdateReq, request: Request):
     if req.restart_policy is not None:
         a["restart_policy"] = req.restart_policy
     if req.runtime is not None:
-        if req.runtime not in ("python", "rust", "node"):
-            raise HTTPException(400, "runtime must be one of: python, rust, node")
+        if req.runtime not in {r["key"] for r in FAKE_RUNTIMES}:
+            raise HTTPException(400, "unknown runtime")
         a["runtime"] = req.runtime
     if req.port is not None:
         a["port"] = req.port if req.port != 0 else None
@@ -728,6 +728,175 @@ async def abort_file_upload(app_id: int, upload_id: str, request: Request):
     _FAKE_UPLOAD_PARTS.pop(upload_id, None)
     return {"ok": True}
 
+# The same table as venvy/runtimes.py (every tool pretended installed). tests/t_small.py checks the keys stay in step.
+FAKE_RUNTIMES = [
+  {
+    "key": "python",
+    "label": "Python 3 (Venv)",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "sudo apt-get install -y python3 python3-venv",
+    "entry": "required",
+    "entry_default": "main.py",
+    "entry_label": "Entrypoint File",
+    "entry_placeholder": "main.py",
+    "entry_help": "The Python file that launches your app (e.g. main.py). Upload files first if the app has none yet.",
+    "packages": "manage",
+    "pkg_help": "",
+    "pkg_example": "Package name, e.g. numpy==1.26",
+    "can_sync": False
+  },
+  {
+    "key": "node",
+    "label": "Node.js (npm)",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "sudo apt-get install -y nodejs npm   (or re-run the installer with --with-node)",
+    "entry": "optional",
+    "entry_default": "",
+    "entry_label": "Entrypoint File",
+    "entry_placeholder": "server.js (blank = npm start)",
+    "entry_help": "The file that launches your app (e.g. server.js). Leave it blank to run the \"start\" script of package.json (npm start).",
+    "packages": "manage",
+    "pkg_help": "",
+    "pkg_example": "Package name, e.g. express@4",
+    "can_sync": True
+  },
+  {
+    "key": "bun",
+    "label": "Bun",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "re-run the installer with --with-bun   (https://bun.sh)",
+    "entry": "optional",
+    "entry_default": "",
+    "entry_label": "Entrypoint File",
+    "entry_placeholder": "index.ts (blank = bun run start)",
+    "entry_help": "The file that launches your app (e.g. index.ts). Leave it blank to run the \"start\" script of package.json.",
+    "packages": "manage",
+    "pkg_help": "",
+    "pkg_example": "Package name, e.g. hono@4",
+    "can_sync": True
+  },
+  {
+    "key": "deno",
+    "label": "Deno",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "re-run the installer with --with-deno   (https://deno.com)",
+    "entry": "optional",
+    "entry_default": "",
+    "entry_label": "Entrypoint File",
+    "entry_placeholder": "main.ts (blank = deno task start)",
+    "entry_help": "The file that launches your app (e.g. main.ts), run with all permissions. Leave it blank to run the \"start\" task of deno.json.",
+    "packages": "manage",
+    "pkg_help": "",
+    "pkg_example": "Package, e.g. jsr:@std/path or npm:express",
+    "can_sync": True
+  },
+  {
+    "key": "rust",
+    "label": "Rust (Cargo)",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "sudo apt-get install -y cargo rustc build-essential   (or re-run the installer with --with-rust)",
+    "entry": "fixed",
+    "entry_default": "main.rs",
+    "entry_label": "Entrypoint File",
+    "entry_placeholder": "main.rs",
+    "entry_help": "Rust apps always start with cargo run.",
+    "packages": "list",
+    "pkg_help": "",
+    "pkg_example": "",
+    "can_sync": False
+  },
+  {
+    "key": "go",
+    "label": "Go",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "re-run the installer with --with-go   (https://go.dev/dl)",
+    "entry": "fixed",
+    "entry_default": "main.go",
+    "entry_label": "Entrypoint File",
+    "entry_placeholder": "main.go",
+    "entry_help": "Go apps always start with go run . — the main package in the app's folder.",
+    "packages": "manage",
+    "pkg_help": "",
+    "pkg_example": "Module, e.g. github.com/gin-gonic/gin@v1.10.0",
+    "can_sync": True
+  },
+  {
+    "key": "php",
+    "label": "PHP",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "sudo apt-get install -y php-cli composer unzip   (or re-run the installer with --with-php)",
+    "entry": "optional",
+    "entry_default": "",
+    "entry_label": "Router Script",
+    "entry_placeholder": "blank = serve the folder",
+    "entry_help": "Leave blank to serve the app's folder (or its public/ folder) with PHP's built-in web server; unknown paths go to index.php. Or name a router script (e.g. index.php) to handle every request yourself.",
+    "packages": "manage",
+    "pkg_help": "",
+    "pkg_example": "Package, e.g. monolog/monolog:^3",
+    "can_sync": True
+  },
+  {
+    "key": "ruby",
+    "label": "Ruby (Bundler)",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "sudo apt-get install -y ruby ruby-bundler build-essential   (or re-run the installer with --with-ruby)",
+    "entry": "required",
+    "entry_default": "app.rb",
+    "entry_label": "Entrypoint File",
+    "entry_placeholder": "app.rb or config.ru",
+    "entry_help": "The Ruby file that launches your app (e.g. app.rb). A config.ru is started with rackup. With a Gemfile the app runs under bundle exec.",
+    "packages": "manage",
+    "pkg_help": "",
+    "pkg_example": "Gem name, e.g. sinatra@4.0",
+    "can_sync": True
+  },
+  {
+    "key": "java",
+    "label": "Java (JAR)",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "sudo apt-get install -y default-jre-headless   (or re-run the installer with --with-java)",
+    "entry": "required",
+    "entry_default": "app.jar",
+    "entry_label": "JAR File",
+    "entry_placeholder": "app.jar",
+    "entry_help": "The executable JAR that launches your app, run with java -jar. The port is passed as PORT and SERVER_PORT (Spring Boot picks that up).",
+    "packages": "none",
+    "pkg_help": "Java apps are a single JAR with its dependencies bundled — there is nothing to install here.",
+    "pkg_example": "",
+    "can_sync": False
+  },
+  {
+    "key": "static",
+    "label": "Static site",
+    "installed": True,
+    "packages_installed": True,
+    "install_hint": "sudo apt-get install -y python3",
+    "entry": "optional",
+    "entry_default": "",
+    "entry_label": "Site Folder",
+    "entry_placeholder": "blank = public, dist, build, site or the app folder",
+    "entry_help": "The folder that holds the site. Blank picks the first of public, dist, build, site, www or html that exists, else the app's own folder. index.html is the home page; /about serves about.html; a 404.html is used for unknown paths.",
+    "packages": "none",
+    "pkg_help": "A static site has no packages.",
+    "pkg_example": "",
+    "can_sync": False
+  }
+]
+
+@app.get("/api/runtimes")
+async def list_runtimes(request: Request):
+    _check_auth(request)
+    return FAKE_RUNTIMES
+
 # ---------------------------------------------------------------------------
 # Packages
 # ---------------------------------------------------------------------------
@@ -753,7 +922,15 @@ async def install_package(app_id: int, req: PackageReq, request: Request):
         pkgs.append({"name": req.name, "version": "latest"})
     return _job({"ok": True})
 
-@app.delete("/api/apps/{app_id}/packages/{name}")
+@app.post("/api/apps/{app_id}/packages/sync")
+async def sync_packages(app_id: int, request: Request):
+    _check_auth(request)
+    _app_or_404(app_id)
+    import asyncio
+    await asyncio.sleep(1.5)
+    return _job({"ok": True})
+
+@app.delete("/api/apps/{app_id}/packages/{name:path}")
 async def uninstall_package(app_id: int, name: str, request: Request):
     _check_auth(request)
     _app_or_404(app_id)

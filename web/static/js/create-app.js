@@ -7,6 +7,7 @@
         document.getElementById('create-form').addEventListener('reset', () => {
             _createAppDroppedFiles = [];
             document.getElementById('create-app-files-text').innerHTML = `Drop files/folders here<br><span class="text-xs" style="color:var(--text3)">or click to browse</span>`;
+            setTimeout(() => onRuntimeChange('create'), 0);   // after the form has really reset
         });
 
         document.getElementById('create-app-file-input').addEventListener('change', e => {

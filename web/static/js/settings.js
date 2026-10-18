@@ -145,34 +145,72 @@
             }
         }
 
+        // ── Runtimes ──────────────────────────────────────────────────────────────
+        // What each runtime needs and how its entrypoint behaves comes from the
+        // server (GET /api/runtimes), so a new runtime is one entry there.
+        let RUNTIMES = [];
+
+        function runtimeMeta(key) {
+            return RUNTIMES.find(r => r.key === key) || null;
+        }
+
+        async function loadRuntimes() {
+            try {
+                const res = await fetch(`${API}/runtimes`);
+                if (!res.ok) return;
+                RUNTIMES = await res.json();
+            } catch (e) { return; }   // the selects keep their built-in Python option
+            const fill = (sel, forCreate) => {
+                if (!sel) return;
+                const keep = sel.value;
+                sel.replaceChildren(...RUNTIMES.map(r => {
+                    const o = document.createElement('option');
+                    o.value = r.key;
+                    o.textContent = r.label + (r.installed ? '' : ' — not installed');
+                    if (forCreate && !r.installed) o.disabled = true;
+                    return o;
+                }));
+                if (RUNTIMES.some(r => r.key === keep)) sel.value = keep;
+            };
+            fill(document.getElementById('setting-runtime'), false);
+            fill(document.querySelector('#create-form select[name="runtime"]'), true);
+            onRuntimeChange('create');
+        }
+
         function onRuntimeChange(context) {
-            let runtime, entryInp;
+            let runtime, entryInp, labelEl, helpEl;
             if (context === 'create') {
                 const form = document.getElementById('create-form');
                 runtime = form.runtime.value;
                 entryInp = form.entrypoint;
+                labelEl = document.getElementById('create-entrypoint-label');
+                helpEl = document.getElementById('create-entrypoint-hint');
             } else {
                 runtime = document.getElementById('setting-runtime').value;
                 entryInp = document.getElementById('setting-entrypoint');
+                labelEl = document.getElementById('setting-entrypoint-label');
+                helpEl = document.getElementById('setting-entrypoint-help');
             }
+            const meta = runtimeMeta(runtime);
+            if (!meta) return;
 
-            if (runtime === 'rust') {
-                entryInp.value = 'main.rs';
-                entryInp.disabled = true;
-                entryInp.style.opacity = '0.5';
-                entryInp.style.cursor = 'not-allowed';
-            } else if (runtime === 'node') {
-                if (entryInp.value === 'main.rs' || entryInp.value === 'main.py') entryInp.value = '';
-                entryInp.placeholder = 'server.js (blank = npm start)';
-                entryInp.disabled = false;
-                entryInp.style.opacity = '';
-                entryInp.style.cursor = '';
-            } else {
-                if (entryInp.value === 'main.rs') entryInp.value = 'main.py';
-                entryInp.placeholder = 'main.py';
-                entryInp.disabled = false;
-                entryInp.style.opacity = '';
-                entryInp.style.cursor = '';
+            // Switching runtime: a value that was only the previous runtime's
+            // suggestion (main.py, main.rs, ...) must not be carried over.
+            const stale = RUNTIMES.some(r => r.entry_default && r.entry_default === entryInp.value);
+            if (meta.entry === 'fixed') {
+                entryInp.value = meta.entry_default;
+            } else if (entryInp.value === '' || stale) {
+                entryInp.value = context === 'create' ? '' : meta.entry === 'required' ? meta.entry_default : '';
+            }
+            const locked = meta.entry === 'fixed';
+            entryInp.disabled = locked;
+            entryInp.style.opacity = locked ? '0.5' : '';
+            entryInp.style.cursor = locked ? 'not-allowed' : '';
+            entryInp.placeholder = meta.entry_placeholder;
+            if (labelEl) labelEl.textContent = meta.entry_label;
+            if (helpEl) {
+                if (context === 'create') helpEl.textContent = meta.entry === 'fixed' ? '' : meta.entry === 'required' ? `(e.g. ${meta.entry_default})` : '(optional)';
+                else helpEl.textContent = meta.entry_help;
             }
         }
 
@@ -354,8 +392,9 @@
                 }
             } catch { envMatch = false; }
 
-            const currentEntryPoint = (activeApp.runtime === 'rust' || runtime === 'rust') ? 'main.rs' : (activeApp.entrypoint || '');
-            const normalizedEntry = runtime === 'rust' ? 'main.rs' : entrypoint;
+            const fixedEntry = key => { const m = runtimeMeta(key); return m && m.entry === 'fixed' ? m.entry_default : null; };
+            const currentEntryPoint = fixedEntry(activeApp.runtime) ?? fixedEntry(runtime) ?? (activeApp.entrypoint || '');
+            const normalizedEntry = fixedEntry(runtime) ?? entrypoint;
 
             const { memoryLimit, cpuLimit } = _readResourceLimits();
 

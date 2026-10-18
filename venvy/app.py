@@ -42,7 +42,7 @@ from venvy.process import (
     _systemd_run_available,
     supervisor_task,
 )
-from venvy.startup import _check_node, _check_python3_venv, _check_rust
+from venvy.startup import _check_python3_venv, _check_runtimes
 from venvy.terminal import terminal_manager
 from venvy.uploads import _SINGLE_REQUEST_UPLOAD_MAX, _UPLOAD_CHUNK_MAX
 from venvy.webui import render_index
@@ -82,8 +82,7 @@ async def lifespan(app: FastAPI):
     load_operation_state()
 
     await _check_python3_venv()
-    await _check_rust()
-    await _check_node()
+    await _check_runtimes()
     await asyncio.to_thread(_systemd_run_available)   # warm the (blocking) probe off the event loop
 
     # Apps that are still running from a Venvy process that did not get to

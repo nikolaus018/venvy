@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 
+from venvy import runtimes
 from venvy.config import APP_LOGS_DIR, APPS_BASE_DIR, DATA_DIR, child_base_env
 from venvy.models import App
 
@@ -141,11 +142,13 @@ def _as_app_user(app_row: "App", argv: list) -> list:
 
 
 def _app_tool_env(app_row: "App") -> Dict[str, str]:
-    """Environment for venv/pip/cargo runs on an app's behalf."""
+    """Environment for venv/pip/cargo/npm/... runs on an app's behalf."""
     env = child_base_env()
+    env["PATH"] = runtimes.tool_search_path()
     env["VIRTUAL_ENV"] = str(app_row.venv_path)
     env.pop("PYTHONHOME", None)
     env.pop("PYTHONPATH", None)
+    env.update(runtimes.tool_env(app_row.runtime, Path(app_row.app_dir)))
     if _app_ids(app_row):
         env.update(HOME=app_row.app_dir, USER=_app_username(app_row.id), LOGNAME=_app_username(app_row.id))
     return env

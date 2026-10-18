@@ -1,4 +1,4 @@
-"""Startup checks for the host tools apps need (python3-venv, cargo, node).
+"""Startup checks for the host tools apps need (python3-venv, and the tools of the other runtimes).
 
 These only report. Installing system packages is the installer's job
 (install.sh) — a web server should not be running apt-get on its own.
@@ -8,6 +8,7 @@ import logging
 import shutil
 import sys
 
+from venvy import runtimes
 from venvy.config import DATA_DIR
 
 
@@ -37,43 +38,20 @@ async def _check_python3_venv() -> None:
     )
 
 
-async def _check_rust() -> None:
-    """Log whether cargo is available; only Rust apps need it."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "cargo", "-V",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await asyncio.wait_for(proc.communicate(), timeout=5)
-        if proc.returncode == 0:
-            logging.info("cargo: OK")
-            return
-    except Exception:
-        pass
-    logging.info(
-        "cargo is not installed — Rust apps are unavailable. "
-        "To enable them: sudo apt-get install -y cargo rustc build-essential"
-    )
+async def _check_runtimes() -> None:
+    """Log which of the other runtimes this host can run. Only informational:
+    an app of a runtime that is missing its tools says so when it is created
+    or started."""
+    def probe() -> tuple:
+        have, lack = [], []
+        for rt in runtimes.RUNTIMES.values():
+            if rt.key == "python":
+                continue
+            (lack if runtimes.missing_tools(rt.key) else have).append(rt)
+        return have, lack
 
-
-async def _check_node() -> None:
-    """Log whether node and npm are available; only Node.js apps need them."""
-    try:
-        for tool in ("node", "npm"):
-            proc = await asyncio.create_subprocess_exec(
-                tool, "-v",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await asyncio.wait_for(proc.communicate(), timeout=5)
-            if proc.returncode != 0:
-                raise RuntimeError(f"{tool} -v failed")
-        logging.info("node/npm: OK")
-        return
-    except Exception:
-        pass
-    logging.info(
-        "node/npm is not installed — Node.js apps are unavailable. "
-        "To enable them: sudo apt-get install -y nodejs npm"
-    )
+    have, lack = await asyncio.to_thread(probe)
+    if have:
+        logging.info("runtimes available: " + ", ".join(rt.label for rt in have))
+    for rt in lack:
+        logging.info(f"{rt.label}: not available — {rt.install_hint}")

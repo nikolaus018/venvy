@@ -43,7 +43,7 @@ with server(repo, 55007) as (base, d, srv):
     r = cl.req("POST", f"/api/apps/{app_id}/tunnel/publish", json={"hostname": "app.example.com", "local_port": 70000})
     check("bad port refused", r.status_code == 400 and "port" in r.text.lower(), r.text)
     # Node.js runtime (only where node/npm exist)
-    check("unknown runtime refused", cl.req("POST", "/api/apps/upload", data={"name": "Bad RT", "runtime": "ruby"}).status_code == 400)
+    check("unknown runtime refused", cl.req("POST", "/api/apps/upload", data={"name": "Bad RT", "runtime": "cobol"}).status_code == 400)
     if shutil.which("node") and shutil.which("npm"):
         r = cl.req("POST", "/api/apps/upload", data={"name": "Node App", "runtime": "node", "entrypoint": "server.js"})
         node_id = r.json()["app_id"]; cl.job(r)
@@ -52,9 +52,11 @@ with server(repo, 55007) as (base, d, srv):
         save("server.js", 'console.log("NODE-MARKER " + process.env.PORT); setInterval(() => {}, 1000);')
         check("node packages listed from package.json",
               cl.req("GET", f"/api/apps/{node_id}/packages").json() == [{"name": "left-pad", "version": "^1.3.0"}, {"name": "@scope/x", "version": "1"}])
-        for bad in ["--foo", "-g", "a b", "../x", "UPPER", "x;rm"]:
+        for bad in ["--foo", "-g", "a b", "../x", "x;rm"]:
             check(f"npm name {bad!r} refused", cl.req("POST", f"/api/apps/{node_id}/packages", json={"name": bad}).status_code == 400)
+        check("npm legacy upper-case name accepted", cl.req("POST", f"/api/apps/{node_id}/packages", json={"name": "JSONStream"}).status_code == 200)
         check("npm scoped name accepted", cl.req("POST", f"/api/apps/{node_id}/packages", json={"name": "@scope/pkg@1.2.3"}).status_code == 200)
+        save("package.json", '{"name": "t"}')   # the listed packages above do not exist; the first start installs what is listed
         cl.req("POST", f"/api/apps/{node_id}/control?action=start"); cl.wait_status(node_id, "running")
         time.sleep(1)
         check("node app runs its entrypoint", "NODE-MARKER" in cl.req("GET", f"/api/apps/{node_id}/logs").text)

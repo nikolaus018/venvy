@@ -9,12 +9,12 @@
 
 ## 1. Overview
 
-Venvy is a self-hosted "premium application manager" — a control plane for running, isolating, and exposing multiple Python/Rust/Node.js applications from a single host. The API lets a client:
+Venvy is a self-hosted "premium application manager" — a control plane for running, isolating, and exposing multiple applications (Python, Node.js, Bun, Deno, Go, Rust, PHP, Ruby, Java, static sites) from a single host. The API lets a client:
 
 - Authenticate and manage user accounts (admin/operator/viewer roles)
 - Upload, configure, start/stop/restart, and delete hosted apps
 - Browse, edit, upload, and download app files in a sandboxed directory
-- Manage each app's Python (pip), Rust (cargo) or Node.js (npm) dependencies
+- Manage each app's dependencies with its runtime's package manager (pip, npm, bun, deno, go, cargo, composer, bundler)
 - Stream/tail app logs
 - Inspect host-level metrics and take database backups
 - Publish apps publicly through a Cloudflare Tunnel + DNS
@@ -248,12 +248,12 @@ Authenticated (any role). Returns every app on the instance as an array of the *
 | Field | Type | Notes |
 |---|---|---|
 | `name` | string | required |
-| `runtime` | string | default `python` (also supports `rust` and `node`; a Node.js app with an empty `entrypoint` runs `npm start`, otherwise `node <entrypoint>`) |
+| `runtime` | string | default `python`; one of the `key`s of `GET /api/runtimes` (`python`, `node`, `bun`, `deno`, `rust`, `go`, `php`, `ruby`, `java`, `static`). Rejected with `400` when the host lacks the runtime's tools. How `entrypoint` is read depends on the runtime — see §5.3a |
 | `entrypoint` | string | default `""` |
 | `start_on_boot` | bool | default `false` |
 | `restart_policy` | string | `never` \| `on-failure` \| `always` |
 | `files` | file[] | optional app source files (50 MB each). The web UI sends none here and uploads them afterwards via `POST /files/upload/chunk` |
-| `requirements` | file | optional `requirements.txt` / `Cargo.toml`. For `node`, upload `package.json` among `files`; if present, `npm install` runs while the app is `installing` |
+| `requirements` | file | optional `requirements.txt` / `Cargo.toml`. For the other runtimes, a manifest (`package.json`, `go.mod`, `Gemfile`, `composer.json`) uploaded among `files` is installed while the app is `installing`; one that arrives later is installed on the first start |
 
 Creates the app's directory and DB record right away (status `installing`), then builds the virtual environment and installs `requirements.txt` in a **background job** (§4.4a; 10-minute pip timeout). Response: `{ "job_id", "app_id", "skipped_files": [{ path, reason }] }`. The job's `result` is the full **App object** (§6.1) with status `stopped`. If the job fails, the app, its directory and (with per-app users) its OS user are removed again. Starting or deleting an app while it is `installing` answers `409`.
 
@@ -295,6 +295,37 @@ Any authenticated role. Process stats from the background metrics collector (a s
 { "cpu": 3.2, "memory": 84.5, "uptime": 1523.7 }
 ```
 `cpu` is percent (`psutil` instantaneous sample — expect noisy/`0.0` values unless you poll it more than once, since the first call after process start has no prior sample to diff against). `memory` is RSS in **MB**. `uptime` is seconds since `last_start_time`. If the app has no `pid` or `psutil` isn't installed, all three fields are `0`/`0.0` — this is not an error.
+
+---
+
+### 5.3a Runtimes — `GET /api/runtimes`
+
+Any role. The runtimes this Venvy can host, and whether this host has what each needs:
+
+```json
+[{ "key": "node", "label": "Node.js (npm)", "installed": true, "packages_installed": true,
+   "install_hint": "sudo apt-get install -y nodejs npm …",
+   "entry": "optional", "entry_default": "", "entry_label": "Entrypoint File",
+   "entry_placeholder": "server.js (blank = npm start)", "entry_help": "…",
+   "packages": "manage", "pkg_help": "", "pkg_example": "Package name, e.g. express@4", "can_sync": true }, …]
+```
+
+`entry` says how `entrypoint` behaves: `required` (must be set before the app can start), `optional` (blank has a meaning, e.g. `npm start`) or `fixed` (always `entry_default`, any value sent is replaced). `packages` is `manage` (list, install, remove), `list` (read-only) or `none`.
+
+| Runtime | Starts with |
+|---|---|
+| `python` | `<venv>/bin/python <entrypoint>` |
+| `node` | `node <entrypoint>`; `npm start` if blank |
+| `bun` | `bun run ./<entrypoint>`; `bun run start` if blank |
+| `deno` | `deno run --allow-all <entrypoint>`; `deno task start` if blank |
+| `rust` | `cargo run` |
+| `go` | `go run .` (needs a `go.mod`) |
+| `php` | `php -S 0.0.0.0:<port>` on the app folder (or `public/`), with the entrypoint as router script or Venvy's own router if blank |
+| `ruby` | `ruby <entrypoint>`, or `rackup` for a `.ru` file; both under `bundle exec` when there is a `Gemfile` |
+| `java` | `java -jar <entrypoint>`; `PORT` and `SERVER_PORT` carry the port |
+| `static` | Venvy's static file server on the folder named by `entrypoint` (blank: `public`, `dist`, `build`, `site`, `www` or `html`, else the app folder) |
+
+`php` and `static` name the port on the command line, so an app without a port gets a free one assigned at start. If an app's dependencies were never installed (`node_modules`, `vendor`, `vendor/bundle` missing next to a manifest) the first start installs them, with the output in the app's log.
 
 ---
 
@@ -359,21 +390,25 @@ Chunks are appended to `DATA_DIR/.upload-tmp/`. Once `total` bytes are in, the f
 
 ### 5.5 Packages — `/api/apps/{app_id}/packages`
 
-Supports Python apps (via the app's venv `pip`), Rust apps (via `cargo`) and Node.js apps (via `npm`). Any other runtime returns `400`.
+Each runtime uses its own package manager: `pip` in the app's venv, `cargo`, `npm`, `bun`, `deno`, `go`, `composer`, `bundle`. Runtimes without one (`java`, `static`) list `[]` and answer `400` to install and remove.
 
 #### `GET /api/apps/{app_id}/packages`
 Any role. Response shape **differs by runtime**:
 - **Python:** raw output of `pip list --format=json` — `[{ "name": "requests", "version": "2.31.0" }, ...]`.
 - **Rust:** parsed from `Cargo.toml`'s `[dependencies]` + `[dev-dependencies]` — `[{ "name": "serde", "version": "1.0" }, ...]` (version string as written in the manifest, e.g. `"1.0"` or `"unknown"` if it's a table without a `version` key).
-- **Node.js:** parsed from `package.json`'s `dependencies` + `devDependencies` — `[{ "name": "express", "version": "^4.19.0" }, ...]` (the range as written in the manifest).
+- **Node.js, Bun:** `package.json`'s `dependencies` + `devDependencies`. **Deno:** the `imports` of `deno.json`/`deno.jsonc` (and `package.json`). **Go:** the direct `require`s of `go.mod`. **PHP:** `composer.json`'s `require` + `require-dev` (without `php` and `ext-*`). **Ruby:** the gems named in the `Gemfile`, with the version from `Gemfile.lock` when locked. All as `[{ "name": "express", "version": "^4.19.0" }, ...]` — the range as written in the manifest.
 - On any internal failure (missing venv, unparsable manifest, subprocess timeout) this endpoint returns `[]` rather than an error — a frontend should treat an empty array as "possibly failed, not necessarily zero packages" and not surface it as a hard error state.
 
 #### `POST /api/apps/{app_id}/packages`
-`require_operator`, rate-limited. **Body:** `{ "name": "package[extra]==1.2.3" }` (`crate@version` for Rust, `name`, `@scope/name` or `name@version` for Node.js).
-Package specifiers are validated against a strict allow-list regex (and may not start with `-`, so they can't be read as a pip/cargo option) before being passed to `pip install` / `cargo add` / `npm install --prefix <app dir>` (no shell is invoked). Runs as a **background job** (§4.4a); timeout 600 s (pip, npm) / 300 s (cargo).
+`require_operator`, rate-limited. **Body:** `{ "name": "package[extra]==1.2.3" }` (`crate@version` for Rust; `name`, `@scope/name` or `name@version` for Node.js and Bun; `jsr:@std/path` or `npm:express@4` for Deno; `module/path@version` for Go; `vendor/package:^1.0` for PHP; `gem` or `gem@version` for Ruby).
+Package specifiers are validated against a strict allow-list regex (and may not start with `-`, so they can't be read as a pip/cargo option) before being passed to `pip install` / `cargo add` / `npm install --prefix <app dir>` / `bun add` / `deno add` / `go get` / `composer require` / `bundle add` (no shell is invoked). Runs as a **background job** (§4.4a); timeout 600 s (pip, npm) / 300 s (cargo).
 
 #### `DELETE /api/apps/{app_id}/packages/{name}`
-`require_operator`, rate-limited. Uninstalls via `pip uninstall -y` / `cargo remove` / `npm uninstall` as a **background job** (§4.4a). Timeout: 300 s (Python, Node.js) / 120 s (Rust).
+(`name` may contain slashes — `@scope/pkg`, `vendor/package`, Go module paths — percent-encoded or not.)
+`require_operator`, rate-limited. Uninstalls via `pip uninstall -y` / `cargo remove` / `npm uninstall` / `bun remove` / `deno remove` / `go mod edit -droprequire` + `go mod tidy` / `composer remove` / `bundle remove` as a **background job** (§4.4a). Timeout: 300 s (Python, Node.js) / 120 s (Rust).
+
+#### `POST /api/apps/{app_id}/packages/sync`
+`require_operator`, rate-limited. Installs everything the app's manifest lists (`npm install`, `bun install`, `deno install`, `go mod download`, `composer install --no-dev`, `bundle install`) as a **background job** (§4.4a). `400` for runtimes without a manifest or an app that has none yet.
 
 #### `GET /api/apps/{app_id}/scan-imports`
 Any role. Python-only static analysis: walks the app's `.py` files via `ast`, collects top-level imports, and diffs them against stdlib + the venv's installed packages + the app's own top-level modules. `venv`, `node_modules`, `.git` and similar directories are not searched; at most 5000 files of up to 2 MB each are read.
@@ -573,7 +608,7 @@ This is the exact shape returned by `GET /api/apps` (array of these), `POST /api
 | `id` | int | primary key |
 | `user_id` | int | **audit-only** — who created it. Not used for access control; any operator/admin can manage any app. |
 | `name`, `slug` | string | |
-| `runtime` | string | `python` \| `rust` \| `node` |
+| `runtime` | string | one of the keys of `GET /api/runtimes` |
 | `created_at`, `updated_at` | string (ISO‑8601, UTC) | |
 | `status` | string | `stopped` \| `starting` \| `running` \| `stopping` \| `error` |
 | `pid` | int \| null | OS process id when running |
@@ -634,7 +669,7 @@ curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install
 ```
 
 Options follow `bash -s --`, e.g. `… | sudo bash -s -- --host 127.0.0.1 --port 8080`
-(`--version TAG`, `--with-rust`, `--with-node`, `--app-users`, `--uninstall`). The installer adds
+(`--version TAG`, `--with-rust`, `--with-node`, `--with-go`, `--with-bun`, `--with-deno`, `--with-php`, `--with-ruby`, `--with-java`, `--with-all`, `--app-users`, `--uninstall`). The installer adds
 missing system packages, creates a `venvy` system user, puts the code in
 `/opt/venvy/releases/<version>/` (with its own Python venv), data in `/var/lib/venvy/`,
 settings in `/etc/venvy/venvy.env`, and a `venvy` systemd service that starts at boot.

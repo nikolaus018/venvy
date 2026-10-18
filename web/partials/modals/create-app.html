@@ -18,13 +18,12 @@
                         <select name="runtime" class="inp w-full px-4 py-3 text-sm"
                             onchange="onRuntimeChange('create')">
                             <option value="python">Python</option>
-                            <option value="rust">Rust</option>
-                            <option value="node">Node.js</option>
                         </select>
                     </div>
                 </div>
                 <div>
-                    <label class="block section-label mb-2">Entrypoint <span class="font-normal normal-case"
+                    <label class="block section-label mb-2"><span id="create-entrypoint-label">Entrypoint</span> <span
+                            id="create-entrypoint-hint" class="font-normal normal-case"
                             style="color:var(--text3)">(e.g. main.py)</span></label>
                     <input type="text" name="entrypoint" class="inp w-full px-4 py-3 text-sm mono"
                         placeholder="main.py">
