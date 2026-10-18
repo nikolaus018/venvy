@@ -177,6 +177,19 @@
             onRuntimeChange('create');
         }
 
+        // The monitoring fields of the Settings tab as the API takes them.
+        function _readMonitoringFields() {
+            const num = (id, dflt) => { const n = parseInt(document.getElementById(id).value, 10); return isNaN(n) ? dflt : n; };
+            return {
+                healthcheck_path: document.getElementById('setting-health-path').value.trim(),
+                health_interval: num('setting-health-interval', 30),
+                health_failures: num('setting-health-failures', 3),
+                health_restart: document.getElementById('setting-health-restart').checked,
+                domain: document.getElementById('setting-domain').value.trim().toLowerCase(),
+                disk_limit_mb: num('setting-disk-limit', 0),
+            };
+        }
+
         function onRuntimeChange(context) {
             let runtime, entryInp, labelEl, helpEl;
             if (context === 'create') {
@@ -193,6 +206,18 @@
             }
             const meta = runtimeMeta(runtime);
             if (!meta) return;
+            if (context === 'create') {
+                // A Python version can be chosen when the host has more than one.
+                const row = document.getElementById('create-pyver-row');
+                const sel = row.querySelector('select');
+                const versions = runtime === 'python' ? (meta.versions || []) : [];
+                row.classList.toggle('hidden', versions.length === 0);
+                if (versions.length && sel.options.length !== versions.length + 1) {
+                    sel.innerHTML = [['', 'System default']].concat(versions.map(v => [v, `Python ${v}`]))
+                        .map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+                }
+                if (!versions.length) sel.value = '';
+            }
 
             // Switching runtime: a value that was only the previous runtime's
             // suggestion (main.py, main.rs, ...) must not be carried over.
@@ -279,7 +304,8 @@
                 ...(portsUntouched ? {} : { manual_ports: manualPorts }),
                 url_source_pref: _getOpenUrlPref(),
                 memory_limit_mb: memoryLimit,
-                cpu_limit_percent: cpuLimit
+                cpu_limit_percent: cpuLimit,
+                ..._readMonitoringFields(),
             };
 
             btn.disabled = true;
@@ -379,6 +405,13 @@
             const normalizedEntry = fixedEntry(runtime) ?? entrypoint;
 
             const { memoryLimit, cpuLimit } = _readResourceLimits();
+            const mon = _readMonitoringFields();
+            const monDirty = mon.healthcheck_path !== (activeApp.healthcheck_path || '')
+                || mon.health_interval !== (activeApp.health_interval ?? 30)
+                || mon.health_failures !== (activeApp.health_failures ?? 3)
+                || mon.health_restart !== (activeApp.health_restart ?? true)
+                || mon.domain !== (activeApp.domain || '')
+                || mon.disk_limit_mb !== (activeApp.disk_limit_mb ?? 0);
 
             const isDirty = (
                 name !== (activeApp.name || '').trim() ||
@@ -390,6 +423,7 @@
                 _getOpenUrlPref() !== (activeApp.url_source_pref || 'local') ||
                 memoryLimit !== (activeApp.memory_limit_mb ?? 0) ||
                 cpuLimit !== (activeApp.cpu_limit_percent ?? 0) ||
+                monDirty ||
                 !envMatch
             );
 
@@ -431,7 +465,9 @@
             ['setting-runtime', 'setting-policy', 'setting-boot'].forEach(id => {
                 document.getElementById(id)?.addEventListener('change', checkSettingsDirty);
             });
-            ['setting-name', 'setting-entrypoint', 'setting-port', 'setting-memory-limit', 'setting-cpu-limit'].forEach(id => {
+            ['setting-health-restart'].forEach(id => document.getElementById(id)?.addEventListener('change', checkSettingsDirty));
+            ['setting-health-path', 'setting-health-interval', 'setting-health-failures', 'setting-domain', 'setting-disk-limit',
+             'setting-name', 'setting-entrypoint', 'setting-port', 'setting-memory-limit', 'setting-cpu-limit'].forEach(id => {
                 document.getElementById(id)?.addEventListener('input', checkSettingsDirty);
             });
         }

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from venvy.auth import check_ip_allowlist, get_download_user, rate_limit_mutations, require_operator
+from venvy.auth import check_ip_allowlist, get_download_user, rate_limit_mutations, require_app_access, require_operator
 from venvy.config import _UPLOAD_TMP_DIR
 from venvy.db import get_session
 from venvy.isolation import _app_ids
@@ -38,7 +38,7 @@ from venvy.uploads import (
 )
 
 router = APIRouter(
-    prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
+    prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist), Depends(require_app_access)]
 )
 
 

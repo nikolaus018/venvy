@@ -13,14 +13,17 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
-from sqlmodel import select, Session
+from sqlmodel import delete as sql_delete, select, Session
 
-from venvy import runtimes
+from venvy import deploy, monitor, proxy, runtimes
 from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
-from venvy.auth import check_ip_allowlist, get_current_user, rate_limit_mutations, require_operator
+from venvy.auth import (
+    check_ip_allowlist, get_current_user, has_app_access, rate_limit_mutations, require_app_access,
+    require_operator, visible_app_ids,
+)
 from venvy.cloudflare import _cf_delete_dns_cname, _cf_find_zone_id, _cf_update_ingress, _get_cf_creds
 from venvy.config import (
     APP_LOGS_DIR,
@@ -30,7 +33,7 @@ from venvy.config import (
     _toml,
     utc_now,
 )
-from venvy.crypto import _encrypt_secret
+from venvy.crypto import _encrypt_secret, _try_decrypt_secret
 from venvy.db import engine, get_session
 from venvy.isolation import (
     _app_ids,
@@ -42,7 +45,9 @@ from venvy.isolation import (
     _isolation_active,
 )
 from venvy.jobs import _running_tasks, _start_job
-from venvy.models import App, CfRoute, User
+from venvy.models import (
+    AlertRule, App, AppAccess, CfRoute, EnvHistory, MetricSample, Release, ScheduledJob, User,
+)
 from venvy.process import (
     _app_lock,
     _app_locks,
@@ -62,7 +67,7 @@ from venvy.terminal import terminal_manager
 from venvy.uploads import _save_upload_file, _SINGLE_REQUEST_UPLOAD_MAX
 
 router = APIRouter(
-    prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
+    prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist), Depends(require_app_access)]
 )
 
 _REQUIREMENTS_MAX_BYTES = 1024 * 1024
@@ -90,6 +95,24 @@ class AppUpdateReq(BaseModel):
     url_source_pref: Optional[str] = None
     memory_limit_mb: Optional[int] = None
     cpu_limit_percent: Optional[int] = None
+    healthcheck_path: Optional[str] = None      # "" switches the check off
+    health_interval: Optional[int] = None
+    health_failures: Optional[int] = None
+    health_restart: Optional[bool] = None
+    domain: Optional[str] = None                # "" removes it
+    disk_limit_mb: Optional[int] = None         # 0 removes it
+
+
+_HOST_RE = re.compile(r"(?=.{1,253}\Z)([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z")
+
+
+def _clean_domain(value: str) -> Optional[str]:
+    d = (value or "").strip().lower().rstrip(".")
+    if not d:
+        return None
+    if not _HOST_RE.match(d):
+        raise HTTPException(400, "The domain must be a hostname like app.example.com.")
+    return d
 
 
 class PackageReq(BaseModel):
@@ -109,6 +132,9 @@ def list_apps(
     # user sees every app (viewers are read-only; enforcement happens on the
     # mutating routes below via require_operator).
     apps = session.exec(select(App).order_by(App.name)).all()
+    allowed = visible_app_ids(session, user)       # None: all of them
+    if allowed is not None:
+        apps = [a for a in apps if a.id in allowed]
     changed = False
     for app_row in apps:
         if app_row.status in ("starting", "stopping"):
@@ -132,10 +158,63 @@ def list_apps(
     return [_app_safe(a, reveal_secrets=can_see_secrets) for a in apps]
 
 
+async def _make_venv(row: App, version: Optional[str]) -> None:
+    """Create the app's virtualenv with the Python of *version* (None: the system's python3)."""
+    py = runtimes.python_binary(version)
+    proc = await asyncio.create_subprocess_exec(
+        *_as_app_user(row, [py, "-m", "venv", str(row.venv_path)]),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_app_tool_env(row), cwd=_TOOL_CWD,
+    )
+    try:
+        _, venv_err = await asyncio.wait_for(proc.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise HTTPException(500, "venv creation timed out.")
+    if proc.returncode != 0:
+        err_msg = venv_err.decode(errors="replace")
+        hint = ""
+        if "ensurepip" in err_msg or "venv" in err_msg.lower():
+            hint = f" Hint: python3-venv may not be installed — run: sudo apt-get install -y {Path(py).name}-venv"
+        raise HTTPException(500, f"venv creation failed: {err_msg}{hint}")
+
+
+async def _install_requirements(row: App) -> None:
+    """pip install -r requirements.txt, if the app has one."""
+    req_path = Path(row.app_dir) / "requirements.txt"
+    pip_bin = Path(row.venv_path) / "bin" / "pip"
+    if not await asyncio.to_thread(req_path.is_file):
+        return
+    if not await asyncio.to_thread(pip_bin.exists):
+        raise HTTPException(500, "pip not found in the virtual environment.")
+    proc = await asyncio.create_subprocess_exec(
+        *_as_app_user(row, [str(pip_bin), "install", "--no-input", "-r", str(req_path)]),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_app_tool_env(row), cwd=_TOOL_CWD,
+    )
+    try:
+        _, pip_err = await asyncio.wait_for(proc.communicate(), timeout=600)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise HTTPException(500, "pip install timed out after 10 minutes.")
+    if proc.returncode != 0:
+        raise HTTPException(500, f"pip install failed: {pip_err.decode(errors='replace')}")
+
+
+async def _create_environment(row: App, version: Optional[str] = None) -> None:
+    """What an app needs to run, from the files it has: a virtualenv and its requirements (Python),
+    or the dependencies its manifest lists (the others)."""
+    if row.runtime == "python":
+        await _make_venv(row, version)
+        await _install_requirements(row)
+        return
+    for step in await asyncio.to_thread(runtimes.setup_steps, row.runtime, Path(row.app_dir)):
+        await _run_app_tool(row, step.argv, step.timeout, step.what, cwd=str(row.app_dir) if step.in_app_dir else None)
+
+
 @router.post("/apps/upload")
 async def upload_app(
     name: str = Form(...),
     runtime: str = Form("python"),
+    python_version: str = Form(""),
     entrypoint: str = Form(""),
     start_on_boot: bool = Form(False),
     restart_policy: str = Form("never"),
@@ -155,6 +234,7 @@ async def upload_app(
         raise HTTPException(400, missing)
     try:
         entrypoint_clean = runtimes.clean_entrypoint(runtime, entrypoint)
+        python_version = runtimes.clean_python_version(python_version) if runtime == "python" else None
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -205,6 +285,7 @@ async def upload_app(
         app_dir=str(app_dir),
         venv_path=str(venv_path),
         entrypoint=entrypoint_clean,
+        runtime_version=python_version,
         start_on_boot=start_on_boot,
         restart_policy=restart_policy,
         port=None,
@@ -215,6 +296,9 @@ async def upload_app(
     session.refresh(new_app)
     app_id = new_app.id
     audit_log(user.username, "app_create", f"created app '{new_app.name}' (id={app_id})")
+    if user.role != "admin" and not user.all_apps:
+        session.add(AppAccess(user_id=user.id, app_id=app_id))     # what you make, you can use
+        session.commit()
 
     async def _finish() -> dict:
         """venv + pip install, which can take minutes — runs as a job."""
@@ -222,41 +306,12 @@ async def upload_app(
             with Session(engine) as s2:
                 row = s2.get(App, app_id)
             await asyncio.to_thread(_ensure_app_user, row)
-            env = _app_tool_env(row)
             if runtime == "python":
-                proc = await asyncio.create_subprocess_exec(
-                    *_as_app_user(row, ["python3", "-m", "venv", str(venv_path)]),
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, cwd=_TOOL_CWD,
-                )
-                try:
-                    _, venv_err = await asyncio.wait_for(proc.communicate(), timeout=120)
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    raise HTTPException(500, "venv creation timed out.")
-                if proc.returncode != 0:
-                    err_msg = venv_err.decode(errors="replace")
-                    hint = ""
-                    if "ensurepip" in err_msg or "venv" in err_msg.lower():
-                        hint = f" Hint: python3-venv may not be installed — run: sudo apt-get install -y python3.{sys.version_info.minor}-venv"
-                    raise HTTPException(500, f"venv creation failed: {err_msg}{hint}")
+                await _make_venv(row, python_version)
 
             if req_bytes is not None and runtime == "python":
-                req_path = app_dir / "requirements.txt"
                 await asyncio.to_thread(_fs_save, app_dir, ("requirements.txt",), req_bytes, _app_ids(row))
-                pip_bin = venv_path / "bin" / "pip"
-                if not await asyncio.to_thread(pip_bin.exists):
-                    raise HTTPException(500, "pip not found in the new virtual environment.")
-                proc = await asyncio.create_subprocess_exec(
-                    *_as_app_user(row, [str(pip_bin), "install", "--no-input", "-r", str(req_path)]),
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, cwd=_TOOL_CWD,
-                )
-                try:
-                    _, pip_err = await asyncio.wait_for(proc.communicate(), timeout=600)
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    raise HTTPException(500, "pip install timed out after 10 minutes.")
-                if proc.returncode != 0:
-                    raise HTTPException(500, f"pip install failed: {pip_err.decode(errors='replace')}")
+                await _install_requirements(row)
 
             if runtime != "python":
                 # Whatever the files uploaded with the app list, if any. Files
@@ -383,6 +438,7 @@ async def control_app(
 async def update_app(
     app_id: int,
     req: AppUpdateReq,
+    request: Request,
     session: Session = Depends(get_session),
     user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
@@ -443,6 +499,7 @@ async def update_app(
                 raise HTTPException(400, f"Invalid environment variable name: {env_key!r}")
             if "\x00" in env_value:
                 raise HTTPException(400, f"Environment variable {env_key} contains a NUL character.")
+        _record_env_change(session, app_row, req.env_vars, user.username)
         app_row.env_json = _encrypt_secret(json.dumps(req.env_vars))
         audit_log(user.username, "app_env_change", f"app '{app_row.name}' (id={app_id})")
     # Runtime first: the entrypoint rules below depend on it, and a request
@@ -475,11 +532,103 @@ async def update_app(
             raise HTTPException(400, "cpu_limit_percent must be between 1 and 10000 (or 0 for unlimited).")
         app_row.cpu_limit_percent = None if req.cpu_limit_percent == 0 else req.cpu_limit_percent
 
+    if req.healthcheck_path is not None:
+        try:
+            app_row.healthcheck_path = monitor.normalize_path(req.healthcheck_path)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        monitor.forget_health(app_id)
+    if req.health_interval is not None:
+        if not (5 <= req.health_interval <= 3600):
+            raise HTTPException(400, "health_interval must be between 5 and 3600 seconds.")
+        app_row.health_interval = req.health_interval
+    if req.health_failures is not None:
+        if not (1 <= req.health_failures <= 20):
+            raise HTTPException(400, "health_failures must be between 1 and 20.")
+        app_row.health_failures = req.health_failures
+    if req.health_restart is not None:
+        app_row.health_restart = req.health_restart
+    if req.domain is not None:
+        new_domain = _clean_domain(req.domain)
+        if new_domain and new_domain == request.headers.get("host", "").split(":")[0].strip().lower():
+            raise HTTPException(400, "That is the address you are using to reach Venvy itself; an app cannot take it over.")
+        if new_domain:
+            other = session.exec(select(App).where(App.domain == new_domain, App.id != app_id)).first()
+            if other:
+                raise HTTPException(409, f"{new_domain} already belongs to '{other.name}'.")
+        if new_domain != app_row.domain:
+            audit_log(user.username, "app_domain_change", f"app '{app_row.name}' (id={app_id}): {new_domain or 'removed'}")
+        app_row.domain = new_domain
+    if req.disk_limit_mb is not None:
+        if req.disk_limit_mb != 0 and not (1 <= req.disk_limit_mb <= 100_000_000):
+            raise HTTPException(400, "disk_limit_mb must be a positive number of MB (or 0 for no limit).")
+        app_row.disk_limit_mb = None if req.disk_limit_mb == 0 else req.disk_limit_mb
+
     app_row.updated_at = utc_now()
     session.add(app_row)
     session.commit()
+    proxy.invalidate()
     refreshed = session.get(App, app_id)
     return _app_safe(refreshed)
+
+
+def _record_env_change(session: Session, app_row: App, new_vars: Dict[str, str], username: str) -> None:
+    """Note which variables were added, removed or changed — names only, never values."""
+    ok, plain = _try_decrypt_secret(app_row.env_json)
+    try:
+        old = json.loads(plain) if ok and plain else {}
+    except ValueError:
+        old = {}
+    if not isinstance(old, dict):
+        old = {}
+    added = sorted(k for k in new_vars if k not in old)
+    removed = sorted(k for k in old if k not in new_vars)
+    changed = sorted(k for k in new_vars if k in old and str(old[k]) != new_vars[k])
+    if not ok and new_vars:
+        added = sorted(new_vars)                  # the old ones could not be read: all we can say
+    if added or removed or changed:
+        session.add(EnvHistory(app_id=app_row.id, username=username, added=",".join(added),
+                               removed=",".join(removed), changed=",".join(changed)))
+
+
+@router.get("/apps/{app_id}/env-history")
+def env_history(
+    app_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    """Who changed which environment variables, newest first (names only)."""
+    rows = session.exec(select(EnvHistory).where(EnvHistory.app_id == app_id).order_by(EnvHistory.id.desc()).limit(100)).all()
+    split = lambda s: [x for x in s.split(",") if x]
+    return [{"ts": r.ts.isoformat(), "user": r.username, "added": split(r.added),
+             "removed": split(r.removed), "changed": split(r.changed)} for r in rows]
+
+
+@router.get("/apps/{app_id}/metrics/history")
+def app_metrics_history(
+    app_id: int,
+    minutes: int = Query(default=60, ge=1, le=10080),
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    if not session.get(App, app_id):
+        raise HTTPException(404)
+    return {"minutes": minutes, "samples": monitor.history(app_id, minutes)}
+
+
+@router.get("/apps/{app_id}/disk")
+async def app_disk(
+    app_id: int,
+    refresh: bool = False,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """What the app's folder takes on disk (measured at most every ten minutes unless refresh=true)."""
+    app_row = session.get(App, app_id)
+    if not app_row:
+        raise HTTPException(404)
+    size = await monitor.refresh_disk(app_row, force=refresh)
+    return {"bytes": size, "limit_mb": app_row.disk_limit_mb}
 
 
 @router.delete("/apps/{app_id}")
@@ -494,6 +643,8 @@ async def delete_app(
         raise HTTPException(404)
     if app_row.status == "installing":
         raise HTTPException(409, "This app is still being set up — wait for its install to finish.")
+    if deploy.is_running(app_id):
+        raise HTTPException(409, "A deploy is running for this app — wait for it to finish.")
     app_name = app_row.name
     warnings: List[str] = []
     # The app's lock is held from the stop until its row is gone. Released in
@@ -549,8 +700,14 @@ async def delete_app(
         _restart_backoff.pop(app_id, None)
         _app_metrics.pop(app_id, None)
         _package_locks.pop(app_id, None)
+        for model in (ScheduledJob, Release, EnvHistory, MetricSample, AppAccess):
+            session.exec(sql_delete(model).where(model.app_id == app_id))
+        session.exec(sql_delete(AlertRule).where(AlertRule.app_id == app_id))
+        await asyncio.to_thread(deploy.forget_keys, app_id)
+        monitor.forget_health(app_id)
         session.delete(app_row)
         session.commit()
+        proxy.invalidate()
     _app_locks.pop(app_id, None)
     audit_log(user.username, "app_delete", f"deleted app '{app_name}' (id={app_id})")
     return {"ok": True, "warnings": warnings}
@@ -799,6 +956,54 @@ async def uninstall_package(
         return {"ok": True}
 
     return _start_job(user, "package_uninstall", _job)
+
+
+class VenvReq(BaseModel):
+    version: str = ""        # "" = the system's python3
+
+
+@router.post("/apps/{app_id}/venv/rebuild")
+async def rebuild_venv(
+    app_id: int,
+    req: VenvReq,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
+):
+    """Throw the virtualenv away and build it again — with another Python version if asked —
+    then reinstall requirements.txt. The app must be stopped. Answers {"job_id"}."""
+    app_row = session.get(App, app_id)
+    if not app_row:
+        raise HTTPException(404)
+    if app_row.runtime != "python":
+        raise HTTPException(400, "Only Python apps have a virtual environment.")
+    if app_row.status in ("running", "starting", "stopping", "installing"):
+        raise HTTPException(409, "Stop the app first.")
+    try:
+        version = runtimes.clean_python_version(req.version)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    async def _job() -> dict:
+        async with _package_locks.setdefault(app_id, asyncio.Lock()):
+            with Session(engine) as s:
+                row = s.get(App, app_id)
+            await asyncio.to_thread(_ensure_app_user, row)
+            proc = await asyncio.create_subprocess_exec(
+                *_as_app_user(row, ["rm", "-rf", str(row.venv_path)]), stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, cwd=_TOOL_CWD)
+            await proc.wait()
+            await _make_venv(row, version)
+            await _install_requirements(row)
+            with Session(engine) as s:
+                row = s.get(App, app_id)
+                row.runtime_version = version
+                s.add(row)
+                s.commit()
+        audit_log(user.username, "app_venv_rebuild", f"app '{app_row.name}' (id={app_id}) python={version or 'default'}")
+        return {"ok": True, "version": version}
+
+    return _start_job(user, "venv_rebuild", _job)
 
 
 @router.post("/apps/{app_id}/packages/sync")

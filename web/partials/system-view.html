@@ -99,6 +99,70 @@
                             </div>
                         </div>
 
+                        <!-- Host usage history (admins) -->
+                        <div class="card p-5 hidden" id="sys-history-card">
+                            <div class="flex items-center justify-between gap-3 mb-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)"><i data-feather="activity" class="w-4 h-4"></i> Host usage</h3>
+                                <select id="sys-history-range" class="inp px-2.5 py-1.5 text-xs" onchange="loadHostHistory()">
+                                    <option value="60">Last hour</option><option value="360">6 hours</option>
+                                    <option value="1440">24 hours</option><option value="10080">7 days</option>
+                                </select>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+                                <div><p class="section-label mb-1">CPU</p><div id="sys-hist-cpu"></div></div>
+                                <div><p class="section-label mb-1">Memory</p><div id="sys-hist-mem"></div></div>
+                                <div><p class="section-label mb-1">Disk</p><div id="sys-hist-disk"></div></div>
+                            </div>
+                        </div>
+
+                        <!-- Operations (admins) -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 hidden" id="sys-ops-cards">
+                            <button id="sys-audit-card" onclick="openAuditModal()"
+                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                    style="background:var(--ov);border:1px solid var(--ov-border)">
+                                    <i data-feather="list" class="w-4 h-4" style="color:var(--text)"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-semibold" style="color:var(--text)">Activity</p>
+                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-audit-card-sub">Who did what</p>
+                                </div>
+                            </button>
+                            <button id="sys-notify-card" onclick="openNotifyModal()"
+                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                    style="background:var(--ov);border:1px solid var(--ov-border)">
+                                    <i data-feather="bell" class="w-4 h-4" style="color:var(--text)"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-semibold" style="color:var(--text)">Notifications &amp; alerts</p>
+                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-notify-card-sub">Where to hear about problems</p>
+                                </div>
+                            </button>
+                            <button id="sys-schedule-card" onclick="openScheduleModal()"
+                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                    style="background:var(--ov);border:1px solid var(--ov-border)">
+                                    <i data-feather="clock" class="w-4 h-4" style="color:var(--text)"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-semibold" style="color:var(--text)">Backup schedule &amp; off-site copy</p>
+                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-schedule-card-sub">Automatic backups</p>
+                                </div>
+                            </button>
+                            <button id="sys-shared-card" onclick="openSharedEnvModal()"
+                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                    style="background:var(--ov);border:1px solid var(--ov-border)">
+                                    <i data-feather="key" class="w-4 h-4" style="color:var(--text)"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-semibold" style="color:var(--text)">Shared variables</p>
+                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-shared-card-sub">Environment for every app</p>
+                                </div>
+                            </button>
+                        </div>
+
                         <!-- Backups -->
                         <button id="sys-backups-card" onclick="openBackupsModal()"
                             class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">

@@ -39,7 +39,7 @@ from venvy.isolation import (
     _app_username,
     _ensure_app_user,
 )
-from venvy import runtimes
+from venvy import monitor, notify, runtimes, shared_env
 from venvy.jobs import _running_tasks
 from venvy.models import App, UserSession
 
@@ -183,6 +183,7 @@ def get_server_ipv4() -> str:
 def _build_app_env(db_app: App) -> Dict[str, str]:
     """Build the environment dict for a managed app process."""
     env = child_base_env()
+    env.update(shared_env.load())      # for every app; the app's own variables below win
     try:
         app_env = json.loads(_decrypt_secret(db_app.env_json) or "{}")
         if isinstance(app_env, dict):
@@ -713,6 +714,12 @@ async def _start_app_process(app_id: int, session: Session) -> App:
                     with Session(engine) as s:
                         app_to_reap = s.get(App, _app_id)
                         if app_to_reap and app_to_reap.pid == proc.pid:
+                            crashed = (app_to_reap.status == "running" and rc not in (0, None)
+                                       and _app_id not in _stopping_on_purpose)
+                            if crashed:
+                                notify.emit("app_crashed", f"{app_to_reap.name} died unexpectedly",
+                                            f"It exited with code {rc} (restart policy: {app_to_reap.restart_policy}).",
+                                            app_to_reap.id, app_to_reap.name, "error")
                             app_to_reap.status = "stopped"
                             app_to_reap.pid = None
                             app_to_reap.pid_start = None
@@ -835,8 +842,20 @@ async def stop_app_process_logic(app_id: int, session: Session, manual: bool = F
         await _stop_app_process(app_id, session, manual)
 
 
+# Apps Venvy is stopping on purpose right now: their exit is not a crash.
+_stopping_on_purpose: Set[int] = set()
+
+
 async def _stop_app_process(app_id: int, session: Session, manual: bool = False) -> None:
     """Stop the app. Caller holds _app_lock(app_id)."""
+    _stopping_on_purpose.add(app_id)
+    try:
+        await _stop_app_process_inner(app_id, session, manual)
+    finally:
+        _stopping_on_purpose.discard(app_id)
+
+
+async def _stop_app_process_inner(app_id: int, session: Session, manual: bool = False) -> None:
     db_app = session.get(App, app_id, populate_existing=True)
     if not db_app:
         _cancel_log_task(app_id)
@@ -915,7 +934,24 @@ def _restart_allowed(app_id: int) -> bool:
     _restart_backoff[app_id] = (failures + 1, now + delay)
     if failures >= 3:
         logging.warning(f"App {app_id} keeps crashing — next automatic restart in {delay}s at the earliest.")
+    if failures == 3:
+        name = None
+        with contextlib.suppress(Exception):
+            with Session(engine) as s:
+                row = s.get(App, app_id)
+                name = row.name if row else None
+        notify.emit("app_crash_loop", f"{name or f'App {app_id}'} keeps crashing",
+                    f"It died {failures + 1} times in a row; restarts now back off ({delay} s and growing).",
+                    app_id, name, "error")
     return True
+
+
+async def _health_restart(app_id: int) -> None:
+    """Restart an app whose health check keeps failing."""
+    try:
+        await restart_app_process_logic(app_id)
+    except Exception as exc:
+        logging.error(f"Restart after failed health checks failed for app {app_id}: {exc}")
 
 
 # Set while a restore is running (from the request until the process re-execs,
@@ -975,6 +1011,8 @@ async def supervisor_task() -> None:
                 _purge_login_attempts()
                 _purge_mutation_hits()
 
+            await monitor.health_tick(_health_restart)
+
             apps_to_check: List[App] = []
             try:
                 with Session(engine) as session:
@@ -1023,6 +1061,9 @@ async def supervisor_task() -> None:
                     if not died:
                         continue
                     logging.warning(f"App '{app_row.name}' (PID {app_row.pid}) died unexpectedly.")
+                    notify.emit("app_crashed", f"{app_row.name} died unexpectedly",
+                                f"Process {app_row.pid} is gone (restart policy: {app_row.restart_policy}).",
+                                app_row.id, app_row.name, "error")
 
                     if app_row.restart_policy in ("always", "on-failure"):
                         has_started_this_session = (
@@ -1187,6 +1228,8 @@ async def metrics_collector_task():
             _host_cpu_percent = await asyncio.to_thread(
                 _collect_metrics_tick, current_app_ids, proc_cache
             )
+            monitor.record_tick(dict(_app_metrics), _host_cpu_percent)
+            await monitor.flush_if_due()
         except Exception as exc:
             logging.error(f"Metrics engine error: {exc}")
         await asyncio.sleep(2.5)

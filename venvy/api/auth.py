@@ -21,6 +21,7 @@ from venvy.auth import (
     _download_tickets_lock,
     _DUMMY_PASSWORD_HASH,
     get_current_user,
+    get_session_user,
     hash_password,
     _hash_token,
     _login_gate,
@@ -178,7 +179,7 @@ def change_own_password(
     req: PwdReq,
     request: Request,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_session_user),
 ):
     wrong_password = _login_gate(f"pwd:{user.id}")
     if not verify_password(req.current_password, user.password_hash):
@@ -202,7 +203,7 @@ def change_own_password(
 
 
 @router.post("/download-ticket")
-def create_download_ticket(user: User = Depends(get_current_user)):
+def create_download_ticket(user: User = Depends(get_session_user)):
     """Trade the X-Venvy-Key header for a one-time, 60-second ticket usable as
     ?ticket= on a download URL (see get_download_user)."""
     ticket = secrets.token_urlsafe(24)
@@ -218,7 +219,7 @@ def create_download_ticket(user: User = Depends(get_current_user)):
 @router.get("/totp/setup")
 def totp_setup_begin(
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_session_user),
 ):
     """Generate (or return pending) TOTP secret + QR URI. Does NOT enable TOTP yet."""
     if user.totp_enabled:
@@ -243,7 +244,7 @@ def totp_setup_begin(
 def totp_setup_confirm(
     req: TotpSetupReq,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_session_user),
 ):
     """Verify the 6-digit code against the pending secret, then enable TOTP."""
     key = f"totp_pending_{user.id}"
@@ -268,7 +269,7 @@ def totp_setup_confirm(
 def totp_disable(
     req: TotpDisableReq,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_session_user),
 ):
     """Disable TOTP after verifying current password."""
     wrong_password = _login_gate(f"pwd:{user.id}")

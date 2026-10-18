@@ -64,6 +64,16 @@
                                 <span class="hidden md:inline">Save</span>
                             </button>
 
+                            <button class="log-tool-btn shrink-0" onclick="toggleLogSearchPanel()" id="log-search-all-btn" title="Search all logs, including older ones" aria-pressed="false">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/><path d="M8 11h6" stroke-linecap="round"/></svg>
+                                <span class="hidden md:inline">Search all</span>
+                            </button>
+
+                            <button class="log-tool-btn shrink-0" onclick="downloadAllLogs()" title="Download every log file of this app as one text file">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                <span class="hidden md:inline">All logs</span>
+                            </button>
+
                             <button class="log-tool-btn shrink-0" onclick="deleteLogs()" title="Clear the log file"
                                 style="color:var(--red)" data-requires-operator>
                                 <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -73,6 +83,20 @@
                                 </svg>
                                 <span class="hidden md:inline">Clear</span>
                             </button>
+                        </div>
+                        <!-- Search across all log files -->
+                        <div id="log-search-panel" class="hidden shrink-0" style="border-bottom:1px solid var(--border);background:var(--surface2)">
+                            <div class="flex flex-wrap items-center gap-2 px-3 py-2">
+                                <input id="lsp-q" type="text" placeholder="Search every log of this app…" autocomplete="off" spellcheck="false"
+                                    class="inp flex-1 px-2.5 py-1 text-xs mono" style="min-width:140px;height:28px" onkeydown="if(event.key==='Enter') runLogSearch()">
+                                <label class="flex items-center gap-1 text-[11px] select-none" style="color:var(--text3)"><input type="checkbox" id="lsp-regex"> regex</label>
+                                <label class="flex items-center gap-1 text-[11px] select-none" style="color:var(--text3)"><input type="checkbox" id="lsp-case"> case</label>
+                                <select id="lsp-ctx" class="inp px-1.5 text-[11px]" style="height:28px" title="Lines of context around each match">
+                                    <option value="0">no context</option><option value="2">±2 lines</option><option value="5">±5 lines</option>
+                                </select>
+                                <button class="btn-secondary px-3 text-xs" style="height:28px" onclick="runLogSearch()" id="lsp-go">Search</button>
+                            </div>
+                            <div id="lsp-results" class="hidden mono text-xs overflow-y-auto px-3 pb-3" style="max-height:16rem"></div>
                         </div>
                         <div class="flex-1 relative min-h-0 flex flex-col">
                             <pre id="log-viewer" tabindex="0" role="log" aria-label="Application logs"

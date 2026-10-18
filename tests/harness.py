@@ -134,3 +134,90 @@ def app_procs(data, app_id=None):
         except Exception:
             pass
     return out
+
+
+# ── helpers for the operations tests ────────────────────────────────────────
+import json as _json
+import socket as _socket
+import threading as _threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def free_port():
+    with _socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class Sink:
+    """A local HTTP endpoint that records what is sent to it (webhooks, WebDAV, S3)."""
+
+    def __init__(self, status=200):
+        self.got = []            # [{"method", "path", "headers", "body"}]
+        self.status = status
+        sink = self
+
+        class H(BaseHTTPRequestHandler):
+            def _take(self):
+                n = int(self.headers.get("content-length") or 0)
+                body = self.rfile.read(n) if n else b""
+                sink.got.append({"method": self.command, "path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
+                self.send_response(sink.status)
+                self.send_header("content-length", "0")
+                self.end_headers()
+            do_POST = do_PUT = do_GET = _take
+
+            def log_message(self, *a):
+                pass
+
+        self.port = free_port()
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), H)
+        self.httpd.daemon_threads = True
+        _threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.port}"
+
+    def json(self):
+        return [_json.loads(g["body"]) for g in self.got if g["body"][:1] == b"{"]
+
+    def wait(self, pred, timeout=30):
+        end = time.time() + timeout
+        while time.time() < end:
+            hit = [g for g in self.got if pred(g)]
+            if hit:
+                return hit
+            time.sleep(0.3)
+        return []
+
+    def close(self):
+        self.httpd.shutdown()
+
+
+SERVER_APP = '''\
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health" and os.path.exists("sick"):
+            self.send_response(500); self.end_headers(); self.wfile.write(b"sick"); return
+        self.send_response(200); self.send_header("content-type", "text/plain"); self.end_headers()
+        self.wfile.write(("APP-OK " + os.environ.get("MARK", "") + " " + self.path).encode())
+    def do_POST(self):
+        n = int(self.headers.get("content-length") or 0)
+        body = self.rfile.read(n)
+        self.send_response(201); self.end_headers(); self.wfile.write(b"POST:" + body)
+    def log_message(self, *a): print("REQ", self.path, flush=True)
+print("SERVER-START", flush=True)
+HTTPServer(("0.0.0.0", int(os.environ["PORT"])), H).serve_forever()
+'''
+
+
+WS_APP = (Path(__file__).with_name("ws_echo_app.py")).read_text()
+
+
+def login_as(base, username, password):
+    cl = Client(base)
+    cl.c.get("/")
+    r = cl.req("POST", "/api/auth/login", json={"username": username, "password": password})
+    assert r.status_code == 200, r.text
+    cl.key = r.json()["auth_key"]
+    return cl

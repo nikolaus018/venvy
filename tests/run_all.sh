@@ -3,7 +3,7 @@
 # throwaway data directory and drives it over HTTP/WebSocket.
 #
 #   pip install -r tests/requirements.txt     (plus Venvy's own dependencies)
-#   tests/run_all.sh                          # ~6 minutes
+#   tests/run_all.sh                          # ~12 minutes
 #   PYTHON=/path/to/python tests/run_all.sh
 #   SLOW=1 tests/run_all.sh                   # also the 2-minute login-lockout sweep test
 #
@@ -26,6 +26,9 @@ run env_unreadable "$PYB" t_env.py "$R"
 run files "$PYB" t_fs.py "$R"
 run small "$PYB" t_small.py "$R"
 run runtimes "$PYB" t_runtimes.py "$R"
+run ops "$PYB" t_ops.py "$R"
+run monitor "$PYB" t_monitor.py "$R"
+run deploy "$PYB" t_deploy.py "$R"
 run hardening "$PYB" t_hardening.py "$R"
 # Browser pass; needs `pip install playwright` and an installed Google Chrome.
 "$PYB" -c "import playwright" 2>/dev/null && run ui "$PYB" t_ui.py "$R"

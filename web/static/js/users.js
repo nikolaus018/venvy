@@ -22,11 +22,13 @@
             <tr class="transition" style="border-color:var(--border)">
                 <td class="px-5 py-3.5 font-medium text-sm" style="color:var(--text)">${escapeHtml(u.username)}</td>
                 <td class="px-5 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${u.role === 'operator' ? 'status-stopped' : ''}" style="${badgeStyle}">${escapeHtml(roleLabel)}</span></td>
-                <td class="px-5 py-3.5 text-right">
+                <td class="px-5 py-3.5 text-right whitespace-nowrap">
+                    ${u.role !== 'admin' ? `<button data-uid="${escapeHtml(u.id)}" data-uname="${escapeHtml(u.username)}" class="user-access-btn btn-ghost text-xs px-3 py-1.5 rounded-lg font-semibold mr-1.5" title="Which apps this user may use">${u.all_apps ? 'All apps' : `${u.app_ids.length} app${u.app_ids.length === 1 ? '' : 's'}`}</button>` : ''}
                     ${!isSelf ? `<button data-uid="${escapeHtml(u.id)}" data-uname="${escapeHtml(u.username)}" class="user-del-btn btn-danger text-xs px-3 py-1.5 rounded-lg font-bold">Delete</button>` : ''}
                 </td>
             </tr>`;
                 }).join('');
+                listEl.querySelectorAll('.user-access-btn').forEach(btn => btn.addEventListener('click', () => openUserAccess(Number(btn.dataset.uid), btn.dataset.uname)));
                 listEl.querySelectorAll('.user-del-btn').forEach(btn => btn.addEventListener('click', () => deleteUser(Number(btn.dataset.uid), btn.dataset.uname)));
             } catch (e) { showToast('Failed to load users.', 'error'); }
         }

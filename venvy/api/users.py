@@ -1,5 +1,8 @@
 """User management routes (admin only)."""
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select, Session
 
@@ -13,7 +16,7 @@ from venvy.auth import (
     _validate_password_strength,
 )
 from venvy.db import get_session
-from venvy.models import SystemSetting, User, UserSession, VALID_ROLES
+from venvy.models import ApiToken, App, AppAccess, SystemSetting, User, UserSession, VALID_ROLES
 
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
@@ -29,10 +32,50 @@ def list_users(
     session: Session = Depends(get_session),
     _: User = Depends(check_admin),
 ):
+    access: dict = {}
+    for row in session.exec(select(AppAccess)).all():
+        access.setdefault(row.user_id, []).append(row.app_id)
     return [
-        {"id": u.id, "username": u.username, "role": u.role}
+        {"id": u.id, "username": u.username, "role": u.role, "all_apps": u.all_apps or u.role == "admin",
+         "app_ids": sorted(access.get(u.id, []))}
         for u in session.exec(select(User)).all()
     ]
+
+
+class AccessReq(BaseModel):
+    all_apps: bool = True
+    app_ids: List[int] = []
+
+
+@router.put("/users/{user_id}/access")
+def set_user_access(
+    user_id: int,
+    req: AccessReq,
+    session: Session = Depends(get_session),
+    admin: User = Depends(check_admin),
+):
+    """Which apps a user may see and use: all of them, or just the listed ones. Admins always see all."""
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(404)
+    if user.role == "admin" and not req.all_apps:
+        raise HTTPException(400, "An admin always has access to every app.")
+    known = {a.id for a in session.exec(select(App)).all()}
+    unknown = [i for i in req.app_ids if i not in known]
+    if unknown:
+        raise HTTPException(400, f"No such app: {unknown[0]}")
+    user.all_apps = req.all_apps
+    session.add(user)
+    for row in session.exec(select(AppAccess).where(AppAccess.user_id == user_id)).all():
+        session.delete(row)
+    session.flush()
+    if not req.all_apps:
+        for app_id in sorted(set(req.app_ids)):
+            session.add(AppAccess(user_id=user_id, app_id=app_id))
+    session.commit()
+    audit_log(admin.username, "user_access_change",
+              f"'{user.username}': " + ("all apps" if req.all_apps else f"apps {sorted(set(req.app_ids))}"))
+    return {"ok": True}
 
 
 @router.post("/users")
@@ -83,6 +126,10 @@ async def delete_user(
         pending_totp = session.get(SystemSetting, f"totp_pending_{user_id}")
         if pending_totp:
             session.delete(pending_totp)
+        for row in session.exec(select(AppAccess).where(AppAccess.user_id == user_id)).all():
+            session.delete(row)
+        for tok in session.exec(select(ApiToken).where(ApiToken.user_id == user_id)).all():
+            session.delete(tok)
         session.delete(user)
         session.commit()
         audit_log(current_user.username, "user_delete", f"deleted user '{user.username}' (id={user_id})")

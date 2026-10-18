@@ -95,6 +95,7 @@
                         if (activeAppId === app.id) {
                             const prev = activeApp;
                             activeApp = app;
+                            updateHealthPill(app);
                             // Always keep title in sync (handles renames)
                             const titleEl = document.getElementById('dash-title');
                             if (titleEl && titleEl.innerText !== app.name) titleEl.innerText = app.name;

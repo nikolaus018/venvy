@@ -21,6 +21,7 @@ from venvy.auth import (
     get_download_user,
     rate_limit_mutations,
     require_operator,
+    visible_app_ids,
 )
 from venvy.backup import (
     _adopt_uploaded_backup,
@@ -258,7 +259,7 @@ async def system_info(_: User = Depends(get_current_user)):
 
 @router.get("/system/ports")
 async def system_ports(
-    _: User = Depends(require_operator),
+    user: User = Depends(require_operator),
     session: Session = Depends(get_session),
 ):
     """Return all currently listening TCP ports plus recommended free ports."""
@@ -318,7 +319,9 @@ async def system_ports(
             seen.add(entry["port"])
             result.append(entry)
 
-    app_port_map: Dict[int, str] = {a.port: a.name for a in app_rows if a.port}
+    allowed = visible_app_ids(session, user)
+    app_port_map: Dict[int, str] = {a.port: a.name for a in app_rows
+                                    if a.port and (allowed is None or a.id in allowed)}
     for entry in result:
         entry["app_name"] = app_port_map.get(entry["port"])
 

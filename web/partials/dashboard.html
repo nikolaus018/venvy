@@ -16,6 +16,7 @@
                             <div class="flex items-center gap-2 mt-1">
                                 <span id="dash-status"
                                     class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide status-stopped">Stopped</span>
+                                <span id="dash-health" class="hidden"></span>
                             </div>
                         </div>
                     </div>
@@ -63,9 +64,15 @@
                         <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-packages"
                             aria-controls="tab-packages" aria-selected="false" data-tab="packages" tabindex="-1"
                             title="Packages (4)" onclick="switchTab('packages')">Packages</button>
+                        <button class="tab-btn h-full whitespace-nowrap" data-requires-operator role="tab"
+                            id="tabbtn-deploy" aria-controls="tab-deploy" aria-selected="false" data-tab="deploy"
+                            tabindex="-1" title="Deploy (5)" onclick="switchTab('deploy')">Deploy</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-jobs"
+                            aria-controls="tab-jobs" aria-selected="false" data-tab="jobs" tabindex="-1"
+                            title="Jobs (6)" onclick="switchTab('jobs')">Jobs</button>
                         <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-settings"
                             aria-controls="tab-settings" aria-selected="false" data-tab="settings" tabindex="-1"
-                            title="Settings (5)" onclick="switchTab('settings')">Settings</button>
+                            title="Settings (7)" onclick="switchTab('settings')">Settings</button>
                     </div>
 
                     <!-- Save Settings Button (Visible only on Settings tab) — outside scroll so always reachable -->
@@ -89,6 +96,10 @@
                     <!-- include: partials/tabs/logs.html -->
 
                     <!-- include: partials/tabs/packages.html -->
+
+                    <!-- include: partials/tabs/deploy.html -->
+
+                    <!-- include: partials/tabs/jobs.html -->
 
                     <!-- include: partials/tabs/settings.html -->
 

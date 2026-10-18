@@ -1,0 +1,121 @@
+                    <!-- DEPLOY -->
+                    <div id="tab-deploy"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-3xl mx-auto space-y-5 pb-10">
+
+                            <!-- Deploy now -->
+                            <div class="card p-5">
+                                <div class="flex flex-wrap items-center gap-3">
+                                    <div class="flex-1 min-w-0">
+                                        <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                            <i data-feather="upload-cloud" class="w-4 h-4"></i> Deploy
+                                            <span id="dep-status-pill"></span>
+                                        </h3>
+                                        <p id="dep-last" class="text-xs mt-1" style="color:var(--text3)">Nothing deployed yet.</p>
+                                    </div>
+                                    <div class="flex gap-2 shrink-0">
+                                        <button id="dep-btn-start" onclick="deployNow(true)" data-requires-operator
+                                            class="btn-secondary px-4 py-2 text-xs hidden">Deploy &amp; start</button>
+                                        <button id="dep-btn" onclick="deployNow(false)" data-requires-operator
+                                            class="btn-primary px-5 py-2 text-xs font-bold">Deploy now</button>
+                                    </div>
+                                </div>
+                                <p id="dep-help" class="text-xs mt-3" style="color:var(--text3)">Pulls the latest code from the repository below, installs its
+                                    dependencies, runs the build command, restarts the app and checks that it came up — and puts the previous version back if it did not.</p>
+                                <pre id="dep-log" class="hidden mono text-xs mt-4 p-3 rounded-xl overflow-auto whitespace-pre-wrap break-words"
+                                    style="background:var(--surface2);border:1px solid var(--border2);color:var(--text2);max-height:18rem"></pre>
+                            </div>
+
+                            <!-- Repository -->
+                            <div class="card p-5 space-y-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="git-branch" class="w-4 h-4"></i> Repository &amp; build
+                                </h3>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div class="md:col-span-2">
+                                        <label class="block section-label mb-1.5" for="git-url">Repository</label>
+                                        <input id="git-url" type="text" class="inp w-full px-3.5 py-2.5 text-sm mono" autocomplete="off" spellcheck="false"
+                                            placeholder="https://github.com/you/app.git  or  git@github.com:you/app.git">
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-1.5" for="git-branch">Branch</label>
+                                        <input id="git-branch" type="text" class="inp w-full px-3.5 py-2.5 text-sm mono" autocomplete="off" spellcheck="false" placeholder="main">
+                                    </div>
+                                </div>
+                                <div id="git-token-row">
+                                    <label class="block section-label mb-1.5" for="git-token">Access token <span class="font-normal normal-case" style="color:var(--text3)">(private https repositories)</span></label>
+                                    <div class="flex gap-2">
+                                        <input id="git-token" type="password" class="inp flex-1 px-3.5 py-2.5 text-sm mono" autocomplete="new-password" spellcheck="false"
+                                            placeholder="Paste a read-only personal access token">
+                                        <button id="git-token-clear" type="button" onclick="clearGitToken()" data-requires-operator class="btn-ghost px-3 py-2 text-xs hidden">Remove</button>
+                                    </div>
+                                    <p class="text-xs mt-1" style="color:var(--text3)">Stored encrypted and never shown again. It is only sent to the repository's own host.</p>
+                                </div>
+                                <div>
+                                    <label class="block section-label mb-1.5" for="git-build">Build command <span class="font-normal normal-case" style="color:var(--text3)">(optional)</span></label>
+                                    <input id="git-build" type="text" class="inp w-full px-3.5 py-2.5 text-sm mono" autocomplete="off" spellcheck="false"
+                                        placeholder="npm run build">
+                                    <p class="text-xs mt-1" style="color:var(--text3)">Runs in the app's folder after the dependencies are installed, with the app's environment variables. Without a repository it just rebuilds.</p>
+                                </div>
+                                <div class="flex items-center justify-end">
+                                    <button id="git-save-btn" onclick="saveGit()" data-requires-operator class="btn-primary px-5 py-2 text-xs font-bold">Save</button>
+                                </div>
+
+                                <!-- Deploy key (ssh repositories) -->
+                                <div id="git-key-box" class="hidden pt-4" style="border-top:1px solid var(--border)">
+                                    <p class="section-label mb-1.5">Deploy key</p>
+                                    <p class="text-xs mb-2" style="color:var(--text3)">For ssh repositories: add this public key to the repository as a read-only deploy key.</p>
+                                    <div id="git-key-pub" class="hidden mono text-[11px] p-2.5 rounded-lg break-all" style="background:var(--surface2);border:1px solid var(--border2);color:var(--text2)"></div>
+                                    <div class="flex gap-2 mt-2">
+                                        <button onclick="makeDeployKey()" data-requires-operator class="btn-secondary px-3 py-1.5 text-xs" id="git-key-btn">Generate key</button>
+                                        <button onclick="copyText(document.getElementById('git-key-pub').textContent, 'Public key copied')" class="btn-ghost px-3 py-1.5 text-xs hidden" id="git-key-copy">Copy</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Webhook -->
+                            <div class="card p-5 space-y-3" data-requires-operator>
+                                <div class="flex items-center justify-between gap-3">
+                                    <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="zap" class="w-4 h-4"></i> Deploy on push
+                                    </h3>
+                                    <label class="flex items-center gap-2 text-xs cursor-pointer select-none" style="color:var(--text2)">
+                                        <input type="checkbox" id="git-auto" class="rounded" onchange="toggleAutoDeploy(this.checked)"> Auto-deploy
+                                    </label>
+                                </div>
+                                <div id="hook-box" class="hidden space-y-3">
+                                    <p class="text-xs" style="color:var(--text3)">In GitHub, Gitea, Forgejo or GitLab add a webhook for <em>push</em> events with this URL and secret
+                                        (content type <span class="mono">application/json</span>). Only pushes to the branch above deploy. From your own CI:
+                                        <span class="mono">curl -X POST -H "Authorization: Bearer &lt;secret&gt;" &lt;url&gt;</span></p>
+                                    <div>
+                                        <label class="block section-label mb-1">Payload URL</label>
+                                        <div class="flex gap-2"><input id="hook-url" readonly class="inp flex-1 px-3 py-2 text-xs mono"><button onclick="copyText(document.getElementById('hook-url').value, 'URL copied')" class="btn-ghost px-3 py-1.5 text-xs">Copy</button></div>
+                                        <p class="text-xs mt-1" style="color:var(--text3)">Must be reachable from the git host — use the public address of this Venvy.</p>
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-1">Secret</label>
+                                        <div class="flex gap-2">
+                                            <input id="hook-secret" type="password" readonly class="inp flex-1 px-3 py-2 text-xs mono">
+                                            <button onclick="const i=document.getElementById('hook-secret'); i.type = i.type==='password' ? 'text' : 'password'" class="btn-ghost px-3 py-1.5 text-xs">Show</button>
+                                            <button onclick="copyText(document.getElementById('hook-secret').value, 'Secret copied')" class="btn-ghost px-3 py-1.5 text-xs">Copy</button>
+                                            <button onclick="regenWebhookSecret()" class="btn-ghost px-3 py-1.5 text-xs">New secret</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Releases -->
+                            <div class="card overflow-hidden">
+                                <div class="px-5 py-4 flex items-center gap-3" style="border-bottom:1px solid var(--border)">
+                                    <div class="flex-1 min-w-0">
+                                        <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)"><i data-feather="clock" class="w-4 h-4"></i> Releases</h3>
+                                        <p class="text-xs mt-0.5" style="color:var(--text3)" id="rel-help">Versions you can go back to.</p>
+                                    </div>
+                                    <button onclick="snapshotNow()" data-requires-operator class="btn-ghost px-3 py-1.5 text-xs shrink-0">Snapshot now</button>
+                                </div>
+                                <div id="rel-list" class="divide-y" style="border-color:var(--border)">
+                                    <p class="px-5 py-6 text-xs text-center" style="color:var(--text3)">No releases yet.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>

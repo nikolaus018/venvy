@@ -194,6 +194,31 @@ def tools_error(key: str, packages: bool = False) -> Optional[str]:
             f"so {rt.label} apps cannot run. Install: {rt.install_hint}")
 
 
+_PY_VERSION_RE = re.compile(r"3\.\d{1,2}")
+
+
+def python_versions() -> List[str]:
+    """Minor versions of Python 3 installed next to the default one (['3.10', '3.12'])."""
+    path = tool_search_path()
+    return [f"3.{minor}" for minor in range(8, 16) if shutil.which(f"python3.{minor}", path=path)]
+
+
+def python_binary(version: Optional[str]) -> str:
+    """The interpreter to build a virtualenv with: python3.X for a chosen version, else python3."""
+    return f"python{version}" if version else "python3"
+
+
+def clean_python_version(value: Optional[str]) -> Optional[str]:
+    """A Python version the host has ('' or None: the system's python3). Raises ValueError."""
+    v = (value or "").strip()
+    if not v:
+        return None
+    if not _PY_VERSION_RE.fullmatch(v) or v not in python_versions():
+        have = ", ".join(python_versions()) or "none besides the default"
+        raise ValueError(f"Python {v} is not installed on this host (available: {have}).")
+    return v
+
+
 def describe() -> List[dict]:
     """The runtimes as the UI needs them (GET /api/runtimes)."""
     return [{
@@ -205,6 +230,7 @@ def describe() -> List[dict]:
         "entry_placeholder": rt.entry_placeholder, "entry_help": rt.entry_help,
         "packages": rt.packages, "pkg_help": rt.pkg_help, "pkg_example": rt.pkg_example,
         "can_sync": bool(sync_steps(rt.key, Path("/nonexistent"), assume_manifest=True)),
+        "versions": python_versions() if rt.key == "python" else [],
     } for rt in RUNTIMES.values()]
 
 

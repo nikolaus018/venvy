@@ -2,13 +2,13 @@
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
         // ── Tab Switching ─────────────────────────────────────────────────────────
-        const TABS = ['terminal', 'files', 'logs', 'packages', 'settings'];
+        const TABS = ['terminal', 'files', 'logs', 'packages', 'deploy', 'jobs', 'settings'];
         let currentTab = 'terminal';
 
         // A shell and the file manager need an operator; a viewer's app view
         // starts (and stays) on what it may read.
         function tabAllowed(tab) {
-            return currentUser?.role !== 'viewer' || (tab !== 'terminal' && tab !== 'files');
+            return currentUser?.role !== 'viewer' || (tab !== 'terminal' && tab !== 'files' && tab !== 'deploy');
         }
 
         function defaultTab() {
@@ -53,12 +53,16 @@
             }
 
             if (logInterval) { clearInterval(logInterval); logInterval = null; _logsInflight = false; }
+            stopDeployPolling();
             if (tab === 'logs') startLogPolling();
             if (tab === 'files') loadFiles(currentBrowserPath);
             if (tab === 'packages') loadPackages();
+            if (tab === 'deploy') loadDeploy();
+            if (tab === 'jobs') loadJobs();
             if (tab === 'terminal' && window.term && window.fitAddon) setTimeout(_termFit, 100);
             if (tab === 'settings') {
                 loadCfRouteStatus();
+                loadUsage();
                 document.getElementById('settings-save-container').classList.remove('hidden');
                 document.getElementById('settings-save-container').classList.add('flex');
                 checkSettingsDirty();

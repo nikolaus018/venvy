@@ -80,6 +80,17 @@ otherwise on the first start (or with "Install from manifest" in the Packages ta
 
 - **Apps as first-class things.** Create an app, upload a folder (chunked, resumable), and Venvy
   builds its virtualenv and installs `requirements.txt`. Start, stop and restart from the UI.
+- **Deploy from git.** Point an app at a repository and a build command; one click (or a push
+  webhook from GitHub, GitLab, Gitea or Forgejo) pulls, installs dependencies, builds, restarts and
+  checks the app came up — and puts the previous version back if it did not. Every deploy is a
+  release you can roll back to; apps without git get file snapshots.
+- **Watching.** Health checks (with restarts), CPU / memory / disk history, resource alerts, and
+  notifications by webhook, Slack, Discord, ntfy, Telegram or email when something crashes, fails to
+  deploy, or goes over a limit.
+- **Scheduled jobs.** Cron-style commands per app, run as the app's own user.
+- **Automatic backups** on a schedule, with retention and an off-site copy (S3-compatible, WebDAV or scp).
+- **Own domains.** An app with a domain is served for that hostname on Venvy's port, WebSockets included.
+- **Access.** API tokens for CI, users limited to chosen apps, an audit trail, variables shared by every app.
 - **Supervision.** Restart policies (`never`, `on-failure`, `always`) with crash-loop back-off,
   start-on-boot, port detection, and per-app CPU and memory limits through systemd scopes.
 - **A real terminal in the browser.** A PTY shell in the app's directory with its virtualenv

@@ -181,7 +181,9 @@
                     [['2'], 'Files'],
                     [['3'], 'Logs'],
                     [['4'], 'Packages'],
-                    [['5'], 'Settings'],
+                    [['5'], 'Deploy'],
+                    [['6'], 'Jobs'],
+                    [['7'], 'Settings'],
                     [['['], 'Previous application'],
                     [[']'], 'Next application'],
                     [['←', '→'], 'Move between tabs (when a tab is focused)'],
@@ -259,7 +261,7 @@
                         document.getElementById('app-search')?.focus();
                     }
                     return;
-                case '1': case '2': case '3': case '4': case '5':
+                case '1': case '2': case '3': case '4': case '5': case '6': case '7':
                     if (!activeAppId) return;
                     e.preventDefault(); switchTab(TABS[Number(e.key) - 1]); return;
                 case '[': case ']':

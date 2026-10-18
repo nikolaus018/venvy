@@ -26,6 +26,8 @@ from venvy.config import (
     utc_now,
     _VENVY_BOOT_TIME,
 )
+from venvy import notify, proxy
+from venvy.audit import set_client_ip
 from venvy.backup import load_operation_state
 from venvy.db import create_db_and_tables, engine
 from venvy.models import App, SystemSetting
@@ -42,11 +44,17 @@ from venvy.process import (
     _systemd_run_available,
     supervisor_task,
 )
+from venvy.scheduler import scheduler_task
 from venvy.startup import _check_python3_venv, _check_runtimes
 from venvy.terminal import terminal_manager
 from venvy.uploads import _SINGLE_REQUEST_UPLOAD_MAX, _UPLOAD_CHUNK_MAX
 from venvy.webui import render_index
 from venvy.api import apps as api_apps
+from venvy.api import cron as api_cron
+from venvy.api import deploy as api_deploy
+from venvy.api import logs as api_logs
+from venvy.api import ops as api_ops
+from venvy.api import tokens as api_tokens
 from venvy.api import auth as api_auth
 from venvy.api import cloudflare as api_cloudflare
 from venvy.api import files as api_files
@@ -80,6 +88,7 @@ def _rebase_app_paths(app_row: App) -> bool:
 async def lifespan(app: FastAPI):
     create_db_and_tables()
     load_operation_state()
+    notify.set_loop(asyncio.get_running_loop())
 
     await _check_python3_venv()
     await _check_runtimes()
@@ -142,10 +151,13 @@ async def lifespan(app: FastAPI):
 
     supervisor_task_handle = asyncio.create_task(supervisor_task())
     metrics_task_handle = asyncio.create_task(metrics_collector_task())
+    scheduler_task_handle = asyncio.create_task(scheduler_task())
     yield
     supervisor_task_handle.cancel()
     metrics_task_handle.cancel()
-    await asyncio.gather(supervisor_task_handle, metrics_task_handle, return_exceptions=True)
+    scheduler_task_handle.cancel()
+    await asyncio.gather(supervisor_task_handle, metrics_task_handle, scheduler_task_handle, return_exceptions=True)
+    await proxy.close()
 
     logging.info("Venvy shutting down — stopping all managed apps…")
     await terminal_manager.close_for_app(None, timeout=3.0)
@@ -255,7 +267,12 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 class CSRFMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS", "TRACE"):
+        # Not cookie-authenticated, so nothing for a forged request to ride on:
+        # API tokens (an Authorization header a browser never adds by itself) and
+        # push webhooks (which prove themselves with a signature).
+        token_request = request.headers.get("authorization", "")[:7].lower() == "bearer "
+        if (request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS", "TRACE")
+                and not token_request and not request.url.path.startswith("/api/hooks/")):
             csrf_cookie = request.cookies.get("csrf_token")
             csrf_header = request.headers.get("x-csrf-token")
             if not csrf_cookie or not csrf_header or not secrets.compare_digest(
@@ -348,6 +365,28 @@ class BodySizeLimitMiddleware:
 
 app.add_middleware(BodySizeLimitMiddleware)
 
+
+class ClientIPMiddleware:
+    """Make the client's address available to the audit trail for the length of the request."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            from starlette.requests import HTTPConnection
+            from venvy.auth import _resolve_client_ip
+            try:
+                set_client_ip(_resolve_client_ip(HTTPConnection(scope)))
+            except Exception:
+                pass
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(ClientIPMiddleware)
+# Outermost: a request for an app's own domain never reaches Venvy's login, limits or UI.
+app.add_middleware(proxy.DomainProxyMiddleware)
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -359,6 +398,12 @@ app.include_router(api_cloudflare.router)
 app.include_router(api_system.router)
 app.include_router(api_apps.router)
 app.include_router(api_terminal.router)
+app.include_router(api_ops.router)
+app.include_router(api_deploy.router)
+app.include_router(api_deploy.hooks)
+app.include_router(api_cron.router)
+app.include_router(api_tokens.router)
+app.include_router(api_logs.router)
 
 
 @app.get("/api/health")

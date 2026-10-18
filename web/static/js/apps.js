@@ -444,6 +444,7 @@
             titleEl.title = app.name;
             document.title = `${app.name} · Venvy`;
             applyStatusBadge(document.getElementById('dash-status'), app.status);
+            updateHealthPill(app);
             updateControlButtons(app);
             updateLogLiveIndicator();
 
@@ -457,6 +458,13 @@
                 document.getElementById('setting-boot').checked = app.start_on_boot;
                 document.getElementById('setting-port').value = app.port || '';
                 envEditor.load(app);
+                renderSettingsExtras(app);
+                document.getElementById('setting-health-path').value = app.healthcheck_path || '';
+                document.getElementById('setting-health-interval').value = app.health_interval ?? 30;
+                document.getElementById('setting-health-failures').value = app.health_failures ?? 3;
+                document.getElementById('setting-health-restart').checked = app.health_restart ?? true;
+                document.getElementById('setting-domain').value = app.domain || '';
+                document.getElementById('setting-disk-limit').value = app.disk_limit_mb ?? '';
                 document.getElementById('setting-name').value = app.name || '';
                 if (document.getElementById('setting-runtime')) {
                     document.getElementById('setting-runtime').value = app.runtime || 'python';

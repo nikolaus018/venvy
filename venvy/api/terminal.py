@@ -6,7 +6,7 @@ import urllib.parse
 from fastapi import APIRouter, HTTPException, WebSocket
 from sqlmodel import Session
 
-from venvy.auth import _authenticate, check_ip_allowlist
+from venvy.auth import _authenticate, check_ip_allowlist, has_app_access
 from venvy.config import _ALLOWED_ORIGINS
 from venvy.db import engine
 from venvy.models import App
@@ -59,6 +59,8 @@ async def terminal_ws(
     with Session(engine) as session:
         ws_user = _authenticate(session, websocket.cookies.get("session"), auth_key)
         ws_user_id, ws_user_role = (ws_user.id, ws_user.role) if ws_user else (None, None)
+        if ws_user and not has_app_access(session, ws_user, app_id):
+            ws_user_id = None
     if ws_user_id is None:
         await websocket.close(code=1008, reason="Not authenticated.")
         return
@@ -68,7 +70,7 @@ async def terminal_ws(
     def _still_allowed() -> bool:
         with Session(engine) as s:
             u = _authenticate(s, cookie_token, auth_key)
-            return bool(u and u.role in ("admin", "operator") and s.get(App, app_id))
+            return bool(u and u.role in ("admin", "operator") and s.get(App, app_id) and has_app_access(s, u, app_id))
 
     try:
         await terminal_manager.start_terminal(

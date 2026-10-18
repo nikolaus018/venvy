@@ -414,7 +414,8 @@ def totp_disable(req: TotpDisableReq, request: Request):
 @app.get("/api/users")
 def list_users(request: Request):
     _check_auth(request)
-    return [{"id": 1, "username": "admin", "is_admin": True}]
+    return [{"id": 1, "username": "admin", "role": "admin", "all_apps": True, "app_ids": []},
+            {"id": 2, "username": "sam", "role": "operator", "all_apps": False, "app_ids": [1]}]
 
 class UserReq(BaseModel):
     username: str
@@ -553,6 +554,12 @@ class AppUpdateReq(BaseModel):
     url_source_pref: Optional[str] = None
     memory_limit_mb: Optional[int] = None
     cpu_limit_percent: Optional[int] = None
+    healthcheck_path: Optional[str] = None
+    health_interval: Optional[int] = None
+    health_failures: Optional[int] = None
+    health_restart: Optional[bool] = None
+    domain: Optional[str] = None
+    disk_limit_mb: Optional[int] = None
 
 @app.put("/api/apps/{app_id}")
 async def update_app(app_id: int, req: AppUpdateReq, request: Request):
@@ -587,6 +594,10 @@ async def update_app(app_id: int, req: AppUpdateReq, request: Request):
         if req.cpu_limit_percent != 0 and not (1 <= req.cpu_limit_percent <= 10000):
             raise HTTPException(400, "cpu_limit_percent must be between 1 and 10000 (or 0 for unlimited).")
         a["cpu_limit_percent"] = None if req.cpu_limit_percent == 0 else req.cpu_limit_percent
+    for field in ("healthcheck_path", "health_interval", "health_failures", "health_restart", "domain", "disk_limit_mb"):
+        value = getattr(req, field)
+        if value is not None:
+            a[field] = (value or None) if field in ("healthcheck_path", "domain", "disk_limit_mb") else value
     a["updated_at"] = _now_iso()
     return a
 
@@ -732,6 +743,7 @@ async def abort_file_upload(app_id: int, upload_id: str, request: Request):
 FAKE_RUNTIMES = [
   {
     "key": "python",
+    "versions": ["3.11", "3.12"],
     "label": "Python 3 (Venv)",
     "installed": True,
     "packages_installed": True,
@@ -1281,6 +1293,394 @@ async def terminal_ws(websocket: WebSocket, app_id: int):
 # ---------------------------------------------------------------------------
 # Banner + run
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Deploy, jobs, activity, notifications, alerts, schedule, tokens, shared variables, history
+# (static, in-memory: enough to build and look at the UI)
+# ---------------------------------------------------------------------------
+
+def _iso(minutes_ago: float = 0) -> str:
+    return (datetime.datetime.utcnow() - datetime.timedelta(minutes=minutes_ago)).replace(tzinfo=datetime.timezone.utc).isoformat()
+
+FAKE_GIT: Dict[int, dict] = {}
+FAKE_RELEASES: Dict[int, list] = {}
+FAKE_DEPLOY_STATE: Dict[int, dict] = {}
+FAKE_JOBS_CRON: Dict[int, list] = {}
+FAKE_NEXT_ID = {"job": 1, "release": 10, "channel": 1, "alert": 1, "token": 1}
+FAKE_CHANNELS: list = [{"id": 1, "name": "Team chat", "kind": "slack", "events": "*", "enabled": True,
+                        "config": {"url": "***"}, "last_status": "ok", "last_sent_at": None}]
+FAKE_ALERTS: list = [{"id": 1, "app_id": 0, "app": None, "metric": "cpu", "threshold": 90.0, "minutes": 5, "enabled": True,
+                      "firing": False, "since": None, "description": "The host: CPU above 90% for 5 min"}]
+FAKE_TOKENS: list = []
+FAKE_SHARED_ENV: Dict[str, str] = {"TZ": "Europe/Berlin"}
+FAKE_SCHEDULE: dict = {"schedule": "0 3 * * *", "keep": 7, "last": {"at": _iso(600), "ok": True, "file": "full-20240601-030000.tar.gz", "size": 4_200_000, "remote": "ok: s3://bk/venvy/full-20240601-030000.tar.gz", "error": None}, "remote": {"kind": "s3", "bucket": "bk", "access_key": "AKID", "secret_key": "***", "region": "eu-west-1"}}
+NOTIFY_EVENTS = {
+    "app_crashed": "An app died unexpectedly", "app_crash_loop": "An app keeps crashing (restarts back off)",
+    "app_unhealthy": "An app's health check keeps failing", "app_recovered": "An unhealthy app is healthy again",
+    "deploy_ok": "A deploy succeeded", "deploy_failed": "A deploy failed",
+    "deploy_rolled_back": "A deploy failed its health check and was rolled back", "backup_ok": "A scheduled backup finished",
+    "backup_failed": "A backup failed", "job_failed": "A scheduled job failed", "alert_fired": "A resource alert fired",
+    "alert_cleared": "A resource alert cleared",
+}
+
+def _git(app_id: int) -> dict:
+    return FAKE_GIT.setdefault(app_id, {"url": "", "branch": "main", "has_token": False, "build_command": "", "auto_deploy": False,
+                                        "public_key": None, "ssh": False, "webhook_path": f"/api/hooks/deploy/{app_id}",
+                                        "has_webhook_secret": False, "webhook_secret": None})
+
+@app.get("/api/apps/{app_id}/deploy")
+def get_deploy(app_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    st = FAKE_DEPLOY_STATE.get(app_id) or {"running": False, "status": None, "log": [], "started": None, "finished": None, "trigger": None}
+    rel = FAKE_RELEASES.setdefault(app_id, [{"id": 1, "created_at": _iso(180), "kind": "deploy", "commit": "9f3c2ab41d", "message": "Fix login redirect", "size": 0, "by": "admin", "restorable": True},
+                                            {"id": 2, "created_at": _iso(60 * 30), "kind": "deploy", "commit": "c81e0a77b2", "message": "Add health endpoint", "size": 0, "by": "webhook", "restorable": True}])
+    return {"git": _git(app_id), "state": st, "last": {"at": rel[0]["created_at"], "status": "ok", "commit": rel[0]["commit"]}, "releases": rel}
+
+class _GitReq(BaseModel):
+    git_url: Optional[str] = None
+    git_branch: Optional[str] = None
+    build_command: Optional[str] = None
+    auto_deploy: Optional[bool] = None
+    token: Optional[str] = None
+
+@app.put("/api/apps/{app_id}/git")
+def put_git(app_id: int, req: _GitReq, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    g = _git(app_id)
+    if req.git_url is not None:
+        g["url"] = req.git_url; g["ssh"] = req.git_url.startswith("git@") or req.git_url.startswith("ssh://")
+    if req.git_branch is not None: g["branch"] = req.git_branch
+    if req.build_command is not None: g["build_command"] = req.build_command
+    if req.token is not None: g["has_token"] = bool(req.token)
+    if req.auto_deploy is not None:
+        g["auto_deploy"] = req.auto_deploy
+        if req.auto_deploy and not g["webhook_secret"]:
+            g["webhook_secret"] = secrets.token_urlsafe(24); g["has_webhook_secret"] = True
+    return g
+
+@app.post("/api/apps/{app_id}/git/key")
+def make_key(app_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEmulatedKeyForTheUiOnlyNotARealKey000000 venvy-app-%d" % app_id
+    _git(app_id)["public_key"] = key
+    return {"public_key": key}
+
+@app.post("/api/apps/{app_id}/git/webhook-secret")
+def new_hook_secret(app_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    g = _git(app_id); g["webhook_secret"] = secrets.token_urlsafe(24); g["has_webhook_secret"] = True
+    return {"webhook_secret": g["webhook_secret"]}
+
+class _DeployReq(BaseModel):
+    start: bool = False
+
+@app.post("/api/apps/{app_id}/deploy")
+async def start_deploy(app_id: int, request: Request, req: _DeployReq = _DeployReq()):
+    _check_auth(request); _app_or_404(app_id)
+    g = _git(app_id)
+    if not g["url"] and not g["build_command"]:
+        raise HTTPException(400, "Set a git repository or a build command first.")
+    FAKE_DEPLOY_STATE[app_id] = {"running": False, "status": "ok", "started": _iso(), "finished": _iso(), "trigger": "manual", "log": [
+        "Deploying (manual, by admin)", "$ git fetch --prune --tags origin +refs/heads/main:refs/remotes/origin/main",
+        "  From example.com:you/app", "$ git checkout -f -B main refs/remotes/origin/main", "$ pip install -r requirements.txt",
+        "  Requirement already satisfied: fastapi", "Now at 7d41b0e3aa — Emulated commit", "Restarting the app…", "Finished: ok"]}
+    rel = FAKE_RELEASES.setdefault(app_id, [])
+    FAKE_NEXT_ID["release"] += 1
+    rel.insert(0, {"id": FAKE_NEXT_ID["release"], "created_at": _iso(), "kind": "deploy", "commit": "7d41b0e3aa", "message": "Emulated commit", "size": 0, "by": "admin", "restorable": True})
+    return {"ok": True}
+
+@app.get("/api/apps/{app_id}/releases")
+def get_releases(app_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    return get_deploy(app_id, request)["releases"]
+
+@app.post("/api/apps/{app_id}/releases")
+def make_release(app_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    FAKE_NEXT_ID["release"] += 1
+    FAKE_RELEASES.setdefault(app_id, []).insert(0, {"id": FAKE_NEXT_ID["release"], "created_at": _iso(), "kind": "manual", "commit": None, "message": "Snapshot", "size": 1_200_000, "by": "admin", "restorable": True})
+    return _job({"ok": True})
+
+@app.post("/api/apps/{app_id}/releases/{release_id}/rollback")
+def rollback(app_id: int, release_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    FAKE_DEPLOY_STATE[app_id] = {"running": False, "status": "ok", "started": _iso(), "finished": _iso(), "trigger": "rollback", "log": ["Rolling back (rollback, by admin)", "Finished: ok"]}
+    return {"ok": True}
+
+@app.post("/api/apps/{app_id}/duplicate")
+def duplicate(app_id: int, request: Request):
+    _check_auth(request)
+    src = _app_or_404(app_id)
+    global NEXT_APP_ID
+    new_id = NEXT_APP_ID; NEXT_APP_ID += 1
+    FAKE_APPS[new_id] = {**src, "id": new_id, "name": src["name"] + " copy", "slug": src["slug"] + "-copy", "status": "stopped", "pid": None, "port": None}
+    return {**_job(FAKE_APPS[new_id]), "app_id": new_id}
+
+class _JobReq(BaseModel):
+    name: str
+    schedule: str
+    command: str
+    timeout: int = 600
+    enabled: bool = True
+
+def _job_json(j: dict) -> dict:
+    return {**j, "next_run": _iso(-60) if j["enabled"] else None, "running": False}
+
+@app.get("/api/apps/{app_id}/jobs")
+def list_cron_jobs(app_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    jobs = FAKE_JOBS_CRON.setdefault(app_id, [{"id": 0, "name": "Nightly cleanup", "schedule": "0 3 * * *", "command": "python cleanup.py --older-than 30", "timeout": 600, "enabled": True,
+                                               "last_run_at": _iso(400), "last_status": "ok", "last_exit_code": 0, "last_duration": 4.2, "last_output": "Removed 12 old files\n"}])
+    return [_job_json(j) for j in jobs]
+
+@app.post("/api/apps/{app_id}/jobs")
+def create_cron_job(app_id: int, req: _JobReq, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    FAKE_NEXT_ID["job"] += 1
+    j = {"id": FAKE_NEXT_ID["job"], **req.dict(), "last_run_at": None, "last_status": None, "last_exit_code": None, "last_duration": None, "last_output": ""}
+    FAKE_JOBS_CRON.setdefault(app_id, []).append(j)
+    return _job_json(j)
+
+@app.put("/api/apps/{app_id}/jobs/{job_id}")
+def update_cron_job(app_id: int, job_id: int, req: _JobReq, request: Request):
+    _check_auth(request)
+    for j in FAKE_JOBS_CRON.get(app_id, []):
+        if j["id"] == job_id:
+            j.update(req.dict()); return _job_json(j)
+    raise HTTPException(404)
+
+@app.delete("/api/apps/{app_id}/jobs/{job_id}")
+def delete_cron_job(app_id: int, job_id: int, request: Request):
+    _check_auth(request)
+    FAKE_JOBS_CRON[app_id] = [j for j in FAKE_JOBS_CRON.get(app_id, []) if j["id"] != job_id]
+    return {"ok": True}
+
+@app.post("/api/apps/{app_id}/jobs/{job_id}/run")
+def run_cron_job(app_id: int, job_id: int, request: Request):
+    _check_auth(request)
+    for j in FAKE_JOBS_CRON.get(app_id, []):
+        if j["id"] == job_id:
+            j.update(last_run_at=_iso(), last_status="ok", last_exit_code=0, last_duration=1.3, last_output="Ran at " + _iso() + "\n")
+    return {"ok": True}
+
+@app.get("/api/apps/{app_id}/env-history")
+def env_history(app_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    return [{"ts": _iso(30), "user": "admin", "added": ["API_KEY"], "removed": [], "changed": ["DEBUG"]},
+            {"ts": _iso(60 * 24), "user": "admin", "added": ["DEBUG", "HOST"], "removed": [], "changed": []}]
+
+def _series(minutes: int, base: float, wobble: float, scale: float = 1.0) -> list:
+    n = min(120, max(10, minutes // 2))
+    now = datetime.datetime.utcnow()
+    return [{"ts": (now - datetime.timedelta(minutes=minutes * (n - i) / n)).replace(tzinfo=datetime.timezone.utc).isoformat(),
+             "cpu": round(max(0, base + wobble * random.uniform(-1, 1)), 2), "mem": (base * 1e6 + wobble * 1e6 * random.uniform(-1, 1)) * scale,
+             "disk": 48 + i / n * 2} for i in range(n)]
+
+@app.get("/api/apps/{app_id}/metrics/history")
+def app_history(app_id: int, request: Request, minutes: int = 60):
+    _check_auth(request); _app_or_404(app_id)
+    return {"minutes": minutes, "samples": _series(minutes, 12, 8, 6)}
+
+@app.get("/api/system/metrics/history")
+def host_history(request: Request, minutes: int = 60):
+    _check_auth(request)
+    s = _series(minutes, 22, 10)
+    for p in s: p["mem"] = 40 + random.uniform(-4, 4)
+    return {"minutes": minutes, "samples": s}
+
+@app.get("/api/apps/{app_id}/disk")
+def app_disk(app_id: int, request: Request, refresh: bool = False):
+    _check_auth(request); a = _app_or_404(app_id)
+    return {"bytes": 38_400_000, "limit_mb": a.get("disk_limit_mb")}
+
+@app.get("/api/apps/{app_id}/logs/search")
+def search_logs(app_id: int, request: Request, q: str, regex: bool = False, case: bool = False, limit: int = 200, context: int = 0):
+    _check_auth(request); _app_or_404(app_id)
+    lines = [(i + 1, l) for i, l in enumerate(SAMPLE_LOG.splitlines())]
+    hits = [(n, l) for n, l in lines if (q in l if case else q.lower() in l.lower())]
+    return {"matches": [{"file": "app.log", "line": n, "text": l, "before": [lines[n - 2][1]] if context and n > 1 else [], "after": []} for n, l in hits[:limit]],
+            "truncated": False, "scanned_bytes": 4000, "files": 1}
+
+@app.get("/api/apps/{app_id}/logs/download")
+def download_logs(app_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    return PlainTextResponse(SAMPLE_LOG, headers={"Content-Disposition": 'attachment; filename="app-logs.txt"'})
+
+@app.get("/api/audit")
+def audit(request: Request, limit: int = 100, offset: int = 0, user: str = "", action: str = "", q: str = "", since_hours: int = 0):
+    _check_auth(request)
+    rows = [{"id": i, "ts": _iso(i * 7), "user": "admin", "action": a, "detail": d, "ip": "192.168.1.20"} for i, (a, d) in enumerate([
+        ("app_start", "app 'FastAPI Demo' (id=1)"), ("app_deploy", "app 'FastAPI Demo' (id=1): ok"), ("app_env_change", "app 'FastAPI Demo' (id=1)"),
+        ("user_create", "created user 'sam' with role 'viewer'"), ("system_full_backup", "path=full-20240601.tar.gz"), ("token_create", "'ci' (full)")] * 4)]
+    rows = [r for r in rows if (not user or r["user"] == user) and (not action or r["action"].startswith(action)) and (not q or q in r["detail"])]
+    return {"total": len(rows), "entries": rows[offset:offset + limit]}
+
+@app.get("/api/system/shared-env")
+def get_shared_env(request: Request):
+    _check_auth(request)
+    return {"vars": FAKE_SHARED_ENV, "unreadable": False}
+
+class _SharedReq(BaseModel):
+    vars: Dict[str, str]
+
+@app.put("/api/system/shared-env")
+def put_shared_env(req: _SharedReq, request: Request):
+    _check_auth(request)
+    FAKE_SHARED_ENV.clear(); FAKE_SHARED_ENV.update(req.vars)
+    return {"ok": True, "count": len(req.vars)}
+
+@app.get("/api/system/notify")
+def list_channels(request: Request):
+    _check_auth(request)
+    return {"events": NOTIFY_EVENTS, "kinds": ["webhook", "slack", "discord", "ntfy", "telegram", "email"], "required": {}, "channels": FAKE_CHANNELS}
+
+class _ChannelReq(BaseModel):
+    name: str
+    kind: str
+    config: Dict[str, Any] = {}
+    events: str = "*"
+    enabled: bool = True
+
+@app.post("/api/system/notify")
+def create_channel(req: _ChannelReq, request: Request):
+    _check_auth(request)
+    FAKE_NEXT_ID["channel"] += 1
+    ch = {"id": FAKE_NEXT_ID["channel"], **req.dict(), "last_status": None, "last_sent_at": None}
+    FAKE_CHANNELS.append(ch)
+    return ch
+
+@app.put("/api/system/notify/{channel_id}")
+def update_channel(channel_id: int, req: _ChannelReq, request: Request):
+    _check_auth(request)
+    for ch in FAKE_CHANNELS:
+        if ch["id"] == channel_id:
+            ch.update(req.dict()); return ch
+    raise HTTPException(404)
+
+@app.delete("/api/system/notify/{channel_id}")
+def delete_channel(channel_id: int, request: Request):
+    _check_auth(request)
+    FAKE_CHANNELS[:] = [c for c in FAKE_CHANNELS if c["id"] != channel_id]
+    return {"ok": True}
+
+@app.post("/api/system/notify/{channel_id}/test")
+def test_channel(channel_id: int, request: Request):
+    _check_auth(request)
+    return {"ok": True, "status": "ok"}
+
+class _AlertReq(BaseModel):
+    app_id: int = 0
+    metric: str
+    threshold: float
+    minutes: int = 5
+    enabled: bool = True
+
+@app.get("/api/system/alerts")
+def list_alerts(request: Request):
+    _check_auth(request)
+    return FAKE_ALERTS
+
+@app.post("/api/system/alerts")
+def create_alert(req: _AlertReq, request: Request):
+    _check_auth(request)
+    FAKE_NEXT_ID["alert"] += 1
+    name = FAKE_APPS[req.app_id]["name"] if req.app_id in FAKE_APPS else None
+    who = name or "The host"
+    r = {"id": FAKE_NEXT_ID["alert"], **req.dict(), "app": name, "firing": False, "since": None,
+         "description": f"{who}: {req.metric} above {req.threshold:g} for {req.minutes} min"}
+    FAKE_ALERTS.append(r)
+    return r
+
+@app.put("/api/system/alerts/{rule_id}")
+def update_alert(rule_id: int, req: _AlertReq, request: Request):
+    _check_auth(request)
+    for r in FAKE_ALERTS:
+        if r["id"] == rule_id:
+            r.update(req.dict()); return r
+    raise HTTPException(404)
+
+@app.delete("/api/system/alerts/{rule_id}")
+def delete_alert(rule_id: int, request: Request):
+    _check_auth(request)
+    FAKE_ALERTS[:] = [r for r in FAKE_ALERTS if r["id"] != rule_id]
+    return {"ok": True}
+
+@app.get("/api/system/backup/schedule")
+def get_backup_schedule(request: Request):
+    _check_auth(request)
+    return {**FAKE_SCHEDULE, "next_run": _iso(-300)}
+
+class _ScheduleReq(BaseModel):
+    schedule: str = ""
+    keep: int = 7
+
+@app.put("/api/system/backup/schedule")
+def put_backup_schedule(req: _ScheduleReq, request: Request):
+    _check_auth(request)
+    FAKE_SCHEDULE.update(schedule=req.schedule, keep=req.keep)
+    return {**FAKE_SCHEDULE, "next_run": _iso(-300) if req.schedule else None}
+
+@app.post("/api/system/backup/schedule/run")
+def run_backup_schedule(request: Request):
+    _check_auth(request)
+    return {"ok": True}
+
+@app.put("/api/system/backup/remote")
+def put_backup_remote(request: Request, cfg: Dict[str, Any]):
+    _check_auth(request)
+    FAKE_SCHEDULE["remote"] = {k: ("***" if k in ("secret_key", "password", "private_key") and v else v) for k, v in cfg.items()}
+    return {"remote": FAKE_SCHEDULE["remote"]}
+
+@app.delete("/api/system/backup/remote")
+def delete_backup_remote(request: Request):
+    _check_auth(request)
+    FAKE_SCHEDULE["remote"] = None
+    return {"ok": True}
+
+@app.post("/api/system/backup/remote/test")
+def test_backup_remote(request: Request):
+    _check_auth(request)
+    return {"ok": True, "where": "s3://bk/venvy/venvy-test.txt"}
+
+@app.get("/api/tokens")
+def list_tokens(request: Request):
+    _check_auth(request)
+    return FAKE_TOKENS
+
+class _TokenReq(BaseModel):
+    name: str
+    scope: str = "full"
+    expires_days: Optional[int] = None
+
+@app.post("/api/tokens")
+def create_token(req: _TokenReq, request: Request):
+    _check_auth(request)
+    FAKE_NEXT_ID["token"] += 1
+    raw = "venvy_" + secrets.token_urlsafe(32)
+    row = {"id": FAKE_NEXT_ID["token"], "name": req.name, "prefix": raw[:12], "scope": req.scope, "created_at": _iso(),
+           "expires_at": _iso(-60 * 24 * req.expires_days) if req.expires_days else None, "last_used_at": None}
+    FAKE_TOKENS.insert(0, row)
+    return {**row, "token": raw}
+
+@app.delete("/api/tokens/{token_id}")
+def delete_token(token_id: int, request: Request):
+    _check_auth(request)
+    FAKE_TOKENS[:] = [t for t in FAKE_TOKENS if t["id"] != token_id]
+    return {"ok": True}
+
+class _AccessReq(BaseModel):
+    all_apps: bool = True
+    app_ids: List[int] = []
+
+@app.put("/api/users/{user_id}/access")
+def set_access(user_id: int, req: _AccessReq, request: Request):
+    _check_auth(request)
+    return {"ok": True}
+
+@app.post("/api/apps/{app_id}/venv/rebuild")
+def rebuild_venv(app_id: int, request: Request):
+    _check_auth(request); _app_or_404(app_id)
+    return _job({"ok": True, "version": None})
 
 def _banner():
     indigo = "\033[38;5;63m"

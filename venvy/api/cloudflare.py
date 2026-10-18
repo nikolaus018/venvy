@@ -14,6 +14,7 @@ from venvy.auth import (
     check_ip_allowlist,
     get_current_user,
     rate_limit_mutations,
+    require_app_access,
     require_operator,
 )
 from venvy.cloudflare import (
@@ -34,7 +35,7 @@ from venvy.models import App, CfRoute, SystemSetting, User
 from venvy.process import get_server_ipv4
 
 router = APIRouter(
-    prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
+    prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist), Depends(require_app_access)]
 )
 
 

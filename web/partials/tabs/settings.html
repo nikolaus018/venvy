@@ -105,6 +105,84 @@
                                 </div>
                             </div>
 
+                            <!-- Usage history -->
+                            <div class="card p-5">
+                                <div class="flex items-center justify-between gap-3 mb-4">
+                                    <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="activity" class="w-4 h-4"></i> Usage
+                                    </h3>
+                                    <select id="usage-range" class="inp px-2.5 py-1.5 text-xs" onchange="loadUsage()">
+                                        <option value="60">Last hour</option>
+                                        <option value="360">6 hours</option>
+                                        <option value="1440">24 hours</option>
+                                        <option value="10080">7 days</option>
+                                    </select>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    <div><p class="section-label mb-1">CPU <span class="font-normal normal-case" style="color:var(--text3)">(% of one core)</span></p><div id="usage-cpu"></div></div>
+                                    <div><p class="section-label mb-1">Memory</p><div id="usage-mem"></div></div>
+                                </div>
+                                <p class="text-xs mt-4" style="color:var(--text3)">Disk used by the app's folder: <span id="usage-disk" class="mono" style="color:var(--text2)">—</span></p>
+                            </div>
+
+                            <!-- Health check -->
+                            <div class="card p-5 space-y-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="heart" class="w-4 h-4"></i> Health check
+                                    <span id="health-pill"></span>
+                                </h3>
+                                <p class="text-xs" style="color:var(--text3)">Venvy requests this path on the app's port while it runs. An app that keeps failing is reported — and restarted, if you like.</p>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div class="md:col-span-3">
+                                        <label class="block section-label mb-1.5" for="setting-health-path">Path</label>
+                                        <input id="setting-health-path" type="text" class="inp w-full px-3.5 py-2.5 text-sm mono" placeholder="/health  (blank = no check)" autocomplete="off" spellcheck="false">
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-1.5" for="setting-health-interval">Every (seconds)</label>
+                                        <input id="setting-health-interval" type="number" min="5" max="3600" class="inp w-full px-3.5 py-2.5 text-sm">
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-1.5" for="setting-health-failures">Unhealthy after</label>
+                                        <input id="setting-health-failures" type="number" min="1" max="20" class="inp w-full px-3.5 py-2.5 text-sm">
+                                    </div>
+                                    <label class="flex items-end gap-2 pb-2.5 text-sm cursor-pointer select-none" style="color:var(--text2)">
+                                        <input type="checkbox" id="setting-health-restart" class="rounded"> Restart it
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Domain and disk -->
+                            <div class="card p-5 space-y-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="globe" class="w-4 h-4"></i> Domain &amp; disk
+                                </h3>
+                                <div>
+                                    <label class="block section-label mb-1.5" for="setting-domain">Domain</label>
+                                    <input id="setting-domain" type="text" class="inp w-full px-3.5 py-2.5 text-sm mono" placeholder="app.example.com  (blank = none)" autocomplete="off" spellcheck="false">
+                                    <p class="text-xs mt-1" style="color:var(--text3)">Requests that reach Venvy's port with this hostname go to the app, without Venvy's login. Point the name at this server (or at a tunnel or TLS proxy in front of it) — Venvy itself does not do TLS.</p>
+                                </div>
+                                <div>
+                                    <label class="block section-label mb-1.5" for="setting-disk-limit">Disk limit (MB)</label>
+                                    <input id="setting-disk-limit" type="number" min="0" class="inp w-full px-3.5 py-2.5 text-sm" placeholder="0 = none">
+                                    <p class="text-xs mt-1" style="color:var(--text3)">A soft limit: going over it sends an alert; nothing is blocked.</p>
+                                </div>
+                            </div>
+
+                            <!-- Python environment -->
+                            <div class="card p-5 space-y-3 hidden" id="pyenv-card">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="package" class="w-4 h-4"></i> Python environment
+                                </h3>
+                                <p class="text-xs" style="color:var(--text3)">Builds the virtualenv again — with another Python version if you pick one — and reinstalls requirements.txt. The app has to be stopped.</p>
+                                <div class="flex gap-2 items-end">
+                                    <div class="flex-1">
+                                        <label class="block section-label mb-1.5" for="setting-pyver">Python</label>
+                                        <select id="setting-pyver" class="inp w-full px-3.5 py-2.5 text-sm"></select>
+                                    </div>
+                                    <button onclick="rebuildVenv()" data-requires-operator id="pyenv-btn" class="btn-secondary px-4 py-2.5 text-sm shrink-0">Rebuild</button>
+                                </div>
+                            </div>
+
                             <!-- Privileges -->
 
                             <!-- Networking -->
@@ -167,55 +245,7 @@
                                     </div>
                                 </details>
 
-                                <div class="flex items-center justify-between gap-3 mb-2">
-                                    <label class="block section-label">Environment Variables <span id="env-count"
-                                            class="font-normal normal-case ml-1" style="color:var(--text3)"></span></label>
-                                    <div class="flex items-center gap-1.5">
-                                        <button type="button" onclick="envEditor.toggleReveal()" id="env-reveal-btn"
-                                            class="btn-ghost text-xs font-semibold px-2.5 py-1 rounded-lg"><span
-                                                id="env-reveal-label">Show values</span></button>
-                                        <button type="button" onclick="envEditor.toggleImport()" data-requires-operator
-                                            class="btn-ghost text-xs font-semibold px-2.5 py-1 rounded-lg">Import .env</button>
-                                    </div>
-                                </div>
-
-                                <div id="env-editor" class="rounded-xl overflow-hidden"
-                                    style="background:var(--surface2);border:1px solid var(--border2)">
-                                    <!-- Hidden from this role, or stored but unreadable -->
-                                    <div id="env-note" class="hidden px-4 py-4 text-xs" style="color:var(--text3)">
-                                        <p id="env-note-text"></p>
-                                        <button type="button" id="env-replace" onclick="envEditor.replaceUnreadable()"
-                                            class="hidden btn-ghost text-xs font-semibold px-3 py-1.5 rounded-lg mt-3">Replace them with new variables</button>
-                                    </div>
-                                    <div id="env-body">
-                                        <div id="env-import" class="hidden p-3" style="border-bottom:1px solid var(--border)">
-                                            <textarea id="env-import-text" rows="5" spellcheck="false"
-                                                class="inp textarea w-full px-3 py-2 mono text-xs"
-                                                placeholder="Paste the contents of a .env file:&#10;API_KEY=abc123&#10;DEBUG=true"
-                                                style="min-height:0"></textarea>
-                                            <div class="flex justify-end gap-2 mt-2">
-                                                <button type="button" onclick="envEditor.toggleImport()"
-                                                    class="btn-ghost text-xs font-semibold px-3 py-1.5 rounded-lg">Cancel</button>
-                                                <button type="button" onclick="envEditor.runImport()"
-                                                    class="btn-secondary text-xs px-4 py-1.5">Import</button>
-                                            </div>
-                                        </div>
-                                        <div id="env-head" class="hidden grid gap-2 px-3 pt-2.5 pb-1 section-label"
-                                            style="grid-template-columns:minmax(0,2fr) minmax(0,3fr) 2.25rem">
-                                            <span>Name</span><span>Value</span><span></span>
-                                        </div>
-                                        <div id="env-rows"></div>
-                                        <p id="env-empty" class="px-4 py-5 text-xs text-center" style="color:var(--text3)">
-                                            No variables yet. Each one becomes an environment variable of the app.</p>
-                                        <div class="px-3 py-2.5" style="border-top:1px solid var(--border)">
-                                            <button type="button" onclick="envEditor.add()" data-requires-operator
-                                                class="btn-ghost text-xs font-semibold px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5">
-                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4" d="M12 5v14M5 12h14"/></svg>
-                                                Add variable</button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <p id="env-error" class="hidden text-xs mt-1.5" style="color:var(--red)"></p>
+                                <div id="env-mount"></div>
                             </div>
 
                             <!-- Cloudflare per-app -->
@@ -390,6 +420,16 @@
                                     class="btn-secondary w-full py-3 text-sm flex items-center justify-center gap-2">
                                     <i data-feather="archive" class="w-4 h-4"></i> Download Source Code
                                 </button>
+                            </div>
+
+                            <!-- Duplicate -->
+                            <div class="card p-5">
+                                <h3 class="text-sm font-semibold mb-2 flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="copy" class="w-4 h-4"></i> Duplicate
+                                </h3>
+                                <p class="text-sm mb-4" style="color:var(--text3)">A new app with this one's files, settings and variables, and an environment of its own.
+                                    Not copied: the port, domain, public route, logs and history.</p>
+                                <button onclick="duplicateApp()" data-requires-operator class="btn-secondary w-full py-3 text-sm">Duplicate application</button>
                             </div>
 
                             <!-- Danger zone -->

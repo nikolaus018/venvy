@@ -52,6 +52,22 @@ def create_db_and_tables() -> None:
         "ALTER TABLE app ADD COLUMN pid_start VARCHAR",
         "ALTER TABLE usersession ADD COLUMN key_hash VARCHAR",
         "ALTER TABLE user ADD COLUMN totp_last_counter INTEGER",
+        "ALTER TABLE user ADD COLUMN all_apps BOOLEAN DEFAULT 1",
+        "ALTER TABLE app ADD COLUMN health_interval INTEGER DEFAULT 30",
+        "ALTER TABLE app ADD COLUMN health_failures INTEGER DEFAULT 3",
+        "ALTER TABLE app ADD COLUMN health_restart BOOLEAN DEFAULT 1",
+        "ALTER TABLE app ADD COLUMN git_url VARCHAR",
+        "ALTER TABLE app ADD COLUMN git_branch VARCHAR DEFAULT 'main'",
+        "ALTER TABLE app ADD COLUMN git_auth VARCHAR",
+        "ALTER TABLE app ADD COLUMN build_command VARCHAR",
+        "ALTER TABLE app ADD COLUMN webhook_secret VARCHAR",
+        "ALTER TABLE app ADD COLUMN auto_deploy BOOLEAN DEFAULT 0",
+        "ALTER TABLE app ADD COLUMN last_deploy_at DATETIME",
+        "ALTER TABLE app ADD COLUMN last_deploy_status VARCHAR",
+        "ALTER TABLE app ADD COLUMN last_deploy_commit VARCHAR",
+        "ALTER TABLE app ADD COLUMN domain VARCHAR",
+        "ALTER TABLE app ADD COLUMN runtime_version VARCHAR",
+        "ALTER TABLE app ADD COLUMN disk_limit_mb INTEGER",
     ]
     
     with engine.begin() as conn:

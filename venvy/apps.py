@@ -4,6 +4,7 @@ import re
 
 from fastapi import HTTPException
 
+from venvy import monitor
 from venvy.crypto import _try_decrypt_secret
 from venvy.models import App
 from venvy.process import _app_metrics, _systemd_run_available, get_server_ipv4
@@ -36,6 +37,12 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
     of decrypting, for callers where the requester's role shouldn't see
     plaintext env vars (e.g. a read-only viewer browsing the app list)."""
     d = app_row.model_dump()
+    # Never leave the server: these are credentials for the repository and the push hook.
+    d["git_configured"] = bool(d.get("git_url"))
+    d["git_has_token"] = bool(d.pop("git_auth", None))
+    d.pop("webhook_secret", None)
+    d["health"] = monitor.health_info(app_row.id) if app_row.healthcheck_path else None
+    d["disk_bytes"] = monitor.cached_disk(app_row.id)
     if reveal_secrets:
         env_ok, env_plain = _try_decrypt_secret(app_row.env_json)
         d["env_json"] = env_plain or "{}"

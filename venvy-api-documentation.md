@@ -271,9 +271,16 @@ Creates the app's directory and DB record right away (status `installing`), then
   "entrypoint": "main.py",
   "url_source_pref": "local",
   "memory_limit_mb": 512,
-  "cpu_limit_percent": 50
+  "cpu_limit_percent": 50,
+  "healthcheck_path": "/health",
+  "health_interval": 30,
+  "health_failures": 3,
+  "health_restart": true,
+  "domain": "app.example.com",
+  "disk_limit_mb": 2048
 }
 ```
+`healthcheck_path` is a path on the app (`""` switches the check off); `health_interval` 5–3600 s; `health_failures` 1–20. `domain` is a hostname (`""` removes it; `409` if another app has it) — see §5.12. `disk_limit_mb` (`0` removes it) is a soft limit that raises an alert. `env_vars` changes are noted in the app's environment history (names only).
 
 #### `DELETE /api/apps/{app_id}`
 `require_operator`. Stops the process if running, closes terminals open on the app, removes its published tunnel routes and DNS records, and deletes its files, venv, and DB record. Starting the app is held off until the delete has finished.
@@ -560,6 +567,91 @@ Serves the single-page application shell (`index.html`).
 
 ---
 
+### 5.11 Deploying — `/api/apps/{app_id}/deploy`, `/git`, `/releases`
+
+Everything that touches the app's files (git, the build command, tar) runs as the app's own user.
+
+#### `GET /api/apps/{app_id}/deploy`
+Any role with access to the app. `git` (repository, branch, `has_token`, `build_command`, `auto_deploy`, `public_key`, `webhook_path`, and — for operators and admins only — `webhook_secret`), `state` (`running`, `status`, `log` — the last lines of the current or last deploy, `started`, `finished`, `trigger`), `last` (`at`, `status`, `commit`) and `releases`.
+
+#### `PUT /api/apps/{app_id}/git`
+`require_operator`. `{ "git_url", "git_branch", "build_command", "auto_deploy", "token" }` — all optional. `git_url` is `https://…`, `ssh://…` or `user@host:path`; credentials in the URL, `ext::`/`file:` and anything with spaces or shell characters are refused (local paths only with `VENVY_ALLOW_LOCAL_GIT=1`). `token` (https only; `""` removes it) is stored encrypted and only ever sent to the repository's own host. Turning `auto_deploy` on creates the webhook secret.
+
+#### `POST /api/apps/{app_id}/git/key`
+`require_operator`. Generates an SSH deploy key for the app (replacing any earlier one) and returns `{ "public_key" }`, to be added at the git host as a read-only deploy key.
+
+#### `POST /api/apps/{app_id}/git/webhook-secret`
+`require_operator`. New webhook secret; returns `{ "webhook_secret" }`.
+
+#### `POST /api/apps/{app_id}/deploy`
+`require_operator`, rate-limited. Body `{ "start": false }`. Starts a deploy and answers at once; follow `state` in `GET …/deploy`. `409` while one runs. A deploy: records what is there now (a git commit, or a snapshot of the files), fetches and checks out the branch (`git checkout -f -B`), installs the manifest's dependencies, runs the build command (`sh -c`, 30 min limit, with the app's environment), restarts the app if it was running (or `start: true`), then waits for it to look alive — its health check answers, or it is still running a few seconds later (`VENVY_HEALTH_WAIT_SEC`, 60 s). If anything fails the previous version is put back: `state.status` is `failed` (nothing was restarted) or `rolled-back` (it did not come up). Notifies `deploy_ok`, `deploy_failed` or `deploy_rolled_back`.
+
+#### `GET /api/apps/{app_id}/releases` · `POST /api/apps/{app_id}/releases`
+List (newest first; `kind` is `deploy`, `before-deploy` or `manual`; the last 10 are kept) / take a manual one (a snapshot job for apps without git). Snapshots are tar archives of the app's files without `venv`, `node_modules`, `target`, `vendor/bundle`, `logs` and `.git`.
+
+#### `POST /api/apps/{app_id}/releases/{release_id}/rollback`
+`require_operator`. Restores a release — a git commit, or a snapshot (which overwrites files; it deletes nothing) — then installs dependencies, builds and restarts like a deploy. Follow `state` (`trigger: "rollback"`).
+
+#### `POST /api/hooks/deploy/{app_id}`
+No login and no CSRF: the request proves itself. Accepts GitHub, Gitea and Forgejo (`X-Hub-Signature-256` / `X-Gitea-Signature`, an HMAC-SHA256 of the body with the secret), GitLab (`X-Gitlab-Token`), or `Authorization: Bearer <secret>` / `X-Venvy-Secret` from your own CI. Any failure answers `401` the same way. A `ping` answers `{ "pong": true }`; with `auto_deploy` off, or for a push to another branch, `{ "deployed": false, "reason": … }`; otherwise it deploys (`{ "deployed": true }`). 60 requests a minute per client address.
+
+#### `POST /api/apps/{app_id}/duplicate`
+`require_operator`. `{ "name" }` (default "<name> copy"). Copies the files (as a snapshot), settings, health check, build command, variables and limits; builds a fresh environment. Not copied: port, domain, public route, logs, history. Answers `{ "job_id", "app_id" }`.
+
+#### `POST /api/apps/{app_id}/venv/rebuild`
+`require_operator`. `{ "version": "3.12" }` (`""`: the system `python3`; must be one of `versions` of the python entry in `GET /api/runtimes`). Deletes the virtualenv, builds it again, reinstalls `requirements.txt`. The app must be stopped (`409`). Answers `{ "job_id" }`. `POST /api/apps/upload` also takes `python_version`.
+
+### 5.12 Monitoring — health, history, disk, alerts, domains
+
+**Health check.** With `healthcheck_path` set, Venvy requests it on the app's port every `health_interval` seconds (after 15 s of grace following a start); any answer below 400 is healthy. After `health_failures` failures in a row the app is *unhealthy*: `app_unhealthy` is sent and, with `health_restart`, the app is restarted. `app_recovered` follows when it is healthy again. `GET /api/apps` carries `health` (`status` healthy | unhealthy | unknown, `failures`, `code`, `error`, `checked_at`, `since`) for a running app with a check.
+
+#### `GET /api/apps/{app_id}/metrics/history?minutes=60` · `GET /api/system/metrics/history?minutes=60` (admin)
+One sample a minute, kept 7 days (`VENVY_METRICS_RETENTION_DAYS`), averaged into at most 240 points: `{ "samples": [{ "ts", "cpu", "mem", "disk" }] }`. For an app `cpu` is percent of one core, `mem` and `disk` bytes; for the host `mem` and `disk` are percentages.
+
+#### `GET /api/apps/{app_id}/disk?refresh=false`
+`{ "bytes", "limit_mb" }` — what the app's folder takes (measured at most every ten minutes unless `refresh=true`).
+
+#### `GET|POST /api/system/alerts` · `PUT|DELETE /api/system/alerts/{id}` (admin)
+`{ "app_id": 0, "metric": "cpu|memory|disk", "threshold", "minutes", "enabled" }`. `app_id` 0 is the host (threshold in percent); for an app, CPU is percent of one core and memory and disk are MB. Fires (`alert_fired`) when the minute averages stay above the threshold for `minutes`, clears (`alert_cleared`) when back under. Each app's `disk_limit_mb` alerts the same way.
+
+#### Domains
+An app with a `domain` is served for requests that reach Venvy's own port with that name in the `Host` header (HTTP and WebSocket), without Venvy's login; `503` while the app is not running, `502` if it does not answer. `X-Forwarded-For/Host/Proto` are set. Only exact matches are proxied. Venvy does not do TLS: point the name at this server, or at a tunnel or TLS proxy in front of it.
+
+### 5.13 Scheduled jobs — `/api/apps/{app_id}/jobs`
+
+`GET` (any role; viewers do not get `command` or `last_output`), `POST`, `PUT …/{job_id}`, `DELETE …/{job_id}`, `POST …/{job_id}/run`. Body: `{ "name", "schedule", "command", "timeout": 600, "enabled": true }`. `schedule` is a five-field cron expression (`*`, lists, ranges, steps, month and weekday names, `@daily` and friends; server time). The command runs through `sh -c` in the app's folder, as its user, with its environment (and the shared variables); a run that is still going is not started again, and a run that was due while Venvy was down is skipped. A failure or timeout sends `job_failed`. Jobs carry `next_run`, `running`, `last_run_at`, `last_status` (`ok`, `failed`, `timeout`), `last_exit_code`, `last_duration` and the last 8 KB of `last_output`.
+
+### 5.14 Notifications, activity, shared variables, backups schedule (admin)
+
+#### `GET /api/system/notify` · `POST` · `PUT /{id}` · `DELETE /{id}` · `POST /{id}/test`
+Channels: `{ "name", "kind", "config", "events", "enabled" }`. Kinds and their `config`: `webhook` (`url`, `secret` — requests are signed `X-Venvy-Signature: sha256=<hmac of the body>`), `slack` (`url`), `discord` (`url`), `ntfy` (`url`, `topic`, `token`), `telegram` (`bot_token`, `chat_id`), `email` (`host`, `port`, `security` starttls|ssl|none, `username`, `password`, `from`, `to`). Settings are stored encrypted; secrets come back as `***`, and sending `***` back keeps the stored value. `events` is `*` or a comma-separated list of: `app_crashed`, `app_crash_loop`, `app_unhealthy`, `app_recovered`, `deploy_ok`, `deploy_failed`, `deploy_rolled_back`, `backup_ok`, `backup_failed`, `job_failed`, `alert_fired`, `alert_cleared`. The webhook body is `{ "event", "title", "body", "level", "app_id", "app", "time" }`.
+
+#### `GET /api/audit`
+`limit` (≤500), `offset`, `user`, `action` (prefix), `q` (in the detail), `since_hours`. `{ "total", "entries": [{ "id", "ts", "user", "action", "detail", "ip" }] }`, newest first, kept 180 days (`VENVY_AUDIT_RETENTION_DAYS`).
+
+#### `GET|PUT /api/system/shared-env`
+`{ "vars": { … } }` — environment variables every app receives; an app's own variables win. Applies when an app (or a job, or a build) starts.
+
+#### `GET|PUT /api/system/backup/schedule`
+`{ "schedule": "0 3 * * *", "keep": 7 }` (empty schedule = off). `GET` adds `next_run`, `last` (the last scheduled run: `ok`, `file`, `size`, `remote`, `error`) and `remote` (masked). The schedule makes the same full backup as `POST /api/system/backup`, deletes the oldest of *its own* beyond `keep`, and sends it off-site when that is set up. `POST /api/system/backup/schedule/run` runs it now.
+
+#### `PUT|DELETE /api/system/backup/remote` · `POST /api/system/backup/remote/test` · `POST /api/system/backups/{filename}/upload`
+Off-site copy, one of: `{ "kind": "s3", "endpoint", "region", "bucket", "prefix", "access_key", "secret_key" }` (AWS or any S3-compatible service; Signature V4; up to 5 GB), `{ "kind": "webdav", "url", "username", "password" }`, `{ "kind": "scp", "host", "port", "user", "path", "private_key" }`. Secrets are encrypted and masked like channels'. `test` uploads a small file (with the saved settings, or those in the body); `…/upload` sends an existing backup (`{ "job_id" }`).
+
+### 5.15 API tokens and app access
+
+#### `GET|POST /api/tokens` · `DELETE /api/tokens/{id}`
+Needs a browser session, not a token. `POST { "name", "scope": "full|read", "expires_days" }` returns the token **once**: `venvy_…`. Use it as `Authorization: Bearer venvy_…` (no CSRF token, no cookie). A token acts as its owner — role and app access — a `read` token only for `GET`/`HEAD`; it cannot make tokens, change the password or touch 2FA, and an invalid token never falls back to a cookie. Only a hash is stored; `last_used_at` is kept.
+
+#### `PUT /api/users/{user_id}/access` (admin)
+`{ "all_apps": false, "app_ids": [1, 3] }`. A user without `all_apps` sees and reaches only those apps — and the ones they create. Everything under `/api/apps/{id}/…` (files, logs, packages, terminal, jobs, deploy…) answers `404` for an app they may not use, and it is absent from `GET /api/apps` and the port list. Admins always have every app. `GET /api/users` shows `all_apps` and `app_ids`.
+
+#### `GET /api/apps/{app_id}/env-history`
+Operators and admins. Who added, removed or changed which variables, newest first — names only, never values.
+
+#### `GET /api/apps/{app_id}/logs/search?q=&regex=false&case=false&limit=200&context=0` · `GET /api/apps/{app_id}/logs/download`
+Search runs over the app's current and rotated log files, oldest first, in a separate short-lived process so that a pathological regular expression cannot stall Venvy (`408` after 20 s). `download` streams all of them as one text file; it takes `?ticket=` like other downloads.
+
 ## 6. Data Model Reference
 
 ### 6.1 App object
@@ -623,7 +715,12 @@ This is the exact shape returned by `GET /api/apps` (array of these), `POST /api
 | `env_json` | **string** | ⚠️ also a JSON-encoded object **as a string** (`"{}"` if empty), must be `JSON.parse()`'d client-side. For `admin`/`operator` this is the **decrypted plaintext**; see the redaction note below. |
 | `env_redacted` | bool | **only present when secrets are hidden** (i.e. caller is `viewer`) — `true` if the app has any env vars set, even though `env_json` itself will just be `"{}"`. Not present at all for `admin`/`operator` responses. |
 | `env_unreadable` | bool | **only present when secrets are shown** — `true` if env vars are stored but cannot be decrypted (the `.venvy_key` was lost or replaced). `env_json` is then `"{}"`; the app refuses to start until the variables are re-entered or the key restored, and clients must not save `{}` back |
-| `healthcheck_path` | string \| null | |
+| `healthcheck_path`, `health_interval`, `health_failures`, `health_restart` | string \| null, int, int, bool | the health check (§5.12) |
+| `health` | object \| null | *(computed)* live health state of a running app that has a check |
+| `git_configured`, `git_has_token` | bool | *(computed)* a repository / token is set. `git_auth` and `webhook_secret` are never returned. |
+| `build_command`, `git_url`, `git_branch`, `auto_deploy` | | deploy settings (§5.11); `last_deploy_at`, `last_deploy_status`, `last_deploy_commit` say how the last deploy went |
+| `domain`, `runtime_version`, `disk_limit_mb` | string \| null, string \| null, int \| null | own hostname; Python version of the venv; soft disk limit |
+| `disk_bytes` | int \| null | *(computed)* last measured size of the app's folder |
 | `url_source_pref` | string | `local` \| `public` — the operator's preference for which URL `access_url` should reflect |
 | `memory_limit_mb` | int \| null | default `null` = unlimited |
 | `cpu_limit_percent` | int \| null | default `null` = unlimited |
@@ -687,9 +784,15 @@ Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed.
 main.py                 entry point: dependency check, banner, `python main.py --host … --port …`
 venvy/                  the backend package (see venvy/__init__.py for one line per module)
   config, crypto, models, db, auth, safefs, isolation, jobs, process, apps,
-  terminal, backup, cloudflare, settings, uploads, startup, webui, app
+  terminal, backup, cloudflare, settings, uploads, startup, webui, app,
+  runtimes (what each runtime runs and how its packages are managed),
+  deploy (git deploys, snapshots, rollback), monitor (health, history, alerts),
+  notify (channels), scheduler + cron (jobs and scheduled backups), remote_backup
+  (S3/WebDAV/scp), proxy (app domains), audit, shared_env
+  runtime_assets/       helper programs run for apps: the static file server, the PHP router,
+                        the log search
   api/                  one APIRouter per resource: auth, users, apps, files, system,
-                        cloudflare, terminal
+                        cloudflare, terminal, deploy, cron, ops, tokens, logs
 web/
   index.html            page skeleton; `<!-- include: partials/x.html -->` lines are expanded
                         on the server (venvy/webui.py), so the browser gets one document

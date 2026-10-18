@@ -17,6 +17,8 @@
             // only get a form whose Save is refused.
             const isAdmin = currentUser?.role === 'admin';
             document.getElementById('sys-cf-card').classList.toggle('hidden', !isAdmin);
+            ['sys-history-card', 'sys-ops-cards'].forEach(id => document.getElementById(id).classList.toggle('hidden', !isAdmin));
+            if (isAdmin) { loadHostHistory(); loadOpsSummaries(); }
             loadSystemView(); loadBackups();
             if (isAdmin) loadCfCredsStatus();
         }

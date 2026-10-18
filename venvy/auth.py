@@ -17,7 +17,7 @@ import urllib.parse
 from typing import Dict, Optional, Union
 
 from fastapi import Depends, HTTPException, Request, Response
-from sqlmodel import Session
+from sqlmodel import Session, select
 from starlette.requests import HTTPConnection
 
 from venvy.config import (
@@ -30,7 +30,7 @@ from venvy.config import (
     utc_now,
 )
 from venvy.db import get_session
-from venvy.models import User, UserSession
+from venvy.models import ApiToken, AppAccess, User, UserSession
 
 
 # TOTP — uses only stdlib (hmac, hashlib, struct, time, base64)
@@ -223,11 +223,90 @@ def _authenticate(session: Session, cookie_token: Optional[str], auth_key: Optio
     return session.get(User, db_session.user_id)
 
 
+TOKEN_PREFIX = "venvy_"
+_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+_TOKEN_TOUCH_SEC = 300
+
+
+def new_api_token() -> str:
+    return TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
+def _authenticate_token(session: Session, request: Request, raw: str) -> User:
+    """The user behind an `Authorization: Bearer venvy_...` token. Raises 401/403."""
+    bad = HTTPException(status_code=401, detail="Invalid or expired API token.")
+    if not raw.startswith(TOKEN_PREFIX):
+        raise bad
+    row = session.exec(select(ApiToken).where(ApiToken.token_hash == _hash_token(raw))).first()
+    if not row:
+        raise bad
+    now = utc_now()
+    if row.expires_at and now > _make_tz_aware(row.expires_at):
+        raise bad
+    user = session.get(User, row.user_id)
+    if not user:
+        raise bad
+    if row.scope == "read" and request.method not in _SAFE_METHODS:
+        raise HTTPException(status_code=403, detail="This API token is read-only.")
+    if not row.last_used_at or (now - _make_tz_aware(row.last_used_at)).total_seconds() > _TOKEN_TOUCH_SEC:
+        row.last_used_at = now
+        session.add(row)
+        session.commit()
+    request.state.via_token = True
+    return user
+
+
 def get_current_user(request: Request, session: Session = Depends(get_session)) -> User:
+    authz = request.headers.get("authorization", "")
+    if authz[:7].lower() == "bearer ":
+        # A token request never falls back to the cookie: it is judged on the token alone.
+        return _authenticate_token(session, request, authz[7:].strip())
     user = _authenticate(session, request.cookies.get("session"), request.headers.get("x-venvy-key"))
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated.")
     return user
+
+
+def get_session_user(request: Request, user: User = Depends(get_current_user)) -> User:
+    """get_current_user, but not for API tokens: for the things a leaked token
+    must not be able to do (make more tokens, change the password, switch 2FA off)."""
+    if getattr(request.state, "via_token", False):
+        raise HTTPException(status_code=403, detail="This needs a signed-in browser session, not an API token.")
+    return user
+
+
+def has_app_access(session: Session, user: User, app_id: int) -> bool:
+    if user.role == "admin" or user.all_apps:
+        return True
+    return session.get(AppAccess, (user.id, app_id)) is not None
+
+
+def visible_app_ids(session: Session, user: User) -> Optional[set]:
+    """The ids of the apps the user may see, or None for all of them."""
+    if user.role == "admin" or user.all_apps:
+        return None
+    return {a.app_id for a in session.exec(select(AppAccess).where(AppAccess.user_id == user.id)).all()}
+
+
+def _check_path_app_access(request: Request, session: Session, user: User) -> None:
+    raw = request.path_params.get("app_id")
+    if raw is None:
+        return
+    try:
+        app_id = int(raw)
+    except (TypeError, ValueError):
+        return
+    if not has_app_access(session, user, app_id):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+def require_app_access(request: Request, session: Session = Depends(get_session)) -> None:
+    """Router-level dependency: a route with an {app_id} in its path is only for users who may use that app.
+    404 rather than 403, so an app's existence is not revealed."""
+    if request.query_params.get("ticket"):
+        return        # a download link: get_download_user checks, once the ticket has been traded in
+    _check_path_app_access(request, session, get_current_user(request, session))
+
 
 
 # One-time download tickets: a plain <a href download> link can't carry the
@@ -246,7 +325,9 @@ def get_download_user(request: Request, session: Session = Depends(get_session))
     """get_current_user for download endpoints: also accepts ?ticket=."""
     ticket = request.query_params.get("ticket")
     if not ticket:
-        return get_current_user(request, session)
+        user = get_current_user(request, session)
+        _check_path_app_access(request, session, user)
+        return user
     now = time.monotonic()
     with _download_tickets_lock:
         for k in [k for k, (_, exp) in _download_tickets.items() if exp < now]:
@@ -257,6 +338,7 @@ def get_download_user(request: Request, session: Session = Depends(get_session))
     db_session = _load_session(session, request.cookies.get("session"))
     if not user or not db_session or db_session.user_id != user.id:
         raise HTTPException(status_code=401, detail="Download link expired — try again.")
+    _check_path_app_access(request, session, user)
     return user
 
 

@@ -169,7 +169,7 @@ fi
 say "Installing Venvy ($VERSION) — data in $DATA_DIR, service user $RUN_USER, http://$HOST:$PORT"
 
 # ── 1. System packages (apt only runs if something is missing) ───────────────
-PKGS="python3 python3-venv curl ca-certificates git tar"
+PKGS="python3 python3-venv curl ca-certificates git tar openssh-client"
 [ "$WITH_RUST" -eq 1 ] && PKGS="$PKGS cargo rustc build-essential"
 [ "$WITH_NODE" -eq 1 ] && PKGS="$PKGS nodejs npm"
 [ "$WITH_PHP" -eq 1 ]  && PKGS="$PKGS php-cli composer unzip"
