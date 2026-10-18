@@ -1,11 +1,8 @@
 """Operations routes (admin): audit trail, shared environment variables, resource
 history and alerts, notification channels, scheduled backups and the off-site copy."""
-import asyncio
 import datetime
-import json
 import re
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -345,6 +342,6 @@ async def upload_backup_offsite(filename: str, admin: User = Depends(check_admin
 @router.post("/system/backup/schedule/run")
 async def run_scheduled_backup_now(admin: User = Depends(check_admin), _rl: None = Depends(rate_limit_mutations)):
     """Run the scheduled backup (retention and off-site copy included) right now."""
-    asyncio.ensure_future(scheduler.run_scheduled_backup())
+    scheduler.start_scheduled_backup()
     audit_log(admin.username, "backup_schedule_run", "")
     return {"ok": True}

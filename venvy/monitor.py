@@ -15,7 +15,7 @@ import aiohttp
 from sqlmodel import Session, delete, select
 
 from venvy import notify
-from venvy.config import APPS_BASE_DIR, DATA_DIR, _make_tz_aware, psutil, utc_now
+from venvy.config import DATA_DIR, _make_tz_aware, psutil, utc_now
 from venvy.db import engine
 from venvy.models import AlertRule, App, MetricSample
 
@@ -35,6 +35,7 @@ _health: Dict[int, dict] = {}
 # Apps that were reported unhealthy and have not been healthy since. Survives the
 # restart a health check triggers, so the "healthy again" message still comes.
 _reported_unhealthy: set = set()
+_probe_tasks: set = set()      # held so a running probe is not garbage-collected
 
 
 def health_info(app_id: int) -> Optional[dict]:
@@ -144,7 +145,9 @@ async def health_tick(restart) -> None:
             continue
         h["_probing"] = True
         h["_next"] = mono + max(5, app.health_interval or 30)
-        asyncio.ensure_future(_check_app(app.id, restart))
+        t = asyncio.ensure_future(_check_app(app.id, restart))
+        _probe_tasks.add(t)
+        t.add_done_callback(_probe_tasks.discard)
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +296,7 @@ RULE_METRICS = ("cpu", "memory", "disk")
 def check_rule(app_id: int, metric: str, threshold: float, minutes: int) -> None:
     if metric not in RULE_METRICS:
         raise ValueError(f"metric must be one of: {', '.join(RULE_METRICS)}")
-    if app_id == 0 and metric != "disk" and not (0 < threshold <= 100):
-        raise ValueError("For the host the threshold is a percentage between 0 and 100.")
-    if app_id == 0 and metric == "disk" and not (0 < threshold <= 100):
+    if app_id == 0 and not (0 < threshold <= 100):
         raise ValueError("For the host the threshold is a percentage between 0 and 100.")
     if app_id != 0 and threshold <= 0:
         raise ValueError("The threshold must be above 0.")

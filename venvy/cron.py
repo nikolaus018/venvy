@@ -5,7 +5,7 @@ weekday names, Sunday as 0 or 7, and the @hourly @daily @midnight @weekly
 @monthly @yearly shorthands. As in cron, when both day-of-month and
 day-of-week are restricted, a day matching either one counts."""
 import datetime
-from typing import List, Set, Tuple
+from typing import Set, Tuple
 
 _MACROS = {
     "@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *",
@@ -36,9 +36,10 @@ def _number(token: str, name: str, lo: int, hi: int) -> int:
 
 
 def _field(text: str, name: str, lo: int, hi: int) -> Tuple[Set[int], bool]:
-    """(allowed values, whether the field was a bare *)."""
+    """(allowed values, whether the field starts with * — as in cron, */2 counts as * for
+    the day-of-month / day-of-week rule)."""
     values: Set[int] = set()
-    star = text == "*"
+    star = text.startswith("*")
     for part in text.split(","):
         if not part:
             raise CronError(f"The {name} field has an empty item.")
@@ -76,17 +77,8 @@ class Cron:
         self.expr = text
 
     def matches(self, dt: datetime.datetime) -> bool:
-        if dt.minute not in self.minutes or dt.hour not in self.hours or dt.month not in self.months:
-            return False
-        dom_ok = dt.day in self.dom
-        dow_ok = (dt.isoweekday() % 7) in self.dow
-        if self.dom_star and self.dow_star:
-            return True
-        if self.dom_star:
-            return dow_ok
-        if self.dow_star:
-            return dom_ok
-        return dom_ok or dow_ok
+        return (dt.minute in self.minutes and dt.hour in self.hours and dt.month in self.months
+                and self._day_ok(dt))
 
     def next_after(self, dt: datetime.datetime, limit_days: int = 366 * 5) -> datetime.datetime:
         """The first matching minute strictly after *dt*."""
@@ -111,12 +103,10 @@ class Cron:
     def _day_ok(self, t: datetime.datetime) -> bool:
         dom_ok = t.day in self.dom
         dow_ok = (t.isoweekday() % 7) in self.dow
-        if self.dom_star and self.dow_star:
-            return True
-        if self.dom_star:
-            return dow_ok
-        if self.dow_star:
-            return dom_ok
+        # As in cron: a field starting with * narrows the other (a bare * matches every day);
+        # only when both are restricted does a day matching either count.
+        if self.dom_star or self.dow_star:
+            return dom_ok and dow_ok
         return dom_ok or dow_ok
 
 

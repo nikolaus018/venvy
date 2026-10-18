@@ -69,6 +69,7 @@ async def search_logs(
     except asyncio.TimeoutError:
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
+        await proc.wait()
         raise HTTPException(408, "The search took too long — try a simpler pattern or plain text.")
     try:
         result = json.loads(out or b"{}")

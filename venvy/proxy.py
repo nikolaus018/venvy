@@ -135,26 +135,33 @@ class DomainProxyMiddleware:
                     return
 
         has_body = scope["method"] not in ("GET", "HEAD", "OPTIONS") or any(k == "content-length" and v != "0" for k, v in headers)
+        started = False
         try:
             async with _http().request(scope["method"], url, headers=headers, data=body() if has_body else None,
                                        allow_redirects=False) as resp:
                 out = [(k.lower(), v) for k, v in resp.raw_headers if k.decode("latin-1").lower() not in _HOP]
                 await send({"type": "http.response.start", "status": resp.status, "headers": out})
+                started = True
                 async for chunk in resp.content.iter_any():
                     await send({"type": "http.response.body", "body": chunk, "more_body": True})
                 await send({"type": "http.response.body", "body": b"", "more_body": False})
-        except (aiohttp.ClientConnectionError, asyncio.TimeoutError, ConnectionRefusedError):
-            await _plain(send, 502, "The app did not answer.")
         except Exception as exc:
-            logging.warning(f"Proxy to port {port} failed: {exc}")
-            await _plain(send, 502, "The app did not answer.")
+            if not isinstance(exc, (aiohttp.ClientConnectionError, asyncio.TimeoutError, ConnectionRefusedError)):
+                logging.warning(f"Proxy to port {port} failed: {exc}")
+            if started:
+                # The status line is out: all that is left is to end the response.
+                with contextlib.suppress(Exception):
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+            else:
+                await _plain(send, 502, "The app did not answer.")
 
     async def _websocket(self, scope, receive, send, port) -> None:
         if not port:
             await send({"type": "websocket.close", "code": 1013})
             return
         qs = scope.get("query_string", b"").decode("latin-1")
-        url = f"ws://127.0.0.1:{port}{scope['path']}" + (f"?{qs}" if qs else "")
+        path = scope.get("raw_path", scope["path"].encode()).decode("latin-1") or "/"
+        url = f"ws://127.0.0.1:{port}{path}" + (f"?{qs}" if qs else "")
         protocols = [p for p in scope.get("subprotocols", [])]
         fwd = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]
                if k.decode("latin-1") in ("cookie", "origin", "user-agent", "authorization")}
@@ -199,5 +206,8 @@ class DomainProxyMiddleware:
             await asyncio.gather(*tasks, return_exceptions=True)
             with contextlib.suppress(Exception):
                 await upstream.close()
+            code = upstream.close_code
+            if not code or not 1000 <= code < 5000 or code in (1004, 1005, 1006, 1015):     # not sendable
+                code = 1000
             with contextlib.suppress(Exception):
-                await send({"type": "websocket.close", "code": 1000})
+                await send({"type": "websocket.close", "code": code})

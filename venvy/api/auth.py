@@ -20,7 +20,6 @@ from venvy.auth import (
     _download_tickets,
     _download_tickets_lock,
     _DUMMY_PASSWORD_HASH,
-    get_current_user,
     get_session_user,
     hash_password,
     _hash_token,

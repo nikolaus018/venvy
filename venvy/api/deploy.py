@@ -2,7 +2,6 @@
 import asyncio
 import json
 import logging
-import re
 import shutil
 import time
 from pathlib import Path
@@ -12,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from venvy import deploy, runtimes
+from venvy import deploy
 from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
 from venvy.auth import (
@@ -217,7 +216,7 @@ async def rollback(
     _rl: None = Depends(rate_limit_mutations),
 ):
     """Go back to a release: the code, its dependencies, the build, a restart. Follow GET /apps/{id}/deploy."""
-    app = _app_or_404(session, app_id)
+    _app_or_404(session, app_id)
     rel = session.get(Release, release_id)
     if not rel or rel.app_id != app_id:
         raise HTTPException(404, "No such release.")
@@ -270,8 +269,12 @@ async def deploy_webhook(app_id: int, request: Request):
     # One answer for "no such app", "no secret" and "wrong secret".
     if not secret or not deploy.verify_webhook(request.headers, body, secret):
         raise HTTPException(401, "Invalid signature or token.")
-    if request.headers.get("x-github-event") == "ping" or request.headers.get("x-gitea-event") == "ping":
+    event = deploy.webhook_event(request.headers)
+    if event == "ping":
         return {"ok": True, "pong": True}
+    if event is not None and event != "push":
+        # A hook set up to send "everything" must not deploy on every issue comment.
+        return {"ok": True, "deployed": False, "reason": f"'{event}' event, not a push"}
     if not enabled:
         return {"ok": True, "deployed": False, "reason": "auto-deploy is off for this app"}
     pushed = deploy.webhook_branch(request.headers, body)
@@ -319,7 +322,6 @@ async def duplicate_app(
         slug = f"{slug}-{int(time.time())}"
         new_dir = user_dir / slug
     await asyncio.to_thread(new_dir.mkdir, parents=True, mode=0o750)
-    src_snapshot = None
     new = App(
         user_id=user.id, name=name, slug=slug, runtime=src.runtime, app_dir=str(new_dir),
         venv_path=str(new_dir / "venv"), entrypoint=src.entrypoint, start_on_boot=False,
@@ -367,7 +369,10 @@ async def duplicate_app(
                 row = s.get(App, new_id)
                 if row:
                     s.delete(row)
-                    s.commit()
+                for access in s.exec(select(AppAccess).where(AppAccess.app_id == new_id)).all():
+                    s.delete(access)
+                s.commit()
+            await asyncio.to_thread(deploy.forget_keys, new_id)
             await asyncio.to_thread(_delete_app_user, new_id)
             raise
 

@@ -3,7 +3,7 @@ permissions, log search and download, Python versions, duplicating an app, and
 serving an app on its own domain (HTTP and WebSocket)."""
 import hashlib, hmac, json, sqlite3, sys, time
 import httpx
-from harness import (Client, Sink, SERVER_APP, WS_APP, admin, free_port, login_as, make_app, server)
+from harness import (Sink, SERVER_APP, WS_APP, admin, free_port, login_as, make_app, server)
 repo = sys.argv[1]; fails = []
 def check(n, c, x=""):
     print(("  ok   " if c else "  FAIL ") + n, x if not c else "")
@@ -118,6 +118,10 @@ with server(repo, 55021, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv)
                     (f"/api/apps/{a2}/packages", "GET"), (f"/api/apps/{a2}/jobs", "GET"), (f"/api/apps/{a2}/deploy", "GET")]:
         check(f"... 404 for {m} {path.split('/api/apps/')[1][:22]}", ops.req(m, path).status_code == 404)
     check("... cannot read another app's download", ops.req("GET", f"/api/apps/{a2}/files/download?path=main.py").status_code == 404)
+    check("... a made-up ?ticket= does not skip the check", ops.req("GET", f"/api/apps/{a2}/files/tree?ticket=bogus").status_code == 404)
+    otkt = ops.req("POST", "/api/auth/download-ticket").json()["ticket"]
+    check("... nor does a real ticket of theirs", ops.req("GET", f"/api/apps/{a2}/files/tree?ticket={otkt}").status_code == 404
+          and ops.c.get(f"/api/apps/{a2}/logs/download?ticket={otkt}").status_code == 404)
     ports = ops.req("GET", "/api/system/ports").json()
     check("... does not see other apps in the port list", all(e.get("app_name") in (None, "One") for e in ports["listening"]))
     mine = ops.req("POST", "/api/apps/upload", data={"name": "Mine", "runtime": "python", "entrypoint": "main.py"}).json()

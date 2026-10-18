@@ -26,7 +26,7 @@ from sqlmodel import Session, select
 from venvy import monitor, notify, runtimes
 from venvy.audit import audit_log
 from venvy.config import DATA_DIR, utc_now
-from venvy.crypto import _decrypt_secret, _encrypt_secret
+from venvy.crypto import _decrypt_secret
 from venvy.db import engine
 from venvy.isolation import _app_ids, _app_tool_env, _as_app_user, _ensure_app_user, _chown_app_dir
 from venvy.models import App, Release
@@ -167,6 +167,9 @@ def _git_env(app: App, log: _Log) -> Dict[str, str]:
     env["GIT_ALLOW_PROTOCOL"] = "https:ssh" + (":file" if ALLOW_LOCAL_GIT else "")   # never ext::
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     url = app.git_url or ""
+    userinfo = re.match(r"https://([^/@]+)@", url)
+    if userinfo:
+        log.secrets.append(userinfo.group(1))
     auth = {}
     if app.git_auth:
         with contextlib.suppress(ValueError):
@@ -214,6 +217,7 @@ async def _run(app: App, argv: List[str], log: _Log, env: Dict[str, str], cwd: s
     except asyncio.TimeoutError:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(proc.pid, signal.SIGKILL)
+        await proc.wait()
         raise DeployError(f"{what} timed out after {timeout} seconds.")
     if proc.returncode != 0:
         raise DeployError(f"{what} failed (exit code {proc.returncode}).")
@@ -331,6 +335,7 @@ async def _snapshot(app: App, log: _Log, dest_dir: Optional[Path] = None) -> Tup
             size += len(chunk)
             if size > SNAPSHOT_MAX_BYTES:
                 proc.kill()
+                await proc.wait()
                 dest.unlink(missing_ok=True)
                 raise DeployError("The app's files are too large to snapshot (over 2 GB).")
             f.write(chunk)
@@ -408,6 +413,12 @@ def _record(app_id: int, **fields) -> None:
 def _add_release(app_id: int, kind: str, commit: Optional[str], message: str, archive: Optional[str],
                  size: int, by: str) -> None:
     with Session(engine) as s:
+        if kind == "before-deploy" and commit:
+            # Usually what the last deploy left: already in the list, and a
+            # copy would only push older releases out of KEEP_RELEASES.
+            newest = s.exec(select(Release).where(Release.app_id == app_id).order_by(Release.id.desc())).first()
+            if newest and newest.commit == commit:
+                return
         s.add(Release(app_id=app_id, kind=kind, commit=commit, message=message[:300], archive=archive, size=size, by=by))
         s.commit()
     _prune_releases(app_id)
@@ -603,6 +614,17 @@ def verify_webhook(headers, body: bytes, secret: str) -> bool:
         if candidate and hmac.compare_digest(candidate.encode(), secret.encode()):
             return True
     return False
+
+
+def webhook_event(headers) -> Optional[str]:
+    """The event a git host says it is sending ("push", "ping", ...), or None when
+    the request does not say (your own CI): GitLab's "Push Hook" counts as "push"."""
+    event = (headers.get("x-github-event") or headers.get("x-gitea-event")
+             or headers.get("x-forgejo-event") or headers.get("x-gitlab-event"))
+    if event is None:
+        return None
+    event = event.strip().lower()
+    return {"push hook": "push", "system hook": "system"}.get(event, event)
 
 
 def webhook_branch(headers, body: bytes) -> Optional[str]:

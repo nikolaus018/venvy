@@ -4,7 +4,7 @@ schedule fires on a minute boundary), so everything is set up first and checked
 after one wait."""
 import base64, hashlib, json, sys, time
 import httpx
-from harness import Client, Sink, SERVER_APP, admin, free_port, login_as, make_app, server
+from harness import Sink, SERVER_APP, admin, free_port, login_as, make_app, server
 repo = sys.argv[1]; fails = []
 def check(n, c, x=""):
     print(("  ok   " if c else "  FAIL ") + n, x if not c else "")

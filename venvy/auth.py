@@ -303,10 +303,25 @@ def _check_path_app_access(request: Request, session: Session, user: User) -> No
 def require_app_access(request: Request, session: Session = Depends(get_session)) -> None:
     """Router-level dependency: a route with an {app_id} in its path is only for users who may use that app.
     404 rather than 403, so an app's existence is not revealed."""
-    if request.query_params.get("ticket"):
-        return        # a download link: get_download_user checks, once the ticket has been traded in
+    ticket = request.query_params.get("ticket")
+    if ticket:
+        # A download link. Look at whose ticket it is without using it up
+        # (get_download_user does that). Any route takes ?ticket=, so a bad
+        # one must not get a request past this check either.
+        with _download_tickets_lock:
+            entry = _download_tickets.get(_hash_token(ticket))
+        if entry and entry[1] >= time.monotonic():
+            user = session.get(User, entry[0])
+            if user:
+                _check_path_app_access(request, session, user)
+                return
+        try:
+            user = get_current_user(request, session)
+        except HTTPException:
+            return        # not signed in either: the route's own check answers
+        _check_path_app_access(request, session, user)
+        return
     _check_path_app_access(request, session, get_current_user(request, session))
-
 
 
 # One-time download tickets: a plain <a href download> link can't carry the

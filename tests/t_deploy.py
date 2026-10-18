@@ -3,7 +3,7 @@ manual rollback, push webhooks, snapshots of non-git apps, deploy keys."""
 import hashlib, hmac, json, os, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 import httpx
-from harness import Client, Sink, admin, free_port, login_as, make_app, server
+from harness import Sink, admin, free_port, login_as, make_app, server
 repo = sys.argv[1]; fails = []
 def check(n, c, x=""):
     print(("  ok   " if c else "  FAIL ") + n, x if not c else "")
@@ -158,6 +158,8 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     other = json.dumps({"ref": "refs/heads/feature"}).encode()
     r = httpx.post(hook, content=other, headers={"X-Hub-Signature-256": "sha256=" + hmac.new(secret.encode(), other, hashlib.sha256).hexdigest()})
     check("a push to another branch is ignored", r.status_code == 200 and r.json()["deployed"] is False and "feature" in r.json()["reason"], r.text)
+    r = httpx.post(hook, content=body, headers={"X-Hub-Signature-256": sig, "X-GitHub-Event": "issues"})
+    check("an event other than a push is ignored", r.status_code == 200 and r.json()["deployed"] is False and "issues" in r.json()["reason"], r.text)
     r = httpx.post(hook, content=body, headers={"X-Hub-Signature-256": sig, "X-GitHub-Event": "push"})
     check("a signed push deploys", r.status_code == 200 and r.json()["deployed"] is True, r.text)
     end = time.time() + 90

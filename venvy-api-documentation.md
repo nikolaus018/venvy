@@ -203,7 +203,7 @@ Change the caller's own password.
 On success every other session of this user is revoked; the calling session stays signed in.
 
 #### `POST /api/auth/download-ticket`
-Returns `{ "ticket": "..." }`: a one-time, 60-second ticket to append as `?ticket=` to `GET /files/download` or `GET /system/backups/{filename}/download` (see §2.1).
+Returns `{ "ticket": "..." }`: a one-time, 60-second ticket to append as `?ticket=` to `GET /files/download` or `GET /system/backups/{filename}/download` (see §2.1), or the app log download. A ticket is only good for apps its user may use.
 
 #### `GET /api/auth/totp/setup`
 Generates (or re-returns) a pending TOTP secret + `otpauth://` URI for QR display. **Does not enable TOTP.** `400` if TOTP is already enabled — disable it first (which requires the password) to enrol a new authenticator.
@@ -593,7 +593,7 @@ List (newest first; `kind` is `deploy`, `before-deploy` or `manual`; the last 10
 `require_operator`. Restores a release — a git commit, or a snapshot (which overwrites files; it deletes nothing) — then installs dependencies, builds and restarts like a deploy. Follow `state` (`trigger: "rollback"`).
 
 #### `POST /api/hooks/deploy/{app_id}`
-No login and no CSRF: the request proves itself. Accepts GitHub, Gitea and Forgejo (`X-Hub-Signature-256` / `X-Gitea-Signature`, an HMAC-SHA256 of the body with the secret), GitLab (`X-Gitlab-Token`), or `Authorization: Bearer <secret>` / `X-Venvy-Secret` from your own CI. Any failure answers `401` the same way. A `ping` answers `{ "pong": true }`; with `auto_deploy` off, or for a push to another branch, `{ "deployed": false, "reason": … }`; otherwise it deploys (`{ "deployed": true }`). 60 requests a minute per client address.
+No login and no CSRF: the request proves itself. Accepts GitHub, Gitea and Forgejo (`X-Hub-Signature-256` / `X-Gitea-Signature`, an HMAC-SHA256 of the body with the secret), GitLab (`X-Gitlab-Token`), or `Authorization: Bearer <secret>` / `X-Venvy-Secret` from your own CI. Any failure answers `401` the same way. A `ping` answers `{ "pong": true }`; with `auto_deploy` off, for a push to another branch, or for an event other than a push (the host's `X-GitHub-Event` / `X-Gitea-Event` / `X-Forgejo-Event` / `X-Gitlab-Event` header; a request without one counts as a push), `{ "deployed": false, "reason": … }`; otherwise it deploys (`{ "deployed": true }`). 60 requests a minute per client address.
 
 #### `POST /api/apps/{app_id}/duplicate`
 `require_operator`. `{ "name" }` (default "<name> copy"). Copies the files (as a snapshot), settings, health check, build command, variables and limits; builds a fresh environment. Not copied: port, domain, public route, logs, history. Answers `{ "job_id", "app_id" }`.

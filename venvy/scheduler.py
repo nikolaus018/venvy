@@ -23,6 +23,7 @@ from venvy.config import BACKUP_DIR, utc_now
 from venvy.cron import Cron, CronError
 from venvy.db import engine
 from venvy.isolation import _as_app_user, _ensure_app_user
+from venvy.jobs import _running_tasks
 from venvy.models import App, ScheduledJob, SystemSetting
 
 OUTPUT_KEEP = 8000
@@ -154,6 +155,7 @@ async def _run_job(job_id: int, by: str) -> dict:
         except asyncio.TimeoutError:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)
+            await proc.wait()
             status = "timeout"
         out_tail = b"".join(chunks).decode(errors="replace")[-OUTPUT_KEEP:]
         if status == "timeout":
@@ -183,7 +185,7 @@ class _Who:
 
 
 async def run_scheduled_backup() -> None:
-    from venvy.backup import _backup_job, _begin_operation, _op_step
+    from venvy.backup import _backup_job, _begin_operation
     from fastapi import HTTPException
     result = {"at": utc_now().isoformat(), "ok": False, "file": None, "size": 0, "remote": None, "error": None}
     try:
@@ -211,7 +213,7 @@ async def run_scheduled_backup() -> None:
                 result["remote"] = "ok: " + await remote_backup.upload(path, cfg)
             except remote_backup.RemoteError as exc:
                 result["remote"] = f"failed: {exc}"
-                notify.emit("backup_failed", "Off-site copy of the backup failed", str(exc))
+                notify.emit("backup_failed", "Off-site copy of the backup failed", str(exc), level="error")
         notify.emit("backup_ok", "Scheduled backup finished", f"{path.name} ({out['size_bytes'] // 1048576} MB)"
                     + (f"\nOff-site: {result['remote']}" if result["remote"] else ""))
     except Exception as exc:
@@ -220,6 +222,13 @@ async def run_scheduled_backup() -> None:
         notify.emit("backup_failed", "Scheduled backup failed", str(result["error"]), level="error")
     set_setting(LAST_KEY, json.dumps(result))
     audit_log("scheduler", "system_scheduled_backup", "ok" if result["ok"] else f"failed: {result['error']}")
+
+
+def start_scheduled_backup() -> None:
+    """run_scheduled_backup in the background, holding on to the task so it is not collected mid-run."""
+    t = asyncio.ensure_future(run_scheduled_backup())
+    _running_tasks.add(t)
+    t.add_done_callback(_running_tasks.discard)
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +264,7 @@ async def tick(now: Optional[datetime.datetime] = None) -> None:
             due = False
         if due:
             _fired_minute["backup"] = now.timetuple()[:5]
-            asyncio.ensure_future(run_scheduled_backup())
+            start_scheduled_backup()
 
 
 async def scheduler_task() -> None:

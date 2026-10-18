@@ -67,7 +67,7 @@
             const running = st.running;
             const btn = $id('dep-btn'), startBtn = $id('dep-btn-start');
             btn.disabled = running; startBtn.disabled = running;
-            btn.textContent = running ? 'Deploying…' : (d.git.url || d.git.build_command ? 'Deploy now' : 'Deploy now');
+            btn.textContent = running ? 'Deploying…' : 'Deploy now';
             const stopped = activeApp && !['running', 'starting'].includes(activeApp.status);
             startBtn.classList.toggle('hidden', !stopped);
             const logEl = $id('dep-log');

@@ -1,6 +1,4 @@
 """Scheduled jobs of an app: a command, run on a cron schedule as the app's user."""
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, select

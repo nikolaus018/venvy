@@ -21,7 +21,7 @@ from venvy import deploy, monitor, proxy, runtimes
 from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
 from venvy.auth import (
-    check_ip_allowlist, get_current_user, has_app_access, rate_limit_mutations, require_app_access,
+    check_ip_allowlist, get_current_user, rate_limit_mutations, require_app_access,
     require_operator, visible_app_ids,
 )
 from venvy.cloudflare import _cf_delete_dns_cname, _cf_find_zone_id, _cf_update_ingress, _get_cf_creds
