@@ -28,7 +28,7 @@ from venvy.audit import audit_log
 from venvy.config import DATA_DIR, utc_now
 from venvy.crypto import _decrypt_secret
 from venvy.db import engine
-from venvy.isolation import _app_ids, _app_tool_env, _as_app_user, _ensure_app_user, _chown_app_dir
+from venvy.isolation import _app_ids, _app_tool_env, _as_app_user, _chown_app_dir, _chown_tree, _ensure_app_user
 from venvy.models import App, Release
 
 RELEASES_DIR = DATA_DIR / "releases"
@@ -246,6 +246,18 @@ async def generate_deploy_key(app: App) -> str:
         for p in (d, d / "id_ed25519", d / "id_ed25519.pub"):
             os.chown(p, ids[0], ids[1])
     return (d / "id_ed25519.pub").read_text().strip()
+
+
+def _own_keys(app: App) -> None:
+    """Hand the app's key folder to the app's user, who runs git and ssh. A key made
+    before per-app users were switched on still belongs to the old service user, and
+    ssh, running as the app, could not read it. Blocking."""
+    d = DEPLOY_KEY_DIR / str(app.id)
+    ids = _app_ids(app)
+    if not ids or not d.is_dir() or d.is_symlink():
+        return
+    if d.stat().st_uid != ids[0]:
+        _chown_tree(d, *ids)
 
 
 def public_key(app_id: int) -> Optional[str]:
@@ -505,6 +517,7 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
         status, commit_sha, message = "failed", None, ""
         try:
             await asyncio.to_thread(_ensure_app_user, app)
+            await asyncio.to_thread(_own_keys, app)
             was_running = app.status in ("running", "starting")
             before = await current_commit(app)
             before_archive: Optional[Tuple[str, int]] = None

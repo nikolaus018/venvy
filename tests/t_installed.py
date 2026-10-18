@@ -129,6 +129,20 @@ if not EXISTING:
         time.sleep(1)
         scope = subprocess.run(["systemctl", "is-active", f"venvy-app-{app_id}.scope"], capture_output=True, text=True).stdout.strip()
         check("scope is gone after stop", scope != "active", scope)
+        # A deploy key made before per-app users were switched on belongs to the old
+        # service user; a deploy must hand it to the app's user, who runs ssh.
+        key = cl.req("POST", f"/api/apps/{app_id}/git/key")
+        check("deploy key generated", key.status_code == 200, key.text)
+        key_dir = f"/var/lib/venvy/deploy-keys/{app_id}"
+        for p in (key_dir, f"{key_dir}/id_ed25519", f"{key_dir}/id_ed25519.pub"):
+            os.chown(p, 0, 0)
+        cl.req("PUT", f"/api/apps/{app_id}/git", json={"build_command": "true"})
+        cl.req("POST", f"/api/apps/{app_id}/deploy", json={})
+        end = time.time() + 60
+        while time.time() < end and cl.req("GET", f"/api/apps/{app_id}/deploy").json()["state"]["running"]:
+            time.sleep(0.5)
+        owner = pwd.getpwuid(os.stat(f"{key_dir}/id_ed25519").st_uid).pw_name
+        check("a deploy gives an old deploy key to the app's user", owner == expect_user, owner)
 else:
     apps = cl.req("GET", "/api/apps").json()
     check("app list survived the update", len(apps) == 1 and apps[0]["name"] == "Installed App", str([a["name"] for a in apps]))
