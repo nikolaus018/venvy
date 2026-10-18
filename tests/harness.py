@@ -1,5 +1,6 @@
 """Shared helpers for targeted regression scripts: boot a server on a temp
 data dir, set up an admin, create a small python app."""
+import contextlib
 import os
 import shutil
 import signal
@@ -58,7 +59,10 @@ class Client:
         raise TimeoutError("job")
 
     def status(self, app_id):
-        return next(a for a in self.req("GET", "/api/apps").json() if a["id"] == app_id)
+        r = self.req("GET", "/api/apps")
+        if r.status_code != 200 or not isinstance(r.json(), list):
+            raise RuntimeError(f"GET /api/apps answered {r.status_code}: {r.text[:500]}")
+        return next(a for a in r.json() if a["id"] == app_id)
 
     def wait_status(self, app_id, want, timeout=20):
         end = time.time() + timeout
@@ -88,6 +92,11 @@ def server(repo, port, entry="main.py", env=None, data=None, keep=False):
                 raise RuntimeError("server died:\n" + (data / "server.log").read_text()[-3000:])
             time.sleep(0.5)
         yield base, data, srv
+    except BaseException:
+        # The server's side of a crashed script; the data dir is about to go.
+        with contextlib.suppress(OSError):
+            print("--- server.log (last 6000 chars) ---\n" + (data / "server.log").read_text(errors="replace")[-6000:])
+        raise
     finally:
         srv.send_signal(signal.SIGINT)
         try:
