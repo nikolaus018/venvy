@@ -173,4 +173,20 @@ with server(repo, 55022, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv)
     # one real failing channel must not block the others
     sink.close(); dav.close(); s3.close()
 
+    # An app whose work happens in short-lived child processes (a compile, say) is
+    # charged for it: each child exits before it could be sampled on its own.
+    if sys.platform.startswith("linux"):      # elsewhere psutil has no children CPU times
+        burst = make_app(cl, name="Bursty", code=(
+            "import subprocess, sys\n"
+            "while True:\n"
+            "    subprocess.run([sys.executable, '-c', 'x = 0\\nfor i in range(2_000_000): x += i'])\n"))
+        cl.req("POST", f"/api/apps/{burst}/control?action=start")
+        seen = []
+        end = time.time() + 30
+        while time.time() < end and (len(seen) < 3 or max(seen) < 40):
+            time.sleep(2.5)
+            seen.append((cl.status(burst).get("metrics") or {}).get("cpu") or 0)
+        check("CPU of short-lived child processes is counted", max(seen) >= 40, str(seen))
+        cl.req("POST", f"/api/apps/{burst}/control?action=stop")
+
 print("FAILED" if fails else "ALL OK", fails); sys.exit(1 if fails else 0)

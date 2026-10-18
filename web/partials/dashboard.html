@@ -51,7 +51,7 @@
                     style="background:var(--surface);border-bottom:1px solid var(--border)">
                     <!-- Scrollable tab buttons -->
                     <div role="tablist" aria-label="Application sections" onkeydown="onTabListKey(event)"
-                        class="flex-1 min-w-0 px-4 md:px-6 flex gap-5 text-sm font-medium overflow-x-auto scrollbar-hide h-[44px]">
+                        class="flex-1 min-w-0 px-4 md:px-6 flex gap-5 text-sm font-medium overflow-x-auto overflow-y-hidden scrollbar-hide h-[44px]">
                         <button class="tab-btn active h-full whitespace-nowrap" data-requires-operator role="tab"
                             id="tabbtn-terminal" aria-controls="tab-terminal" aria-selected="true" data-tab="terminal"
                             title="Terminal (1)" onclick="switchTab('terminal')">Terminal</button>

@@ -1154,56 +1154,72 @@ async def supervisor_task() -> None:
             logging.error(f"Supervisor loop error: {exc}")
 
 
+# app_id -> (root pid, CPU seconds its process tree had used, monotonic time of that reading)
+_cpu_seen: Dict[int, tuple] = {}
+
+
+def _tree_cpu_seconds(p: "psutil.Process") -> float:  # type: ignore
+    """CPU time a process has used, plus what its finished children used (once
+    it has waited for them — which is what moves a child's time into its parent's
+    children_user/children_system)."""
+    t = p.cpu_times()
+    return t.user + t.system + getattr(t, "children_user", 0.0) + getattr(t, "children_system", 0.0)
+
+
 def _collect_metrics_tick(current_app_ids: list, proc_cache: Dict[int, "psutil.Process"]) -> float:  # type: ignore
     """Blocking psutil work for one metrics-collector tick, run via
     asyncio.to_thread so per-app (and per-child-process) /proc reads don't
     stall the event loop — websocket terminal I/O, HTTP responses, and the
     app-supervisor loop all share that loop with this background task.
 
-    proc_cache holds both app-root and child-process Process objects, keyed
-    by pid. psutil.Process.cpu_percent(interval=None) always returns 0.0 on
-    an instance's first call (it needs a prior sample to diff against) —
-    children used to be re-materialized fresh every tick via p.children(),
-    so their CPU never accumulated a real sample and always read as 0.0.
-    Caching child Process objects across ticks the same way the root
-    already was fixes that."""
+    An app's CPU is the CPU time its whole process tree used since the last
+    tick, divided by the time that passed. Sampling each process's own
+    cpu_percent() missed short-lived children: a compile is a stream of
+    compiler processes that each exit before a second sample could be taken,
+    so a host at full load showed the app at under 1%. Counting time instead,
+    a child that exited is still there, in its parent's children times.
+
+    proc_cache holds the Process objects (app roots and children) by pid, so
+    a process that is reused across ticks is one psutil object."""
     host_cpu = psutil.cpu_percent(interval=None)
     live_pids: set = set()
+    now = time.monotonic()
 
     for app_id in current_app_ids:
         pid = _active_app_pids.get(app_id)
         if not pid:
             continue
         try:
-            if pid not in proc_cache:
-                p = psutil.Process(pid)
-                p.cpu_percent()
-                proc_cache[pid] = p
-
-            p = proc_cache[pid]
+            p = proc_cache.get(pid)
+            if p is None:
+                p = proc_cache[pid] = psutil.Process(pid)
             live_pids.add(pid)
             with p.oneshot():
-                cpu = p.cpu_percent()
+                total = _tree_cpu_seconds(p)
                 mem = p.memory_info().rss
 
             for child in p.children(recursive=True):
                 cpid = child.pid
                 try:
-                    if cpid not in proc_cache:
-                        child.cpu_percent()  # prime — first read is unreliable, don't use it
-                        proc_cache[cpid] = child
-                    cached_child = proc_cache[cpid]
+                    cached_child = proc_cache.setdefault(cpid, child)
                     live_pids.add(cpid)
                     with cached_child.oneshot():
-                        cpu += cached_child.cpu_percent()
+                        total += _tree_cpu_seconds(cached_child)
                         mem += cached_child.memory_info().rss
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     proc_cache.pop(cpid, None)
                     continue
 
+            prev = _cpu_seen.get(app_id)
+            _cpu_seen[app_id] = (pid, total, now)
+            cpu = 0.0
+            if prev and prev[0] == pid and now > prev[2]:
+                # Negative when a child's time left the tree (an orphan reaped by init).
+                cpu = max(0.0, total - prev[1]) / (now - prev[2]) * 100
             _app_metrics[app_id] = {"cpu": round(cpu, 1), "memory": mem}
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             _app_metrics.pop(app_id, None)
+            _cpu_seen.pop(app_id, None)
             proc_cache.pop(pid, None)
         except Exception:
             pass
@@ -1211,6 +1227,8 @@ def _collect_metrics_tick(current_app_ids: list, proc_cache: Dict[int, "psutil.P
     for pid in list(proc_cache.keys()):
         if pid not in live_pids:
             proc_cache.pop(pid, None)
+    for app_id in [a for a in _cpu_seen if a not in current_app_ids]:
+        _cpu_seen.pop(app_id, None)
     return host_cpu
 
 
