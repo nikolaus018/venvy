@@ -55,13 +55,20 @@ def current_version() -> str:
     return f"v{__version__}"
 
 
-def _numbers(version: str) -> Tuple[int, ...]:
-    m = re.match(r"v?(\d+(?:\.\d+)*)", version or "")
-    return tuple(int(x) for x in m.group(1).split(".")) if m else ()
+def _order(version: str) -> tuple:
+    """Sort key for a tag: the numbers first; then a release ranks above its
+    pre-releases (v1.2.0 > v1.2.0-rc2), and suffixes compare naturally (ci10 > ci9)."""
+    m = re.match(r"v?(\d+(?:\.\d+)*)(.*)", version or "")
+    if not m:
+        return ((), 0, ())
+    numbers = tuple(int(x) for x in m.group(1).split("."))
+    suffix = m.group(2).lstrip(".-")
+    parts = tuple((0, int(t), "") if t.isdigit() else (1, 0, t) for t in re.findall(r"\d+|[A-Za-z]+", suffix))
+    return (numbers, 0 if suffix else 1, parts)
 
 
 def is_newer(candidate: Optional[str], than: str) -> bool:
-    return bool(candidate) and _numbers(candidate) > _numbers(than)
+    return bool(candidate) and _order(candidate) > _order(than)
 
 
 def unsupported_reason() -> Optional[str]:
