@@ -30,6 +30,9 @@ Run the same command again to update. The new version is downloaded, checksum-ve
 prepared next to the running one; the database is snapshotted; and if the new version does not
 come up healthy, the installer switches back on its own.
 
+Once installed, an admin can also update from the UI: System shows the running version and,
+when a newer release is out, an Update button that runs the same steps on the server.
+
 Options go after `bash -s --`:
 
 ```bash

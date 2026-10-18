@@ -1605,6 +1605,31 @@ def delete_alert(rule_id: int, request: Request):
     FAKE_ALERTS[:] = [r for r in FAKE_ALERTS if r["id"] != rule_id]
     return {"ok": True}
 
+# Updating Venvy: a newer release is "available"; an update runs for a few seconds
+# and then reports the new version, as the real one does after its restart.
+FAKE_UPDATE = {"current": "v4.4.2", "latest": "v4.5.0", "state": None, "started_at": None}
+
+@app.get("/api/system/update")
+def get_update(request: Request, refresh: bool = False):
+    _check_auth(request)
+    u = FAKE_UPDATE
+    if u["state"] == "running" and time.time() - u["started_at"] > 6:
+        u.update(state="ok", current=u["latest"])
+    log = [] if not u["state"] else ["Fetching the latest release from https://github.com/nikolaus018/venvy/releases/latest/download",
+                                     "[venvy] Installing Venvy (latest) — data in /var/lib/venvy, service user venvy",
+                                     "[venvy] Building the Python environment for v4.5.0..."] + (["[venvy] Venvy v4.5.0 is running."] if u["state"] == "ok" else [])
+    return {"current": u["current"], "latest": u["latest"], "update_available": u["current"] != u["latest"],
+            "check_error": None, "supported": True, "unsupported_reason": None, "state": u["state"],
+            "started": _iso() if u["state"] else None, "finished": None, "log": log}
+
+@app.post("/api/system/update")
+def post_update(request: Request):
+    _check_auth(request)
+    if FAKE_UPDATE["state"] == "running":
+        raise HTTPException(409, "An update is already under way.")
+    FAKE_UPDATE.update(state="running", started_at=time.time())
+    return {"ok": True}
+
 @app.get("/api/system/backup/schedule")
 def get_backup_schedule(request: Request):
     _check_auth(request)

@@ -652,6 +652,14 @@ Operators and admins. Who added, removed or changed which variables, newest firs
 #### `GET /api/apps/{app_id}/logs/search?q=&regex=false&case=false&limit=200&context=0` · `GET /api/apps/{app_id}/logs/download`
 Search runs over the app's current and rotated log files, oldest first, in a separate short-lived process so that a pathological regular expression cannot stall Venvy (`408` after 20 s). `download` streams all of them as one text file; it takes `?ticket=` like other downloads.
 
+### 5.16 Updating Venvy — `/api/system/update` (admin)
+
+#### `GET /api/system/update?refresh=false`
+`{ "current", "latest", "update_available", "check_error", "supported", "unsupported_reason", "state", "started", "finished", "log": [...] }`. `current` is the running release's tag; `latest` comes from the release server's `VERSION` file, looked up at most once an hour unless `refresh=true`. `state` is `null`, `requested`, `running`, `ok` or `failed` (the last update's), with the tail of its log.
+
+#### `POST /api/system/update`
+Needs a browser session, not an API token. Starts an update to the latest release and answers at once (`400` if this Venvy was not set up by the installer of 4.5.0 or later, `409` while one is under way). Venvy itself only creates the empty file `.update-request` in its data directory; the installer's `venvy-update.path` unit sees it and runs `/opt/venvy/update.sh` as root, which downloads the release, checks its checksum and runs the installer that came with it — the same switch-over and automatic rollback as running the install command by hand. Nothing Venvy writes is passed to that script, so through this a compromised Venvy can at most ask for the official latest release. Venvy restarts during the update: follow it with `GET /api/health`, then this endpoint. Its status and log are in `/opt/venvy/update/`, which only root can write.
+
 ## 6. Data Model Reference
 
 ### 6.1 App object
@@ -774,6 +782,7 @@ settings in `/etc/venvy/venvy.env`, and a `venvy` systemd service that starts at
 Running the same command again updates: the release is downloaded, checksum-verified and
 prepared beside the running one, the database is snapshotted into `backups/`, the service is
 switched over, and it is switched back automatically if `/api/health` does not answer.
+From 4.5.0 on, an admin can also start this from the UI (System → Venvy → Update; see §5.16).
 An installation that predates the installer keeps its data directory where it is.
 
 Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed.
@@ -849,6 +858,8 @@ A frozen build must bundle `web/` and `vendor/` next to the executable's code.
 | DELETE | `/api/apps/{id}/logs` | operator |
 | GET | `/api/apps/{id}/scan-imports` | viewer |
 | GET | `/api/system/info` | viewer |
+| GET | `/api/system/update` | admin |
+| POST | `/api/system/update` | admin (browser session) |
 | GET | `/api/system/ports` | viewer |
 | GET | `/api/system/metrics` | admin |
 | POST | `/api/system/backup` | admin |

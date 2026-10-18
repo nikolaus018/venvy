@@ -178,6 +178,20 @@
                             <span class="btn-ghost shrink-0 px-3 py-2 text-xs font-bold rounded-lg pointer-events-none">Manage</span>
                         </button>
 
+                        <!-- Venvy's own version and updates (admins only — see openSystemView) -->
+                        <div id="sys-update-card" class="card px-5 py-4 flex items-center gap-3 hidden">
+                            <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                style="background:var(--ov);border:1px solid var(--ov-border)">
+                                <i data-feather="download-cloud" class="w-4 h-4" style="color:var(--text)"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <p class="text-sm font-semibold" id="sys-update-card-title" style="color:var(--text)">Venvy</p>
+                                <p class="text-xs mt-0.5 truncate" id="sys-update-card-sub" style="color:var(--text3)">Loading…</p>
+                            </div>
+                            <button id="sys-update-check" onclick="loadUpdateCard(true)" class="btn-ghost shrink-0 px-3 py-2 text-xs font-bold rounded-lg">Check</button>
+                            <button id="sys-update-btn" onclick="onUpdateButton()" class="btn-primary shrink-0 px-3 py-2 text-xs font-bold rounded-lg hidden">Update</button>
+                        </div>
+
                         <!-- Cloudflare Tunnel (admins only — see openSystemView) -->
                         <div class="card overflow-hidden" id="sys-cf-card">
                             <div class="px-5 py-4 flex items-center gap-3"

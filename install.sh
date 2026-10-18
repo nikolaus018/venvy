@@ -48,6 +48,10 @@ CODE_DIR="/opt/venvy"
 CONF_DIR="/etc/venvy"
 ENV_FILE="$CONF_DIR/venvy.env"
 UNIT_FILE="/etc/systemd/system/venvy.service"
+UPDATE_UNIT="/etc/systemd/system/venvy-update.service"
+UPDATE_PATH_UNIT="/etc/systemd/system/venvy-update.path"
+UPDATE_SCRIPT="$CODE_DIR/update.sh"
+UPDATE_DIR="$CODE_DIR/update"       # the update's status and log: root writes, Venvy reads
 DEFAULT_DATA_DIR="/var/lib/venvy"
 KEEP_DB_SNAPSHOTS=5
 
@@ -122,8 +126,9 @@ case "$VERSION" in *[!0-9A-Za-z._-]*) die "--version contains unexpected charact
 if [ "$UNINSTALL" -eq 1 ]; then
   DATA_DIR="$(systemctl show -p WorkingDirectory --value venvy.service 2>/dev/null || true)"
   say "Stopping and removing the Venvy service..."
-  systemctl disable --now venvy.service >/dev/null 2>&1 || true
-  rm -f "$UNIT_FILE"
+  systemctl disable --now venvy.service venvy-update.path >/dev/null 2>&1 || true
+  rm -f "$UNIT_FILE" "$UPDATE_UNIT" "$UPDATE_PATH_UNIT" "$UPDATE_SCRIPT"
+  rm -rf "$UPDATE_DIR"
   systemctl daemon-reload
   rm -rf "$CODE_DIR/releases" "$CODE_DIR/current"
   rmdir "$CODE_DIR" 2>/dev/null || true
@@ -160,6 +165,8 @@ else
   RUN_USER="venvy"; RUN_GROUP="venvy"
 fi
 
+# Where "the latest release" lives: what an update from the UI installs.
+LATEST_URL="${VENVY_BASE_URL:-https://github.com/$REPO/releases/latest/download}"
 if [ "$VERSION" = "latest" ]; then
   BASE_URL="${VENVY_BASE_URL:-https://github.com/$REPO/releases/latest/download}"
 else
@@ -401,6 +408,8 @@ Group=$RUN_GROUP
 WorkingDirectory=$DATA_DIR
 EnvironmentFile=$ENV_FILE
 Environment=PYTHONUNBUFFERED=1
+Environment=VENVY_RELEASE_URL=$LATEST_URL
+Environment=VENVY_UPDATE_DIR=$UPDATE_DIR
 ExecStart=$CODE_DIR/current/.venv/bin/python $CODE_DIR/current/main.py
 Restart=always
 RestartSec=5
@@ -411,8 +420,77 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
+# Updating from the UI. Venvy (unprivileged) can only create an empty request
+# file in its data directory; this path unit notices it and runs the script
+# below as root. The script takes nothing from Venvy: it always installs the
+# latest release, checksum-verified, with the installer that came with it.
+# Its status and log go to a directory only root can write — never into the
+# data directory, where the service user could swap a file for a symlink.
+install -d -m 750 -o root -g "$RUN_GROUP" "$UPDATE_DIR"
+cat > "$UPDATE_SCRIPT" <<EOF
+#!/usr/bin/env bash
+# Written by the Venvy installer. Run as root by venvy-update.service when the
+# file $DATA_DIR/.update-request appears (an admin clicked Update in Venvy).
+set -uo pipefail
+umask 022
+DATA_DIR="$DATA_DIR"
+UPDATE_DIR="$UPDATE_DIR"
+BASE_URL="$LATEST_URL"
+EOF
+cat >> "$UPDATE_SCRIPT" <<'EOF'
+STATUS="$UPDATE_DIR/status.json"
+LOG="$UPDATE_DIR/update.log"
+STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+status() {   # STATE FINISHED-JSON
+  printf '{"state": "%s", "started": "%s", "finished": %s}\n' "$1" "$STARTED" "$2" > "$STATUS.tmp"
+  chmod 644 "$STATUS.tmp"; mv -f "$STATUS.tmp" "$STATUS"
+}
+: > "$LOG"; chmod 644 "$LOG"
+status running null              # first: Venvy refuses a second request from here on
+rm -f "$DATA_DIR/.update-request"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+{
+  echo "Fetching the latest release from $BASE_URL"
+  curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz" "$BASE_URL/venvy.tar.gz" \
+    && curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz.sha256" "$BASE_URL/venvy.tar.gz.sha256" \
+    && ( cd "$WORK" && sha256sum -c --status venvy.tar.gz.sha256 ) \
+    && tar -xzf "$WORK/venvy.tar.gz" -C "$WORK" install.sh \
+    && VENVY_BASE_URL="$BASE_URL" bash "$WORK/install.sh"
+} >> "$LOG" 2>&1
+rc=$?
+[ "$rc" -eq 0 ] || echo "The update failed (exit code $rc). Venvy keeps running the version it had." >> "$LOG"
+status "$([ "$rc" -eq 0 ] && echo ok || echo failed)" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+exit "$rc"
+EOF
+chown root:root "$UPDATE_SCRIPT"
+chmod 755 "$UPDATE_SCRIPT"
+
+cat > "$UPDATE_UNIT" <<EOF
+[Unit]
+Description=Update Venvy to the latest release (requested from its UI)
+
+[Service]
+Type=oneshot
+ExecStart=$UPDATE_SCRIPT
+TimeoutStartSec=1800
+EOF
+
+cat > "$UPDATE_PATH_UNIT" <<EOF
+[Unit]
+Description=Watch for an update request from Venvy
+
+[Path]
+PathExists=$DATA_DIR/.update-request
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
 systemctl enable venvy.service >/dev/null 2>&1
+systemctl enable venvy-update.path >/dev/null 2>&1
+systemctl start venvy-update.path
 systemctl restart venvy.service
 
 # ── 6. Health check, automatic rollback ──────────────────────────────────────

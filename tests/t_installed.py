@@ -1,8 +1,9 @@
 """Checks against an *installed* Venvy (systemd service), as set up by install.sh.
 
-usage: t_installed.py <base-url> [--app-users] [--existing]
+usage: t_installed.py <base-url> [--app-users] [--existing] [--ui-update VERSION]
   --app-users  expect per-app Unix users, systemd scopes and resource limits
   --existing   the admin account already exists (second run after an update)
+  --ui-update  update from the UI's endpoint and expect VERSION to be running after
 
 Run as root on the machine itself: it looks at processes and file owners.
 """
@@ -21,6 +22,7 @@ from harness import Client
 base = sys.argv[1]
 APP_USERS = "--app-users" in sys.argv
 EXISTING = "--existing" in sys.argv
+UI_UPDATE = sys.argv[sys.argv.index("--ui-update") + 1] if "--ui-update" in sys.argv else None
 fails = []
 
 
@@ -50,6 +52,46 @@ else:
     r = cl.req("POST", "/api/auth/setup", json={"username": "admin", "password": "hunter2hunter2"})
     check("first-run setup", r.status_code == 200, r.text)
 cl.key = r.json().get("auth_key")
+
+if UI_UPDATE:
+    import json as _json
+    info = cl.req("GET", "/api/system/update?refresh=true").json()
+    check("update: supported on an installed Venvy", info.get("supported") is True, str(info))
+    check("update: the newer release is seen", info.get("latest") == UI_UPDATE and info.get("update_available") is True, str(info))
+    check("update: the update units are installed", subprocess.run(["systemctl", "is-active", "--quiet", "venvy-update.path"]).returncode == 0)
+    st = os.stat("/opt/venvy/update")
+    check("update: its status directory is root's", st.st_uid == 0 and (st.st_mode & 0o777) == 0o750, oct(st.st_mode))
+    r = cl.req("POST", "/api/system/update")
+    check("update: accepted", r.status_code == 200, r.text)
+    check("update: a second one is refused while it runs", cl.req("POST", "/api/system/update").status_code == 409)
+    # Venvy goes away while the installer swaps it, then comes back as the new version.
+    end, done = time.time() + 600, None
+    while time.time() < end:
+        time.sleep(3)
+        try:
+            with open("/opt/venvy/update/status.json") as f:
+                done = _json.load(f)
+        except (OSError, ValueError):
+            continue
+        if done.get("state") in ("ok", "failed"):
+            break
+    with open("/opt/venvy/update/update.log", errors="replace") as f:
+        log_tail = f.read()[-1500:]
+    check("update: finished ok", bool(done) and done.get("state") == "ok", str(done) + "\n" + log_tail)
+    for _ in range(60):
+        try:
+            if cl.c.get("/api/health").status_code == 200:
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    r = cl.req("POST", "/api/auth/login", json={"username": "admin", "password": "hunter2hunter2"})
+    cl.key = r.json().get("auth_key")
+    info = cl.req("GET", "/api/system/update").json()
+    check("update: the new version is running", info.get("current") == UI_UPDATE and info.get("state") == "ok", str(info))
+    check("update: the request file is gone", not os.path.exists("/var/lib/venvy/.update-request"))
+    print("FAILED" if fails else "ALL OK", fails)
+    sys.exit(1 if fails else 0)
 
 unit_user = subprocess.run(["systemctl", "show", "-p", "User", "--value", "venvy.service"], capture_output=True, text=True).stdout.strip()
 check("service is active", subprocess.run(["systemctl", "is-active", "--quiet", "venvy.service"]).returncode == 0)

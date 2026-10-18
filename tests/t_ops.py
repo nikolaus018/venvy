@@ -136,6 +136,14 @@ with server(repo, 55021, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv)
     check("... and cannot reach other apps", bearer(otk).get(f"/api/apps/{a2}/files/tree").status_code == 404)
     check("restore all apps", cl.req("PUT", f"/api/users/{uid}/access", json={"all_apps": True, "app_ids": []}).status_code == 200
           and a2 in [a["id"] for a in ops.req("GET", "/api/apps").json()])
+
+    # ── updating Venvy from the UI ──────────────────────────────────────────
+    # Needs the installer's root unit, which a test server does not have.
+    u = cl.req("GET", "/api/system/update").json()
+    check("update: version reported", u["current"].startswith("v") and u["supported"] is False and u["unsupported_reason"], str(u))
+    check("update: refused without the installer's unit", cl.req("POST", "/api/system/update").status_code == 400)
+    check("update: admins only", ops.req("GET", "/api/system/update").status_code == 403 and ops.req("POST", "/api/system/update").status_code == 403)
+    check("update: an API token cannot start one", bearer(tk["token"]).post("/api/system/update").status_code == 403)
     cl.req("DELETE", f"/api/tokens/{tk['id']}")
 
     # ── log search and download ─────────────────────────────────────────────

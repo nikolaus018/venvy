@@ -55,6 +55,7 @@ from venvy.api import deploy as api_deploy
 from venvy.api import logs as api_logs
 from venvy.api import ops as api_ops
 from venvy.api import tokens as api_tokens
+from venvy.api import updates as api_updates
 from venvy.api import auth as api_auth
 from venvy.api import cloudflare as api_cloudflare
 from venvy.api import files as api_files
@@ -404,6 +405,7 @@ app.include_router(api_deploy.hooks)
 app.include_router(api_cron.router)
 app.include_router(api_tokens.router)
 app.include_router(api_logs.router)
+app.include_router(api_updates.router)
 
 
 @app.get("/api/health")
