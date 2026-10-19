@@ -427,7 +427,11 @@ EOF
 # Its status and log go to a directory only root can write — never into the
 # data directory, where the service user could swap a file for a symlink.
 install -d -m 750 -o root -g "$RUN_GROUP" "$UPDATE_DIR"
-cat > "$UPDATE_SCRIPT" <<EOF
+# Written beside it and moved into place, never over it: an update from the UI runs
+# this installer from inside update.sh, and bash reads a running script as it goes —
+# rewritten in place, the old script would carry on in the middle of the new one.
+UPDATE_SCRIPT_NEW="$UPDATE_SCRIPT.new"
+cat > "$UPDATE_SCRIPT_NEW" <<EOF
 #!/usr/bin/env bash
 # Written by the Venvy installer. Run as root by venvy-update.service when the
 # file $DATA_DIR/.update-request appears (an admin clicked Update in Venvy).
@@ -437,7 +441,9 @@ DATA_DIR="$DATA_DIR"
 UPDATE_DIR="$UPDATE_DIR"
 BASE_URL="$LATEST_URL"
 EOF
-cat >> "$UPDATE_SCRIPT" <<'EOF'
+cat >> "$UPDATE_SCRIPT_NEW" <<'EOF'
+# One function, called on the last line: bash has read all of it before anything runs.
+venvy_update() {
 STATUS="$UPDATE_DIR/status.json"
 LOG="$UPDATE_DIR/update.log"
 STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -474,10 +480,13 @@ if [ -n "$TAG" ]; then FETCH_URL="https://github.com/$REPO_PATH/releases/downloa
 rc=$?
 [ "$rc" -eq 0 ] || echo "The update failed (exit code $rc). Venvy keeps running the version it had." >> "$LOG"
 status "$([ "$rc" -eq 0 ] && echo ok || echo failed)" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
-exit "$rc"
+return "$rc"
+}
+venvy_update; exit $?
 EOF
-chown root:root "$UPDATE_SCRIPT"
-chmod 755 "$UPDATE_SCRIPT"
+chown root:root "$UPDATE_SCRIPT_NEW"
+chmod 755 "$UPDATE_SCRIPT_NEW"
+mv -f "$UPDATE_SCRIPT_NEW" "$UPDATE_SCRIPT"
 
 cat > "$UPDATE_UNIT" <<EOF
 [Unit]

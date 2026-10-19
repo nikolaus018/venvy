@@ -18,6 +18,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional, Tuple
@@ -223,6 +224,19 @@ def _log_tail(lines: int = 80) -> list:
     return [_ANSI_RE.sub("", ln) for ln in text.splitlines()[-lines:]]
 
 
+def _update_unit_inactive() -> bool:
+    """True when systemd says venvy-update.service is not running — so a status that
+    still says "running" was left behind. False when that cannot be told."""
+    if not PATH_UNIT.exists():
+        return False
+    try:
+        out = subprocess.run(["systemctl", "is-active", "venvy-update.service"],
+                             capture_output=True, text=True, timeout=3).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out in ("inactive", "failed")
+
+
 def state() -> dict:
     """How the last (or current) update went, as update.sh reports it."""
     st = _read_status()
@@ -232,8 +246,8 @@ def state() -> dict:
             age = time.time() - STATUS_FILE.stat().st_mtime
         except OSError:
             age = 0
-        if age > STALE_SEC:
-            state_name = "failed"          # cut short (a reboot, say): do not block the next one
+        if age > STALE_SEC or _update_unit_inactive():
+            state_name = "failed"          # cut short (a reboot, a crash): do not block the next one
     return {
         "state": "requested" if REQUEST_FILE.exists() and state_name != "running" else state_name,
         "started": st.get("started"), "finished": st.get("finished"),

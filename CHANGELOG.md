@@ -5,6 +5,11 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.5.5
+
+- An update from the UI could stay "running" for good: the installer rewrote the update script while that script was running it, and the old copy went astray. The script is now replaced, never rewritten, and is read whole before it runs.
+- A status left at "running" by an update that is no longer running no longer blocks the next one.
+
 ## v4.5.4
 
 - A new release shows up at once: Venvy asks GitHub which release is the latest instead of following its download link, which kept pointing at the previous release for a few minutes after each new one.
