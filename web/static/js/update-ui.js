@@ -116,10 +116,18 @@
             openModal('notes-modal');
             const r = await apiJson('GET', '/system/update/notes');
             if (!r.ok) { body.innerHTML = `<p class="text-xs" style="color:var(--red)">${escapeHtml(r.error)}</p>`; return; }
-            const rel = r.data.releases || [];
-            const intro = d.update_available
-                ? `You run ${escapeHtml(r.data.current)}. ${rel.length === 1 ? 'This is what the new release brings' : `These ${rel.length} releases came out since`}:`
-                : `You run the latest release, ${escapeHtml(r.data.current)}.`;
+            const cur = escapeHtml(r.data.current);
+            let rel = r.data.releases || [], intro;
+            if (r.data.newer) {
+                intro = rel.length === 1 ? `You run ${cur}. This is what ${escapeHtml(rel[0].version)} brings:`
+                                         : `You run ${cur}. These ${rel.length} releases came out since:`;
+            } else if (d.update_available) {
+                // The offered release published no notes: say so rather than show older ones as new.
+                intro = `You run ${cur}. ${escapeHtml(d.latest)} did not publish release notes.`;
+                rel = [];
+            } else {
+                intro = `You run the latest release, ${cur}.${rel.length ? ' What it brought:' : ''}`;
+            }
             body.innerHTML = `
                 <p class="text-sm mb-4" style="color:var(--text2)">${intro}</p>
                 ${rel.length ? rel.map(sec => `
@@ -128,6 +136,6 @@
                         <ul class="list-disc pl-5 space-y-1 text-sm" style="color:var(--text2)">
                             ${sec.items.map(it => `<li>${escapeHtml(it)}</li>`).join('')}
                         </ul>
-                    </div>`).join('') : `<p class="text-xs" style="color:var(--text3)">${escapeHtml(r.data.error || 'No release notes were published.')}</p>`}
+                    </div>`).join('') : (r.data.error ? `<p class="text-xs" style="color:var(--text3)">${escapeHtml(r.data.error)}</p>` : '')}
                 ${d.update_available && d.supported ? `<div class="flex justify-end mt-2"><button class="btn-primary px-4 py-2 text-sm font-bold" onclick="closeModal('notes-modal'); onUpdateButton()">Update to ${escapeHtml(d.latest)}</button></div>` : ''}`;
         }

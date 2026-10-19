@@ -5,6 +5,11 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.5.3
+
+- What's new showed an older release's notes as new: the notes were cached for an hour, and Check only refreshed the version. They now come from the release on offer and are fetched again when a newer one appears.
+- When you are up to date, What's new says so instead of presenting your own release's notes as new.
+
 ## v4.5.2
 
 - The Venvy card in System says when it last looked for a new release ("Up to date · checked 3 min ago").

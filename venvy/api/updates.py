@@ -31,11 +31,12 @@ async def update_info(refresh: bool = False, _: User = Depends(check_admin)):
 
 @router.get("/system/update/notes")
 async def update_notes(refresh: bool = False, _: User = Depends(check_admin)):
-    """What changed: the release notes of every version newer than the running one
-    (or of the latest when it is up to date), newest first."""
+    """What changed: the release notes of every version newer than the running one, newest
+    first (newer: true) — or, when it is up to date, the latest release's own (newer: false)."""
     current = updates.current_version()
-    sections, error = await updates.release_notes(current, force=refresh)
-    return {"current": current, "releases": sections, "error": error}
+    latest, _ = await updates.latest_version(force=refresh)
+    sections, newer, error = await updates.release_notes(current, latest, force=refresh)
+    return {"current": current, "latest": latest, "newer": newer, "releases": sections, "error": error}
 
 
 @router.post("/system/update")

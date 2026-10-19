@@ -133,18 +133,31 @@ def parse_changelog(text: str) -> list:
     return sections
 
 
-async def release_notes(current: str, force: bool = False) -> Tuple[list, Optional[str]]:
-    """(the changelog sections newer than *current* — or the latest one when there are
-    none — and an error message). The changelog is fetched at most once an hour."""
+def _changelog_url(latest: Optional[str]) -> str:
+    """Where the changelog of *latest* is. On GitHub, the release's own copy rather than
+    the latest/download link: that one can lag a minute behind a new release, and the
+    notes must be those of the version on offer."""
+    if latest and RELEASE_URL.endswith("/releases/latest/download"):
+        return f"{RELEASE_URL[:-len('latest/download')]}download/{latest}/CHANGELOG.md"
+    return f"{RELEASE_URL}/CHANGELOG.md"
+
+
+async def release_notes(current: str, latest: Optional[str], force: bool = False) -> Tuple[list, bool, Optional[str]]:
+    """(changelog sections, whether they are newer than *current*, error message).
+    The sections are those of every release newer than *current*; when there is none,
+    the latest release's own, marked as not newer. Fetched again whenever the latest
+    version changes, and otherwise at most once an hour."""
     if not RELEASE_URL:
-        return [], None
+        return [], False, None
     async with _check_lock:
-        if force or not _notes_cache["at"] or time.monotonic() - _notes_cache["at"] >= CHECK_TTL_SEC:
+        stale = (force or not _notes_cache["at"] or _notes_cache.get("for") != latest
+                 or time.monotonic() - _notes_cache["at"] >= CHECK_TTL_SEC)
+        if stale:
             sections, error = None, None
             try:
                 timeout = aiohttp.ClientTimeout(total=15)
                 async with aiohttp.ClientSession(timeout=timeout) as http:
-                    async with http.get(f"{RELEASE_URL}/CHANGELOG.md") as resp:
+                    async with http.get(_changelog_url(latest)) as resp:
                         if resp.status != 200:
                             error = f"The release server answered {resp.status}."
                         else:
@@ -152,10 +165,12 @@ async def release_notes(current: str, force: bool = False) -> Tuple[list, Option
                             sections = parse_changelog(raw.decode(errors="replace"))
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 error = f"Could not reach the release server: {exc.__class__.__name__}"
-            _notes_cache.update(at=time.monotonic(), sections=sections, error=error)
+            _notes_cache.update(at=time.monotonic(), sections=sections, error=error, **{"for": latest})
     sections = _notes_cache["sections"] or []
     newer = [sec for sec in sections if is_newer(sec["version"], current)]
-    return (newer or sections[:1])[:30], _notes_cache["error"]
+    if newer:
+        return newer[:30], True, _notes_cache["error"]
+    return sections[:1], False, _notes_cache["error"]
 
 
 def last_checked() -> Optional[str]:

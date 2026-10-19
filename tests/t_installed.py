@@ -59,7 +59,7 @@ if UI_UPDATE:
     check("update: supported on an installed Venvy", info.get("supported") is True, str(info))
     check("update: the newer release is seen", info.get("latest") == UI_UPDATE and info.get("update_available") is True, str(info))
     notes = cl.req("GET", "/api/system/update/notes?refresh=true").json()
-    check("update: what's new lists only the newer release", [r["version"] for r in notes.get("releases", [])] == [UI_UPDATE]
+    check("update: what's new lists only the newer release", notes.get("newer") is True and [r["version"] for r in notes.get("releases", [])] == [UI_UPDATE]
           and notes["releases"][0]["items"] == ["Second CI release for the update test."], str(notes))
     check("update: the update units are installed", subprocess.run(["systemctl", "is-active", "--quiet", "venvy-update.path"]).returncode == 0)
     st = os.stat("/opt/venvy/update")

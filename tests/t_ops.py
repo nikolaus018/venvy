@@ -145,7 +145,7 @@ with server(repo, 55021, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv)
     check("update: admins only", ops.req("GET", "/api/system/update").status_code == 403 and ops.req("POST", "/api/system/update").status_code == 403
           and ops.req("GET", "/api/system/update/notes").status_code == 403)
     n = cl.req("GET", "/api/system/update/notes").json()
-    check("update: no release server, no notes (and no error)", n["releases"] == [] and n["error"] is None, str(n))
+    check("update: no release server, no notes (and no error)", n["releases"] == [] and n["newer"] is False and n["error"] is None, str(n))
     check("update: an API token cannot start one", bearer(tk["token"]).post("/api/system/update").status_code == 403)
     cl.req("DELETE", f"/api/tokens/{tk['id']}")
 

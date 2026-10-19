@@ -1625,7 +1625,8 @@ def get_update(request: Request, refresh: bool = False):
 @app.get("/api/system/update/notes")
 def get_update_notes(request: Request):
     _check_auth(request)
-    return {"current": FAKE_UPDATE["current"], "error": None, "releases": [
+    behind = FAKE_UPDATE["current"] != FAKE_UPDATE["latest"]
+    return {"current": FAKE_UPDATE["current"], "latest": FAKE_UPDATE["latest"], "newer": behind, "error": None, "releases": [
         {"version": "v4.5.0", "items": ["Update Venvy from the UI: System shows the running version and an Update button.",
                                         "The update runs as root through a unit the installer sets up."]},
     ] if FAKE_UPDATE["current"] != FAKE_UPDATE["latest"] else [{"version": "v4.5.0", "items": ["Update Venvy from the UI."]}]}
