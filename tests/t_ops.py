@@ -142,7 +142,10 @@ with server(repo, 55021, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv)
     u = cl.req("GET", "/api/system/update").json()
     check("update: version reported", u["current"].startswith("v") and u["supported"] is False and u["unsupported_reason"], str(u))
     check("update: refused without the installer's unit", cl.req("POST", "/api/system/update").status_code == 400)
-    check("update: admins only", ops.req("GET", "/api/system/update").status_code == 403 and ops.req("POST", "/api/system/update").status_code == 403)
+    check("update: admins only", ops.req("GET", "/api/system/update").status_code == 403 and ops.req("POST", "/api/system/update").status_code == 403
+          and ops.req("GET", "/api/system/update/notes").status_code == 403)
+    n = cl.req("GET", "/api/system/update/notes").json()
+    check("update: no release server, no notes (and no error)", n["releases"] == [] and n["error"] is None, str(n))
     check("update: an API token cannot start one", bearer(tk["token"]).post("/api/system/update").status_code == 403)
     cl.req("DELETE", f"/api/tokens/{tk['id']}")
 

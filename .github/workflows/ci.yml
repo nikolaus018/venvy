@@ -82,6 +82,7 @@ jobs:
           tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web vendor
           (cd /tmp/rel && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
           cp VERSION /tmp/rel/VERSION && rm VERSION
+          printf '# Changelog\n\n## v0.0.0-ci2\n\n- Second CI release\n  for the update test.\n\n## v0.0.0-ci1\n\n- First.\n' > /tmp/rel/CHANGELOG.md
           (cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing --ui-update v0.0.0-ci2 ${{ matrix.mode == 'app-users' && '--app-users' || '' }})
           test "$(basename "$(readlink -f /opt/venvy/current)")" = "v0.0.0-ci2"
           cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'app-users' && '--app-users' || '' }}

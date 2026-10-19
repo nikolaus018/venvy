@@ -3,6 +3,7 @@
 #   venvy.tar.gz.sha256   its checksum, verified by the installer
 #   install.sh            the installer / updater (also inside the archive, for updates from the UI)
 #   VERSION               the release's tag: how a running Venvy learns there is a newer one
+#   CHANGELOG.md          what changed, shown in Venvy's "What's new"; the tag's section is the release text
 # Asset names are fixed so /releases/latest/download/<name> always works.
 name: Release
 
@@ -42,6 +43,16 @@ jobs:
       - name: Check the installer parses
         run: bash -n install.sh
 
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v tag="## ${GITHUB_REF_NAME}" '$0 == tag {on=1; next} /^## / {on=0} on' CHANGELOG.md \
+            | sed -e '/./,$!d' > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section '## ${GITHUB_REF_NAME}' — add one before tagging."
+            exit 1
+          fi
+          cat notes.md
+
       - name: Build the release archive
         run: |
           echo "${GITHUB_REF_NAME}" > VERSION
@@ -58,4 +69,4 @@ jobs:
             echo "Release ${GITHUB_REF_NAME} already exists; nothing to publish."
             exit 0
           fi
-          gh release create "${GITHUB_REF_NAME}" venvy.tar.gz venvy.tar.gz.sha256 install.sh VERSION --title "Venvy ${GITHUB_REF_NAME}" --generate-notes
+          gh release create "${GITHUB_REF_NAME}" venvy.tar.gz venvy.tar.gz.sha256 install.sh VERSION CHANGELOG.md --title "Venvy ${GITHUB_REF_NAME}" --notes-file notes.md

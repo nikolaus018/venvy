@@ -71,14 +71,6 @@ def is_newer(candidate: Optional[str], than: str) -> bool:
     return bool(candidate) and _order(candidate) > _order(than)
 
 
-def notes_url(version: Optional[str]) -> Optional[str]:
-    """The release notes of *version*, when releases come from GitHub."""
-    m = re.match(r"https://github\.com/([\w.\-]+/[\w.\-]+)/releases/", RELEASE_URL + "/")
-    if not m or not version or not _VERSION_RE.fullmatch(version):
-        return None
-    return f"https://github.com/{m.group(1)}/releases/tag/{version}"
-
-
 def unsupported_reason() -> Optional[str]:
     """Why this Venvy cannot update itself, or None when it can."""
     if not RELEASE_URL or not PATH_UNIT.exists():
@@ -111,6 +103,57 @@ async def latest_version(force: bool = False) -> Tuple[Optional[str], Optional[s
             error = f"Could not reach the release server: {exc.__class__.__name__}"
         _checked.update(at=time.monotonic(), version=version, error=error)
         return version, error
+
+
+_notes_cache: dict = {"at": 0.0, "sections": None, "error": None}
+_NOTES_MAX_BYTES = 512 * 1024
+
+
+def parse_changelog(text: str) -> list:
+    """[{"version", "items": [str, ...]}] from CHANGELOG.md: one "## vX.Y.Z" heading per
+    release, its points as "- " lines (a line that does not start a point continues the last one)."""
+    sections, cur = [], None
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("## "):
+            version = line[3:].strip()
+            cur = {"version": version, "items": []} if _VERSION_RE.fullmatch(version) else None
+            if cur:
+                sections.append(cur)
+        elif cur is not None and line.strip():
+            stripped = line.strip()
+            if stripped[:2] in ("- ", "* "):
+                cur["items"].append(stripped[2:].strip())
+            elif cur["items"]:
+                cur["items"][-1] += " " + stripped
+            else:
+                cur["items"].append(stripped)
+    return sections
+
+
+async def release_notes(current: str, force: bool = False) -> Tuple[list, Optional[str]]:
+    """(the changelog sections newer than *current* — or the latest one when there are
+    none — and an error message). The changelog is fetched at most once an hour."""
+    if not RELEASE_URL:
+        return [], None
+    async with _check_lock:
+        if force or not _notes_cache["at"] or time.monotonic() - _notes_cache["at"] >= CHECK_TTL_SEC:
+            sections, error = None, None
+            try:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as http:
+                    async with http.get(f"{RELEASE_URL}/CHANGELOG.md") as resp:
+                        if resp.status != 200:
+                            error = f"The release server answered {resp.status}."
+                        else:
+                            raw = await resp.content.read(_NOTES_MAX_BYTES)
+                            sections = parse_changelog(raw.decode(errors="replace"))
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                error = f"Could not reach the release server: {exc.__class__.__name__}"
+            _notes_cache.update(at=time.monotonic(), sections=sections, error=error)
+    sections = _notes_cache["sections"] or []
+    newer = [sec for sec in sections if is_newer(sec["version"], current)]
+    return (newer or sections[:1])[:30], _notes_cache["error"]
 
 
 def _read_status() -> dict:

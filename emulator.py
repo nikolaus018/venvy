@@ -1619,8 +1619,16 @@ def get_update(request: Request, refresh: bool = False):
                                      "[venvy] Installing Venvy (latest) — data in /var/lib/venvy, service user venvy",
                                      "[venvy] Building the Python environment for v4.5.0..."] + (["[venvy] Venvy v4.5.0 is running."] if u["state"] == "ok" else [])
     return {"current": u["current"], "latest": u["latest"], "update_available": u["current"] != u["latest"],
-            "check_error": None, "notes_url": f"https://github.com/nikolaus018/venvy/releases/tag/{u['latest']}", "supported": True, "unsupported_reason": None, "state": u["state"],
+            "check_error": None, "supported": True, "unsupported_reason": None, "state": u["state"],
             "started": _iso() if u["state"] else None, "finished": None, "log": log}
+
+@app.get("/api/system/update/notes")
+def get_update_notes(request: Request):
+    _check_auth(request)
+    return {"current": FAKE_UPDATE["current"], "error": None, "releases": [
+        {"version": "v4.5.0", "items": ["Update Venvy from the UI: System shows the running version and an Update button.",
+                                        "The update runs as root through a unit the installer sets up."]},
+    ] if FAKE_UPDATE["current"] != FAKE_UPDATE["latest"] else [{"version": "v4.5.0", "items": ["Update Venvy from the UI."]}]}
 
 @app.post("/api/system/update")
 def post_update(request: Request):

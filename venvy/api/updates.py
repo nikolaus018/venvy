@@ -21,12 +21,20 @@ async def update_info(refresh: bool = False, _: User = Depends(check_admin)):
         "current": current,
         "latest": latest,
         "update_available": updates.is_newer(latest, current),
-        "notes_url": updates.notes_url(latest),
         "check_error": error,
         "supported": updates.unsupported_reason() is None,
         "unsupported_reason": updates.unsupported_reason(),
         **updates.state(),
     }
+
+
+@router.get("/system/update/notes")
+async def update_notes(refresh: bool = False, _: User = Depends(check_admin)):
+    """What changed: the release notes of every version newer than the running one
+    (or of the latest when it is up to date), newest first."""
+    current = updates.current_version()
+    sections, error = await updates.release_notes(current, force=refresh)
+    return {"current": current, "releases": sections, "error": error}
 
 
 @router.post("/system/update")

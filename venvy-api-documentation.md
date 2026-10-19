@@ -655,7 +655,10 @@ Search runs over the app's current and rotated log files, oldest first, in a sep
 ### 5.16 Updating Venvy — `/api/system/update` (admin)
 
 #### `GET /api/system/update?refresh=false`
-`{ "current", "latest", "update_available", "notes_url", "check_error", "supported", "unsupported_reason", "state", "started", "finished", "log": [...] }`. `current` is the running release's tag; `latest` comes from the release server's `VERSION` file, looked up at most once an hour unless `refresh=true`. `notes_url` links to that release's notes when releases come from GitHub. `state` is `null`, `requested`, `running`, `ok` or `failed` (the last update's), with the tail of its log.
+`{ "current", "latest", "update_available", "check_error", "supported", "unsupported_reason", "state", "started", "finished", "log": [...] }`. `current` is the running release's tag; `latest` comes from the release server's `VERSION` file, looked up at most once an hour unless `refresh=true`. `state` is `null`, `requested`, `running`, `ok` or `failed` (the last update's), with the tail of its log.
+
+#### `GET /api/system/update/notes?refresh=false`
+`{ "current", "releases": [{ "version", "items": [...] }], "error" }`: the sections of the published `CHANGELOG.md` for every release newer than the running one, newest first (when it is up to date, the latest release's). Fetched at most once an hour.
 
 #### `POST /api/system/update`
 Needs a browser session, not an API token. Starts an update to the latest release and answers at once (`400` if this Venvy was not set up by the installer of 4.5.0 or later, `409` while one is under way). Venvy itself only creates the empty file `.update-request` in its data directory; the installer's `venvy-update.path` unit sees it and runs `/opt/venvy/update.sh` as root, which downloads the release, checks its checksum and runs the installer that came with it — the same switch-over and automatic rollback as running the install command by hand. Nothing Venvy writes is passed to that script, so through this a compromised Venvy can at most ask for the official latest release. Venvy restarts during the update: follow it with `GET /api/health`, then this endpoint. Its status and log are in `/opt/venvy/update/`, which only root can write.
@@ -859,6 +862,7 @@ A frozen build must bundle `web/` and `vendor/` next to the executable's code.
 | GET | `/api/apps/{id}/scan-imports` | viewer |
 | GET | `/api/system/info` | viewer |
 | GET | `/api/system/update` | admin |
+| GET | `/api/system/update/notes` | admin |
 | POST | `/api/system/update` | admin (browser session) |
 | GET | `/api/system/ports` | viewer |
 | GET | `/api/system/metrics` | admin |

@@ -23,8 +23,8 @@
             if (d.state === 'failed' && !d.update_available) text += ' · the last update failed';
             sub.textContent = text;
             const notes = $id('sys-update-notes');
-            notes.classList.toggle('hidden', !(d.update_available && d.notes_url));
-            if (d.notes_url) notes.href = d.notes_url;
+            notes.classList.toggle('hidden', !d.latest);
+            notes.textContent = d.update_available ? "What's new" : 'Release notes';
             sub.title = d.supported ? '' : (d.unsupported_reason || '');
             btn.classList.toggle('hidden', !(d.update_available || d.state === 'failed'));
             btn.disabled = !d.supported || d.state === 'running' || d.state === 'requested';
@@ -105,4 +105,28 @@
                     loadUpdateCard();
                 }
             }, 2500);
+        }
+
+        // ── What's new: the changelog sections newer than the running version ──
+        async function openReleaseNotes() {
+            const d = _updateInfo || {};
+            const body = buildModal('notes-modal', d.update_available ? "What's new" : 'Release notes', { width: 'max-w-xl', zIndex: 85 });
+            body.innerHTML = '<p class="text-xs py-6 text-center" style="color:var(--text3)">Loading…</p>';
+            openModal('notes-modal');
+            const r = await apiJson('GET', '/system/update/notes');
+            if (!r.ok) { body.innerHTML = `<p class="text-xs" style="color:var(--red)">${escapeHtml(r.error)}</p>`; return; }
+            const rel = r.data.releases || [];
+            const intro = d.update_available
+                ? `You run ${escapeHtml(r.data.current)}. ${rel.length === 1 ? 'This is what the new release brings' : `These ${rel.length} releases came out since`}:`
+                : `You run the latest release, ${escapeHtml(r.data.current)}.`;
+            body.innerHTML = `
+                <p class="text-sm mb-4" style="color:var(--text2)">${intro}</p>
+                ${rel.length ? rel.map(sec => `
+                    <div class="mb-4">
+                        <h3 class="text-sm font-bold mb-1.5" style="color:var(--text)">${escapeHtml(sec.version)}</h3>
+                        <ul class="list-disc pl-5 space-y-1 text-sm" style="color:var(--text2)">
+                            ${sec.items.map(it => `<li>${escapeHtml(it)}</li>`).join('')}
+                        </ul>
+                    </div>`).join('') : `<p class="text-xs" style="color:var(--text3)">${escapeHtml(r.data.error || 'No release notes were published.')}</p>`}
+                ${d.update_available && d.supported ? `<div class="flex justify-end mt-2"><button class="btn-primary px-4 py-2 text-sm font-bold" onclick="closeModal('notes-modal'); onUpdateButton()">Update to ${escapeHtml(d.latest)}</button></div>` : ''}`;
         }
