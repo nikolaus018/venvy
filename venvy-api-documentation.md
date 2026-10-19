@@ -655,7 +655,7 @@ Search runs over the app's current and rotated log files, oldest first, in a sep
 ### 5.16 Updating Venvy — `/api/system/update` (admin)
 
 #### `GET /api/system/update?refresh=false`
-`{ "current", "latest", "update_available", "check_error", "supported", "unsupported_reason", "state", "started", "finished", "log": [...] }`. `current` is the running release's tag; `latest` comes from the release server's `VERSION` file, looked up at most once an hour unless `refresh=true`. `state` is `null`, `requested`, `running`, `ok` or `failed` (the last update's), with the tail of its log.
+`{ "current", "latest", "update_available", "check_error", "checked_at", "supported", "unsupported_reason", "state", "started", "finished", "log": [...] }`. `current` is the running release's tag; `latest` comes from the release server's `VERSION` file, looked up at most once an hour unless `refresh=true`; `checked_at` says when that last happened. `state` is `null`, `requested`, `running`, `ok` or `failed` (the last update's), with the tail of its log.
 
 #### `GET /api/system/update/notes?refresh=false`
 `{ "current", "releases": [{ "version", "items": [...] }], "error" }`: the sections of the published `CHANGELOG.md` for every release newer than the running one, newest first (when it is up to date, the latest release's). Fetched at most once an hour.

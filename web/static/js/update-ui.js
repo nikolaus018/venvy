@@ -19,6 +19,7 @@
             else if (d.update_available) text = `${d.latest} is available`;
             else if (d.check_error) text = d.check_error;
             else if (d.latest) text = 'Up to date';
+            if (d.checked_at && d.state !== 'running' && d.state !== 'requested') text += ` · checked ${fmtAgo(d.checked_at)}`;
             else text = 'Not checked yet';
             if (d.state === 'failed' && !d.update_available) text += ' · the last update failed';
             sub.textContent = text;

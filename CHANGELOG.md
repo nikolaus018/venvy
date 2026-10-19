@@ -5,6 +5,10 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.5.2
+
+- The Venvy card in System says when it last looked for a new release ("Up to date · checked 3 min ago").
+
 ## v4.5.1
 
 - What's new in a release now shows right here in Venvy, for every version newer than yours — no trip to GitHub.

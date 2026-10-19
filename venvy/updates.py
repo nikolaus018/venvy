@@ -14,6 +14,7 @@ for the official latest release. The update runs in its own systemd unit, not
 under Venvy, so it carries on while the installer stops and restarts Venvy.
 """
 import asyncio
+import datetime
 import json
 import os
 import re
@@ -40,7 +41,7 @@ CHECK_TTL_SEC = 3600.0
 _VERSION_RE = re.compile(r"v?\d+(\.\d+){1,3}([.\-][0-9A-Za-z.\-]+)?")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
-_checked: dict = {"at": 0.0, "version": None, "error": None}
+_checked: dict = {"at": 0.0, "version": None, "error": None, "when": None}
 _check_lock = asyncio.Lock()
 
 
@@ -101,7 +102,8 @@ async def latest_version(force: bool = False) -> Tuple[Optional[str], Optional[s
                             error = "The release server did not say which version is the latest."
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             error = f"Could not reach the release server: {exc.__class__.__name__}"
-        _checked.update(at=time.monotonic(), version=version, error=error)
+        _checked.update(at=time.monotonic(), version=version, error=error,
+                        when=datetime.datetime.now(datetime.timezone.utc).isoformat())
         return version, error
 
 
@@ -154,6 +156,11 @@ async def release_notes(current: str, force: bool = False) -> Tuple[list, Option
     sections = _notes_cache["sections"] or []
     newer = [sec for sec in sections if is_newer(sec["version"], current)]
     return (newer or sections[:1])[:30], _notes_cache["error"]
+
+
+def last_checked() -> Optional[str]:
+    """When the newest release was last looked up (ISO time), or None if not yet."""
+    return _checked["when"]
 
 
 def _read_status() -> dict:
