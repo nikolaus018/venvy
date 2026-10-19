@@ -1619,7 +1619,7 @@ def get_update(request: Request, refresh: bool = False):
                                      "[venvy] Installing Venvy (latest) — data in /var/lib/venvy, service user venvy",
                                      "[venvy] Building the Python environment for v4.5.0..."] + (["[venvy] Venvy v4.5.0 is running."] if u["state"] == "ok" else [])
     return {"current": u["current"], "latest": u["latest"], "update_available": u["current"] != u["latest"],
-            "check_error": None, "supported": True, "unsupported_reason": None, "state": u["state"],
+            "check_error": None, "notes_url": f"https://github.com/nikolaus018/venvy/releases/tag/{u['latest']}", "supported": True, "unsupported_reason": None, "state": u["state"],
             "started": _iso() if u["state"] else None, "finished": None, "log": log}
 
 @app.post("/api/system/update")

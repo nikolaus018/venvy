@@ -22,6 +22,9 @@
             else text = 'Not checked yet';
             if (d.state === 'failed' && !d.update_available) text += ' · the last update failed';
             sub.textContent = text;
+            const notes = $id('sys-update-notes');
+            notes.classList.toggle('hidden', !(d.update_available && d.notes_url));
+            if (d.notes_url) notes.href = d.notes_url;
             sub.title = d.supported ? '' : (d.unsupported_reason || '');
             btn.classList.toggle('hidden', !(d.update_available || d.state === 'failed'));
             btn.disabled = !d.supported || d.state === 'running' || d.state === 'requested';

@@ -71,6 +71,14 @@ def is_newer(candidate: Optional[str], than: str) -> bool:
     return bool(candidate) and _order(candidate) > _order(than)
 
 
+def notes_url(version: Optional[str]) -> Optional[str]:
+    """The release notes of *version*, when releases come from GitHub."""
+    m = re.match(r"https://github\.com/([\w.\-]+/[\w.\-]+)/releases/", RELEASE_URL + "/")
+    if not m or not version or not _VERSION_RE.fullmatch(version):
+        return None
+    return f"https://github.com/{m.group(1)}/releases/tag/{version}"
+
+
 def unsupported_reason() -> Optional[str]:
     """Why this Venvy cannot update itself, or None when it can."""
     if not RELEASE_URL or not PATH_UNIT.exists():

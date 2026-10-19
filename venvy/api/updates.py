@@ -21,6 +21,7 @@ async def update_info(refresh: bool = False, _: User = Depends(check_admin)):
         "current": current,
         "latest": latest,
         "update_available": updates.is_newer(latest, current),
+        "notes_url": updates.notes_url(latest),
         "check_error": error,
         "supported": updates.unsupported_reason() is None,
         "unsupported_reason": updates.unsupported_reason(),
