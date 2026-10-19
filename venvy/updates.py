@@ -80,6 +80,27 @@ def unsupported_reason() -> Optional[str]:
     return None
 
 
+_GITHUB_LATEST_RE = re.compile(r"https://github\.com/([\w.\-]+/[\w.\-]+)/releases/latest/download")
+
+
+async def _github_latest(http: aiohttp.ClientSession) -> Optional[str]:
+    """The latest release's tag from GitHub's API, or None (not GitHub, or no answer).
+    Asked instead of reading VERSION through the latest/download link: that link is
+    cached and kept pointing at the previous release for minutes after a new one."""
+    m = _GITHUB_LATEST_RE.fullmatch(RELEASE_URL)
+    if not m:
+        return None
+    try:
+        async with http.get(f"https://api.github.com/repos/{m.group(1)}/releases/latest",
+                            headers={"Accept": "application/vnd.github+json", "User-Agent": "Venvy"}) as resp:
+            if resp.status != 200:
+                return None
+            tag = (await resp.json(content_type=None) or {}).get("tag_name")
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+        return None
+    return tag if isinstance(tag, str) and _VERSION_RE.fullmatch(tag) else None
+
+
 async def latest_version(force: bool = False) -> Tuple[Optional[str], Optional[str]]:
     """(the newest release's tag, error message), checked at most once an hour."""
     if not RELEASE_URL:
@@ -91,6 +112,11 @@ async def latest_version(force: bool = False) -> Tuple[Optional[str], Optional[s
         try:
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as http:
+                version = await _github_latest(http)
+                if version:
+                    _checked.update(at=time.monotonic(), version=version, error=None,
+                                    when=datetime.datetime.now(datetime.timezone.utc).isoformat())
+                    return version, None
                 async with http.get(f"{RELEASE_URL}/VERSION") as resp:
                     if resp.status != 200:
                         error = f"The release server answered {resp.status}."

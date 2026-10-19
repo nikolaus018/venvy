@@ -450,13 +450,26 @@ status running null              # first: Venvy refuses a second request from he
 rm -f "$DATA_DIR/.update-request"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# On GitHub the latest/download link is cached and keeps pointing at the previous
+# release for minutes after a new one; ask the API for the tag, then fetch that
+# release by name. Elsewhere (a mirror, the CI's test server) use the link as is.
+TAG=""
+case "$BASE_URL" in
+  https://github.com/*/releases/latest/download)
+    REPO_PATH="${BASE_URL#https://github.com/}"; REPO_PATH="${REPO_PATH%/releases/latest/download}"
+    TAG="$(curl -fsSL --retry 2 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO_PATH/releases/latest" 2>/dev/null \
+           | python3 -c 'import json, sys; print(json.load(sys.stdin).get("tag_name", ""))' 2>/dev/null || true)"
+    case "$TAG" in ''|*[!0-9A-Za-z._-]*) TAG="" ;; esac
+    ;;
+esac
+if [ -n "$TAG" ]; then FETCH_URL="https://github.com/$REPO_PATH/releases/download/$TAG"; else FETCH_URL="$BASE_URL"; fi
 {
-  echo "Fetching the latest release from $BASE_URL"
-  curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz" "$BASE_URL/venvy.tar.gz" \
-    && curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz.sha256" "$BASE_URL/venvy.tar.gz.sha256" \
+  echo "Fetching ${TAG:-the latest release} from $FETCH_URL"
+  curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz" "$FETCH_URL/venvy.tar.gz" \
+    && curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz.sha256" "$FETCH_URL/venvy.tar.gz.sha256" \
     && ( cd "$WORK" && sha256sum -c --status venvy.tar.gz.sha256 ) \
     && tar -xzf "$WORK/venvy.tar.gz" -C "$WORK" install.sh \
-    && VENVY_BASE_URL="$BASE_URL" bash "$WORK/install.sh"
+    && if [ -n "$TAG" ]; then bash "$WORK/install.sh" --version "$TAG"; else VENVY_BASE_URL="$BASE_URL" bash "$WORK/install.sh"; fi
 } >> "$LOG" 2>&1
 rc=$?
 [ "$rc" -eq 0 ] || echo "The update failed (exit code $rc). Venvy keeps running the version it had." >> "$LOG"

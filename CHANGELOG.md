@@ -5,6 +5,11 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.5.4
+
+- A new release shows up at once: Venvy asks GitHub which release is the latest instead of following its download link, which kept pointing at the previous release for a few minutes after each new one.
+- The update itself fetches that exact release by name, so it cannot install the previous one by mistake.
+
 ## v4.5.3
 
 - What's new showed an older release's notes as new: the notes were cached for an hour, and Check only refreshed the version. They now come from the release on offer and are fetched again when a newer one appears.
