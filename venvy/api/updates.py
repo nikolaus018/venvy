@@ -1,4 +1,6 @@
 """Updating Venvy from the UI (admin only). See venvy/updates.py."""
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from venvy import updates
@@ -25,7 +27,7 @@ async def update_info(refresh: bool = False, _: User = Depends(check_admin)):
         "checked_at": updates.last_checked(),
         "supported": updates.unsupported_reason() is None,
         "unsupported_reason": updates.unsupported_reason(),
-        **updates.state(),
+        **await asyncio.to_thread(updates.state),   # may ask systemctl: off the event loop
     }
 
 

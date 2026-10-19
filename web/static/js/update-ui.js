@@ -5,6 +5,7 @@
 
         let _updateInfo = null;
         let _updateWatch = null;
+        let _updateFrom = null;     // the version an update under way started from
 
         async function loadUpdateCard(refresh = false) {
             const sub = $id('sys-update-card-sub'), btn = $id('sys-update-btn'), check = $id('sys-update-check');
@@ -14,13 +15,14 @@
             if (!r.ok) { sub.textContent = r.error; btn.classList.add('hidden'); return; }
             const d = _updateInfo = r.data;
             $id('sys-update-card-title').textContent = `Venvy ${d.current}`;
+            const underway = d.state === 'running' || d.state === 'requested';
             let text;
-            if (d.state === 'running' || d.state === 'requested') text = 'An update is under way…';
+            if (underway) text = 'An update is under way…';
             else if (d.update_available) text = `${d.latest} is available`;
             else if (d.check_error) text = d.check_error;
             else if (d.latest) text = 'Up to date';
-            if (d.checked_at && d.state !== 'running' && d.state !== 'requested') text += ` · checked ${fmtAgo(d.checked_at)}`;
             else text = 'Not checked yet';
+            if (d.checked_at && !underway) text += ` · checked ${fmtAgo(d.checked_at)}`;
             if (d.state === 'failed' && !d.update_available) text += ' · the last update failed';
             sub.textContent = text;
             const notes = $id('sys-update-notes');
@@ -28,10 +30,10 @@
             notes.textContent = d.update_available ? "What's new" : 'Release notes';
             sub.title = d.supported ? '' : (d.unsupported_reason || '');
             btn.classList.toggle('hidden', !(d.update_available || d.state === 'failed'));
-            btn.disabled = !d.supported || d.state === 'running' || d.state === 'requested';
+            btn.disabled = !d.supported || underway;
             btn.title = d.supported ? '' : d.unsupported_reason;
             btn.textContent = d.update_available ? `Update to ${d.latest}` : 'Details';
-            if (d.state === 'running' || d.state === 'requested') _watchUpdate();
+            if (underway) _watchUpdate();
         }
 
         async function onUpdateButton() {
@@ -50,6 +52,7 @@
             _showUpdateModal();
             _paintUpdate({ ...d, state: 'requested', log: [] }, null);
             _watchUpdate();
+            loadUpdateCard();
         }
 
         function _showUpdateModal() {
@@ -65,12 +68,12 @@
         function _paintUpdate(d, note) {
             const status = $id('upd-status');
             if (!status) return;
-            const from = _updateInfo?.current;
+            const from = _updateFrom || _updateInfo?.current;
             let text;
             if (note) text = note;
             else if (d.state === 'requested') text = 'Starting the update…';
+            else if (d.state === 'running' && from && d.current && d.current !== from) text = `Venvy ${d.current} is up; finishing the update…`;
             else if (d.state === 'running') text = 'Downloading, checking and installing. Venvy restarts at the end — this page waits for it.';
-            else if (d.state === 'ok' && from && d.current !== from) text = `Done: Venvy ${d.current} is running.`;
             else if (d.state === 'ok') text = `Done: Venvy ${d.current} is running.`;
             else if (d.state === 'failed') text = `The update failed. Venvy ${d.current} is still running — the log below says why.`;
             else text = '';
@@ -84,21 +87,19 @@
 
         function _watchUpdate() {
             if (_updateWatch) return;
-            const startedFrom = _updateInfo?.current;
-            let away = false;
+            // Kept across the restart: the new Venvy reports "running" until update.sh is done.
+            const startedFrom = _updateFrom = _updateFrom || _updateInfo?.current;
             _updateWatch = setInterval(async () => {
                 const r = await apiJson('GET', '/system/update');
                 if (!r.ok) {
                     // Expected for a while: the installer has stopped Venvy to switch it over.
-                    away = true;
                     _paintUpdate({ state: 'running', log: [] }, 'Venvy is restarting with the new version…');
                     return;
                 }
                 const d = r.data;
                 _paintUpdate(d, null);
-                const finished = d.state === 'ok' || d.state === 'failed';
-                if (finished || (away && d.current !== startedFrom)) {
-                    clearInterval(_updateWatch); _updateWatch = null;
+                if (d.state === 'ok' || d.state === 'failed') {
+                    clearInterval(_updateWatch); _updateWatch = null; _updateFrom = null;
                     _updateInfo = { ..._updateInfo, ...d, current: startedFrom };
                     _paintUpdate(d, null);
                     if (d.state === 'ok' && d.current !== startedFrom) showToast(`Venvy ${d.current} is running — reload to use it.`, 'success', 9000);

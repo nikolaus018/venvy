@@ -5,6 +5,15 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.5.6
+
+- After an update, the Updating window offers "Reload Venvy" again. It used to stop following the update as soon as the new version answered, while the update was still finishing, and lost track of the version it started from.
+- The Venvy card shows "An update is under way…" during an update instead of "Not checked yet".
+- An update that was asked for but never started (the server's update unit not running) shows as failed, with what to check, instead of waiting for good; Update asks again.
+- An update from the UI keeps installing from the fork or mirror Venvy was installed from.
+- When the release notes cannot be fetched, What's new tries again next time instead of an hour later.
+- v4.5 and v4.5.0 count as the same version.
+
 ## v4.5.5
 
 - An update from the UI could stay "running" for good: the installer rewrote the update script while that script was running it, and the old copy went astray. The script is now replaced, never rewritten, and is read whole before it runs.

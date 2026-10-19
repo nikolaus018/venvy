@@ -38,6 +38,7 @@ PATH_UNIT = Path("/etc/systemd/system/venvy-update.path")
 RELEASE_URL = os.getenv("VENVY_RELEASE_URL", "").rstrip("/")
 
 STALE_SEC = 45 * 60            # a "running" update older than this was cut short
+REQUEST_STALE_SEC = 120        # a request the root side has not picked up by then never will be
 CHECK_TTL_SEC = 3600.0
 _VERSION_RE = re.compile(r"v?\d+(\.\d+){1,3}([.\-][0-9A-Za-z.\-]+)?")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -63,7 +64,10 @@ def _order(version: str) -> tuple:
     m = re.match(r"v?(\d+(?:\.\d+)*)(.*)", version or "")
     if not m:
         return ((), 0, ())
-    numbers = tuple(int(x) for x in m.group(1).split("."))
+    numbers = [int(x) for x in m.group(1).split(".")]
+    while len(numbers) > 1 and numbers[-1] == 0:      # v4.5 == v4.5.0
+        numbers.pop()
+    numbers = tuple(numbers)
     suffix = m.group(2).lstrip(".-")
     parts = tuple((0, int(t), "") if t.isdigit() else (1, 0, t) for t in re.findall(r"\d+|[A-Za-z]+", suffix))
     return (numbers, 0 if suffix else 1, parts)
@@ -192,7 +196,9 @@ async def release_notes(current: str, latest: Optional[str], force: bool = False
                             sections = parse_changelog(raw.decode(errors="replace"))
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 error = f"Could not reach the release server: {exc.__class__.__name__}"
-            _notes_cache.update(at=time.monotonic(), sections=sections, error=error, **{"for": latest})
+            # A failure is not kept for an hour: the next look tries again.
+            _notes_cache.update(at=0.0 if error else time.monotonic(), sections=sections, error=error,
+                                **{"for": latest})
     sections = _notes_cache["sections"] or []
     newer = [sec for sec in sections if is_newer(sec["version"], current)]
     if newer:
@@ -237,6 +243,14 @@ def _update_unit_inactive() -> bool:
     return out in ("inactive", "failed")
 
 
+def _request_age() -> Optional[float]:
+    """Seconds since the update was asked for, or None when no request is waiting."""
+    try:
+        return time.time() - REQUEST_FILE.stat().st_mtime
+    except OSError:
+        return None
+
+
 def state() -> dict:
     """How the last (or current) update went, as update.sh reports it."""
     st = _read_status()
@@ -248,11 +262,16 @@ def state() -> dict:
             age = 0
         if age > STALE_SEC or _update_unit_inactive():
             state_name = "failed"          # cut short (a reboot, a crash): do not block the next one
-    return {
-        "state": "requested" if REQUEST_FILE.exists() and state_name != "running" else state_name,
-        "started": st.get("started"), "finished": st.get("finished"),
-        "log": _log_tail() if state_name else [],
-    }
+    log = _log_tail() if state_name else []
+    requested = _request_age() if state_name != "running" else None
+    if requested is not None:
+        if requested <= REQUEST_STALE_SEC:
+            return {"state": "requested", "started": None, "finished": None, "log": []}
+        # update.sh removes the request first thing; still here, nothing picked it up.
+        state_name = "failed"
+        log = log + ["The update was asked for but never started: the root side did not pick it up.",
+                     "Check it on the server:  systemctl status venvy-update.path venvy-update.service"]
+    return {"state": state_name, "started": st.get("started"), "finished": st.get("finished"), "log": log}
 
 
 def busy() -> bool:
@@ -261,5 +280,8 @@ def busy() -> bool:
 
 def request() -> None:
     """Ask the root side for an update. Raises FileExistsError if one is already asked for."""
+    age = _request_age()
+    if age is not None and age > REQUEST_STALE_SEC:
+        REQUEST_FILE.unlink(missing_ok=True)    # never picked up: ask again
     fd = os.open(REQUEST_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.close(fd)

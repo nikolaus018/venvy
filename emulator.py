@@ -1605,21 +1605,31 @@ def delete_alert(rule_id: int, request: Request):
     FAKE_ALERTS[:] = [r for r in FAKE_ALERTS if r["id"] != rule_id]
     return {"ok": True}
 
-# Updating Venvy: a newer release is "available"; an update runs for a few seconds
-# and then reports the new version, as the real one does after its restart.
-FAKE_UPDATE = {"current": "v4.4.2", "latest": "v4.5.0", "state": None, "started_at": None}
+# Updating Venvy: a newer release is "available". An update goes as the real one does:
+# running; Venvy away while the installer restarts it; back as the new version while
+# update.sh still finishes; then ok.
+FAKE_UPDATE = {"current": "v4.4.2", "latest": "v4.5.0", "state": None, "started_at": None, "checked": time.time() - 180}
 
 @app.get("/api/system/update")
 def get_update(request: Request, refresh: bool = False):
     _check_auth(request)
     u = FAKE_UPDATE
-    if u["state"] == "running" and time.time() - u["started_at"] > 6:
-        u.update(state="ok", current=u["latest"])
-    log = [] if not u["state"] else ["Fetching the latest release from https://github.com/nikolaus018/venvy/releases/latest/download",
-                                     "[venvy] Installing Venvy (latest) — data in /var/lib/venvy, service user venvy",
+    if refresh:
+        u["checked"] = time.time()
+    if u["state"] == "running":
+        took = time.time() - u["started_at"]
+        if 4 < took < 7:
+            raise HTTPException(503, "Venvy is restarting.")
+        if took >= 7:
+            u["current"] = u["latest"]
+        if took > 10:
+            u["state"] = "ok"
+    log = [] if not u["state"] else ["Fetching v4.5.0 from https://github.com/nikolaus018/venvy/releases/download/v4.5.0",
+                                     "[venvy] Installing Venvy (v4.5.0) — data in /var/lib/venvy, service user venvy",
                                      "[venvy] Building the Python environment for v4.5.0..."] + (["[venvy] Venvy v4.5.0 is running."] if u["state"] == "ok" else [])
+    checked = datetime.datetime.fromtimestamp(u["checked"], datetime.timezone.utc).isoformat()
     return {"current": u["current"], "latest": u["latest"], "update_available": u["current"] != u["latest"],
-            "check_error": None, "checked_at": _iso(-120), "supported": True, "unsupported_reason": None, "state": u["state"],
+            "check_error": None, "checked_at": checked, "supported": True, "unsupported_reason": None, "state": u["state"],
             "started": _iso() if u["state"] else None, "finished": None, "log": log}
 
 @app.get("/api/system/update/notes")

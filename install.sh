@@ -165,8 +165,9 @@ else
   RUN_USER="venvy"; RUN_GROUP="venvy"
 fi
 
-# Where "the latest release" lives: what an update from the UI installs.
-LATEST_URL="${VENVY_BASE_URL:-https://github.com/$REPO/releases/latest/download}"
+# Where "the latest release" lives: what an update from the UI installs. update.sh
+# passes it on, so an update fetched by tag still follows the same fork or mirror.
+LATEST_URL="${VENVY_LATEST_URL:-${VENVY_BASE_URL:-https://github.com/$REPO/releases/latest/download}}"
 if [ "$VERSION" = "latest" ]; then
   BASE_URL="${VENVY_BASE_URL:-https://github.com/$REPO/releases/latest/download}"
 else
@@ -475,7 +476,7 @@ if [ -n "$TAG" ]; then FETCH_URL="https://github.com/$REPO_PATH/releases/downloa
     && curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz.sha256" "$FETCH_URL/venvy.tar.gz.sha256" \
     && ( cd "$WORK" && sha256sum -c --status venvy.tar.gz.sha256 ) \
     && tar -xzf "$WORK/venvy.tar.gz" -C "$WORK" install.sh \
-    && if [ -n "$TAG" ]; then bash "$WORK/install.sh" --version "$TAG"; else VENVY_BASE_URL="$BASE_URL" bash "$WORK/install.sh"; fi
+    && VENVY_LATEST_URL="$BASE_URL" VENVY_BASE_URL="$FETCH_URL" bash "$WORK/install.sh" --version "${TAG:-latest}"
 } >> "$LOG" 2>&1
 rc=$?
 [ "$rc" -eq 0 ] || echo "The update failed (exit code $rc). Venvy keeps running the version it had." >> "$LOG"
