@@ -12,6 +12,7 @@ stops without one.
 - The terminal no longer claims to be "JAILED" and unable to reach the host. It now says ISOLATED when the shell runs as the app's own user, and SHARED USER (in amber) when it runs as Venvy's, with what that means.
 - Logs on a phone: the filter has a row of its own instead of two characters' room beside the buttons, and the clear button is no longer cut off.
 - Bigger tap targets for "Open Menu" and System → Refresh on a phone.
+- When an app had crashed, the next app list sent it without its id, name or status, which broke the dashboard until the following refresh.
 - File names in the backup panel are escaped, and a push webhook with a garbled signature header answers 401 instead of 500.
 
 ## v4.6.1

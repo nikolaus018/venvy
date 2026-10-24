@@ -13,7 +13,7 @@ R="$(cd .. && pwd)"; PYB="${PYTHON:-python3}"; mkdir -p .out; fail=0
 run() { name="$1"; shift; if "$@" > ".out/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (see tests/.out/$name.log)"; fail=1; fi; }
 SMOKE_EXPECT_SHUTDOWN_LOG=1 run smoke "$PYB" smoke.py "$R"
 for c in double_start restart_storm stop_crashloop shutdown_logs; do run "lifecycle_$c" "$PYB" t_lifecycle.py "$R" "$c"; done
-for c in stuck_status totp_nonascii settings_secret key_perms; do run "misc_$c" "$PYB" t_misc.py "$R" "$c"; done
+for c in stuck_status totp_nonascii settings_secret key_perms crashed_app_listing; do run "misc_$c" "$PYB" t_misc.py "$R" "$c"; done
 NTERM=30 run terminal_many "$PYB" t_misc.py "$R" terminal_db
 run terminal_session "$PYB" t_term2.py "$R"
 run restore_running_app "$PYB" t_restore.py "$R"

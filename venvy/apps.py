@@ -3,6 +3,7 @@ import datetime
 import re
 
 from fastapi import HTTPException
+from sqlalchemy import inspect as sa_inspect
 
 from venvy import monitor
 from venvy.crypto import _try_decrypt_secret
@@ -37,6 +38,12 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
     keys, etc. for the hosted app). reveal_secrets=False redacts it instead
     of decrypting, for callers where the requester's role shouldn't see
     plaintext env vars (e.g. a read-only viewer browsing the app list)."""
+    # A commit expires the row, and model_dump() reads the instance's dict
+    # without reloading: after list_apps() marked a crashed app stopped, the
+    # app came back with no id, name or status at all.
+    state = sa_inspect(app_row)
+    if state.expired_attributes and state.session is not None:
+        state.session.refresh(app_row)
     d = app_row.model_dump()
     # Never leave the server: these are credentials for the repository and the push hook.
     d["git_configured"] = bool(d.get("git_url"))

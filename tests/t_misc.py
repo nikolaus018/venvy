@@ -131,4 +131,26 @@ if case == "key_perms":
     print(r.stdout.strip() or r.stderr[-800:])
     done(r.stdout.strip() == "0o600 True")
 
+if case == "crashed_app_listing":
+    # GET /api/apps marks an app whose process is gone as stopped and commits;
+    # the expired row used to serialize without its id, name or status.
+    import subprocess
+    data = tempfile.mkdtemp(prefix="venvy-t-")
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]);"
+        "from sqlmodel import Session, select;"
+        "from venvy.db import create_db_and_tables, engine;"
+        "from venvy.models import App, User;"
+        "from venvy.api.apps import list_apps;"
+        "create_db_and_tables();"
+        "s = Session(engine); u = User(username='a', password_hash='x', role='admin'); s.add(u); s.commit(); s.refresh(u);"
+        "s.add(App(user_id=u.id, name='dead', slug='dead', app_dir='/nonexistent', venv_path='/nonexistent/venv',"
+        " entrypoint='main.py', runtime='python', status='running', pid=2**22 + 12345)); s.commit(); s.close();"
+        "s = Session(engine); out = list_apps(session=s, user=s.exec(select(User)).first());"
+        "print(out[0].get('id'), out[0].get('name'), out[0].get('status'))"
+    )
+    r = subprocess.run([sys.executable, "-c", code, repo], cwd=data, capture_output=True, text=True)
+    print(r.stdout.strip() or r.stderr[-800:])
+    done(r.stdout.strip().endswith("1 dead stopped"))
+
 raise SystemExit("unknown case")
