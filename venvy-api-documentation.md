@@ -32,7 +32,7 @@ Venvy uses **server-side sessions**. Every authenticated request needs **two** s
 
 | Secret | Where it lives | Purpose |
 |---|---|---|
-| `session` cookie | `HttpOnly`, `SameSite=Strict`, `Secure` (if `SESSION_COOKIE_SECURE=1`), 30-day max-age | Identifies the session |
+| `session` cookie | `HttpOnly`, `SameSite=Strict`, `Secure` when the request came over HTTPS (directly, or through the tunnel: `X-Forwarded-Proto: https` from a trusted proxy) or `SESSION_COOKIE_SECURE=1`, 30-day max-age | Identifies the session |
 | `X-Venvy-Key` header | returned as `auth_key` by login/setup; the web UI keeps it in `localStorage` | Proves the request comes from the Venvy UI's own origin |
 | `csrf_token` cookie | `SameSite=Lax`, **not** HttpOnly, `Secure` if configured | Double-submit CSRF token, auto-issued on first response |
 
@@ -45,6 +45,8 @@ Both secrets are stored only as SHA-256 hashes in `data.db`. A session is valid 
 ### 2.2 First-run setup
 
 The server has no users on first boot. `GET /api/auth/status` reports `user_exists: false` until the initial admin is created via `POST /api/auth/setup`. Only one account may be created this way — the endpoint returns `400` on every call thereafter.
+
+Setup also needs a one-time **setup code**, so that whoever reaches a fresh install first can't claim it. While no user exists the server keeps it in `.setup-code` in the data directory (mode `0600`) and logs it at startup (`journalctl -u venvy`); `install.sh` prints it at the end of a fresh install. Dashes, spaces and case don't matter. The file is removed once the admin exists.
 
 ### 2.3 Login flow
 
@@ -184,9 +186,9 @@ Unauthenticated. Reports instance/session state.
 ```
 
 #### `POST /api/auth/setup`
-One-time only — creates the first (admin) account and logs it in (response includes `auth_key`, see §2.1). `400` if any user already exists.
+One-time only — creates the first (admin) account and logs it in (response includes `auth_key`, see §2.1). `400` if any user already exists · `403` wrong or missing setup code (see §2.2; wrong codes count towards the login lockout, `429`).
 
-**Body:** `{ "username": "string", "password": "string", "role"?: "string" }` (role is ignored — always `admin`)
+**Body:** `{ "username": "string", "password": "string", "setup_code": "string" }`
 **Password policy:** ≥ 8 characters, must contain at least one letter and one digit.
 
 #### `POST /api/auth/login`
@@ -764,7 +766,8 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 - **Locked out:** from the data directory, as the service user, `python main.py --reset-password USERNAME` and `python main.py --disable-2fa USERNAME` change an account directly and sign it out everywhere. For an installed service: `cd /var/lib/venvy && sudo -u venvy /opt/venvy/current/.venv/bin/python /opt/venvy/current/main.py --disable-2fa admin` (drop `-u venvy` in `--app-users` mode).
 - **PID reuse:** Venvy records each app process's start time next to its PID and never signals a process whose start time differs (e.g. after a reboot the PID now belongs to something else).
 - **Password hashing:** scrypt (`n=16384, r=8, p=1`); legacy PBKDF2-HMAC-SHA256 hashes are still verifiable for backward compatibility.
-- **Security headers:** every response includes `X-Content-Type-Options`, `X-Frame-Options: DENY`, a restrictive `Content-Security-Policy`, and related hardening headers; with `SESSION_COOKIE_SECURE=1` also `Strict-Transport-Security`.
+- **Security headers:** every response includes `X-Content-Type-Options`, `X-Frame-Options: DENY`, a restrictive `Content-Security-Policy`, and related hardening headers; responses to HTTPS requests (see the `session` cookie in §2.1) also `Strict-Transport-Security`. The CSP allows no inline script: the UI's markup names its handlers in `data-on-*` attributes (`web/static/js/head/actions.js`), which can only call the UI's own functions. WebSockets may only go back to the same host.
+- **No API browser:** FastAPI's `/docs`, `/redoc` and `/openapi.json` are switched off; this document is the API reference.
 
 ---
 

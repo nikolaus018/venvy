@@ -55,7 +55,7 @@ with server(repo, 55010) as (base, data, srv):
         check("save writes the file", got.endswith("# edited in ui\n") and not pg.is_visible("#editor-dirty-indicator"))
         pg.evaluate("promptFileOp('create_file')"); pg.fill("#file-name-input", "notes.txt"); pg.click("#file-name-confirm-btn"); pg.wait_for_timeout(900)
         check("create file", pg.locator("#file-tree .file-row[data-name='notes.txt']").count() == 1)
-        pg.set_input_files("input[type=file][onchange*='uploadFile']", {"name": "up.txt", "mimeType": "text/plain", "buffer": b"uploaded"}) if pg.locator("input[type=file][onchange*='uploadFile']").count() else pg.evaluate("0")
+        pg.set_input_files("input[type=file][data-on-change*='uploadFile']", {"name": "up.txt", "mimeType": "text/plain", "buffer": b"uploaded"}) if pg.locator("input[type=file][data-on-change*='uploadFile']").count() else pg.evaluate("0")
         pg.wait_for_timeout(1500)
         check("upload via file input", cl.req("GET", f"/api/apps/{a}/files/download", params={"path": "up.txt"}).text == "uploaded")
 
@@ -164,5 +164,24 @@ with server(repo, 55010) as (base, data, srv):
         failed = [f for f in failed if "/api/auth/login" not in f]
         check("no uncaught script errors", not errors, str(errors[:5]))
         check("no failed requests", not failed, str(failed[:5]))
+        # The CSP refuses inline script, and data-on-* only calls Venvy's own functions.
+        errors.clear()
+        pg.evaluate("""() => {
+            window.__ran = [];
+            window.__mark = function __mark(x) { window.__ran.push(x); };
+            document.body.insertAdjacentHTML('beforeend',
+                '<button id="t-inline" onclick="window.__ran.push(\\'inline\\')">i</button>' +
+                '<button id="t-native" data-on-click="alert(\\'x\\')">n</button>' +
+                '<input id="t-enter" data-on-enter="__mark(\\'enter\\')" data-on-click="__mark(this.id); __mark(\\'\\\\x41\\')">');
+        }""")
+        pg.wait_for_timeout(100)
+        pg.evaluate("""() => {      // the sign-in screen covers the page by now: no pointer clicks
+            for (const id of ['t-inline', 't-native', 't-enter']) document.getElementById(id).click();
+            for (const key of ['a', 'Enter']) document.getElementById('t-enter').dispatchEvent(new KeyboardEvent('keydown', { key }));
+        }""")
+        pg.wait_for_timeout(300)
+        check("injected inline handler does not run", "inline" not in pg.evaluate("window.__ran"))
+        check("data-on-* runs Venvy functions with parsed args", pg.evaluate("window.__ran") == ["t-enter", "A", "enter"], str(pg.evaluate("window.__ran")))
+        check("data-on-* refuses browser built-ins", any("not one of Venvy's functions" in e for e in errors), str(errors[:5]))
         br.close()
 print("FAILED" if fails else "ALL OK", fails); sys.exit(1 if fails else 0)

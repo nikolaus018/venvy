@@ -5,9 +5,12 @@ key sent as X-Venvy-Key), roles, one-time download tickets, the login and
 mutation rate limiters, and working out which client a request came from.
 """
 import base64
+import contextlib
 import datetime
 import hashlib
 import hmac
+import logging
+import os
 import re
 import secrets
 import struct
@@ -25,6 +28,7 @@ from venvy.config import (
     PROXY_SECRET,
     SESSION_COOKIE_SECURE,
     SESSION_TTL_SECONDS,
+    SETUP_CODE_FILE,
     TRUSTED_PROXY_IPS,
     _make_tz_aware,
     utc_now,
@@ -102,13 +106,36 @@ def _resolve_client_ip(request: Union[Request, HTTPConnection]) -> str:
     IP it liked and walk past the IP allowlist and the login lockout.
     """
     peer = (request.client.host if request.client else "") or ""
-    if peer in TRUSTED_PROXY_IPS:
+    if _from_trusted_proxy(request):
         cf_ip = (request.headers.get("cf-connecting-ip", "") or "").strip()
-        if cf_ip and (not PROXY_SECRET or secrets.compare_digest(
-                (request.headers.get("x-venvy-proxy-secret", "") or "").encode("utf-8"),
-                PROXY_SECRET.encode("utf-8"))):
+        if cf_ip:
             return cf_ip
     return peer or "unknown"
+
+
+def _from_trusted_proxy(request: Union[Request, HTTPConnection]) -> bool:
+    """True when the TCP peer is a trusted proxy (and, with PROXY_SECRET set,
+    the request carries it): only then are its forwarding headers believed."""
+    peer = (request.client.host if request.client else "") or ""
+    if peer not in TRUSTED_PROXY_IPS:
+        return False
+    return not PROXY_SECRET or secrets.compare_digest(
+        (request.headers.get("x-venvy-proxy-secret", "") or "").encode("utf-8"),
+        PROXY_SECRET.encode("utf-8"))
+
+
+def request_is_https(request: Union[Request, HTTPConnection]) -> bool:
+    """Whether the browser reached Venvy over HTTPS — directly, or through
+    the tunnel, where cloudflared talks plain HTTP to Venvy and says so in
+    X-Forwarded-Proto. Decides the Secure flag on cookies and HSTS, so a
+    tunnel-only setup gets both without the operator having to remember
+    SESSION_COOKIE_SECURE=1, while http://<lan-ip>:<port> keeps working."""
+    if SESSION_COOKIE_SECURE or request.url.scheme in ("https", "wss"):
+        return True
+    if not _from_trusted_proxy(request):
+        return False
+    proto = (request.headers.get("x-forwarded-proto", "") or "").split(",")[0].strip().lower()
+    return proto == "https" or '"https"' in (request.headers.get("cf-visitor", "") or "")
 
 
 def check_ip_allowlist(request: HTTPConnection) -> None:
@@ -168,7 +195,7 @@ def _hash_token(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _new_session(session: Session, response: Response, user: User) -> str:
+def _new_session(session: Session, request: Request, response: Response, user: User) -> str:
     """Create a session for *user*: set the HttpOnly cookie and return the
     auth key the client must send back as X-Venvy-Key on every request.
 
@@ -188,9 +215,64 @@ def _new_session(session: Session, response: Response, user: User) -> str:
     session.commit()
     response.set_cookie(
         "session", token, httponly=True, path="/",
-        max_age=SESSION_TTL_SECONDS, samesite="strict", secure=SESSION_COOKIE_SECURE,
+        max_age=SESSION_TTL_SECONDS, samesite="strict", secure=request_is_https(request),
     )
     return auth_key
+
+
+# ---------------------------------------------------------------------------
+# First-run setup code
+# ---------------------------------------------------------------------------
+# Until the first admin exists, POST /api/auth/setup hands out the whole host
+# to whoever calls it first — and a fresh install is often reachable (LAN,
+# or a tunnel set up before anyone opened the page) before its owner gets to
+# it. So setup also wants a one-time code that only someone with access to
+# the machine can read: it is written to DATA_DIR/.setup-code (0600), logged
+# at startup, and printed by install.sh.
+
+def _new_setup_code() -> str:
+    raw = secrets.token_hex(8)
+    return "-".join(raw[i:i + 4] for i in range(0, 16, 4))
+
+
+def _normalize_setup_code(code: str) -> str:
+    return "".join(c for c in (code or "").lower() if c in "0123456789abcdef")
+
+
+def ensure_setup_code(session: Session) -> Optional[str]:
+    """The current setup code, created (and logged) if there is none yet —
+    or None once an admin exists, in which case any leftover code is removed."""
+    if session.exec(select(User)).first() is not None:
+        clear_setup_code()
+        return None
+    try:
+        code = SETUP_CODE_FILE.read_text().strip()
+        if len(_normalize_setup_code(code)) == 16:
+            return code
+    except OSError:
+        pass
+    code = _new_setup_code()
+    tmp = SETUP_CODE_FILE.with_name(f"{SETUP_CODE_FILE.name}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(code + "\n")
+    os.replace(tmp, SETUP_CODE_FILE)
+    logging.warning(f"No admin account yet. To create it, open Venvy and enter the setup code "
+                    f"{code} (also in {SETUP_CODE_FILE}).")
+    return code
+
+
+def check_setup_code(session: Session, supplied: Optional[str]) -> bool:
+    code = ensure_setup_code(session)
+    if not code:
+        return False
+    return secrets.compare_digest(_normalize_setup_code(code).encode("ascii"),
+                                  _normalize_setup_code(supplied or "").encode("ascii"))
+
+
+def clear_setup_code() -> None:
+    with contextlib.suppress(FileNotFoundError):
+        SETUP_CODE_FILE.unlink()
 
 
 def _load_session(session: Session, cookie_token: Optional[str]) -> Optional[UserSession]:

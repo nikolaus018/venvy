@@ -73,7 +73,7 @@
                 ${fieldHtml('job-timeout', 'Time limit (seconds)', { type: 'number', value: String(j?.timeout || 600), attrs: 'min="5" max="86400"' })}
                 <label class="flex items-center gap-2 text-sm cursor-pointer select-none" style="color:var(--text2)"><input type="checkbox" id="job-enabled" class="rounded" ${!j || j.enabled ? 'checked' : ''}> Enabled</label>
                 <div class="flex gap-3 pt-1">
-                    <button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" onclick="closeModal('job-modal')">Cancel</button>
+                    <button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" data-on-click="closeModal('job-modal')">Cancel</button>
                     <button type="button" id="job-save" class="btn-primary flex-1 py-2.5 text-sm rounded-xl">${j ? 'Save' : 'Add job'}</button>
                 </div></div>`;
             $id('job-preset').addEventListener('change', () => $id('job-cron-row').classList.toggle('hidden', $id('job-preset').value !== 'custom'));

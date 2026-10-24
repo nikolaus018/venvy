@@ -14,7 +14,7 @@
                 <p class="text-sm font-semibold" style="color:var(--text)">Install Venvy</p>
                 <p class="text-xs" style="color:var(--text3)">Add to home screen for the best experience</p>
             </div>
-            <button onclick="dismissPwaBanner()" class="p-1.5 rounded-lg transition" style="color:var(--text3)">
+            <button data-on-click="dismissPwaBanner()" class="p-1.5 rounded-lg transition" style="color:var(--text3)">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                     <line x1="18" y1="6" x2="6" y2="18" />
                     <line x1="6" y1="6" x2="18" y2="18" />
@@ -22,7 +22,7 @@
             </button>
         </div>
         <div class="px-4 pb-3.5">
-            <button onclick="triggerPwaInstall()"
+            <button data-on-click="triggerPwaInstall()"
                 class="w-full py-2.5 text-sm font-bold rounded-xl transition active:scale-95"
                 style="background:var(--accent);color:white">Install</button>
         </div>

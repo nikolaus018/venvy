@@ -2,14 +2,14 @@
             <div id="system-view" class="absolute inset-0 hidden flex flex-col" style="background:var(--bg);">
                 <div class="px-5 py-3 md:py-0 md:h-[60px] shrink-0 flex items-center gap-4 z-10 relative"
                     style="border-bottom:1px solid var(--border);background:var(--surface)">
-                    <button onclick="closeSystemView()" class="md:hidden p-1.5 rounded-lg" style="color:var(--text2)"><i
+                    <button data-on-click="closeSystemView()" class="md:hidden p-1.5 rounded-lg" style="color:var(--text2)"><i
                             data-feather="arrow-left" class="w-4 h-4"></i></button>
                     <div>
                         <h2 class="text-xl font-bold" style="color:var(--text);font-family:'Inter',sans-serif">System
                         </h2>
                         <p class="text-xs mt-0.5" style="color:var(--text3)">Port usage and network overview</p>
                     </div>
-                    <button onclick="loadSystemView(this); loadBackups()"
+                    <button data-on-click="loadSystemView(this); loadBackups()"
                         class="ml-auto flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50"
                         style="color:var(--text3)">
                         <i data-feather="refresh-cw" class="w-3.5 h-3.5"></i> Refresh
@@ -103,7 +103,7 @@
                         <div class="card p-5 hidden" id="sys-history-card">
                             <div class="flex items-center justify-between gap-3 mb-4">
                                 <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)"><i data-feather="activity" class="w-4 h-4"></i> Host usage</h3>
-                                <select id="sys-history-range" class="inp px-2.5 py-1.5 text-xs" onchange="loadHostHistory()">
+                                <select id="sys-history-range" class="inp px-2.5 py-1.5 text-xs" data-on-change="loadHostHistory()">
                                     <option value="60">Last hour</option><option value="360">6 hours</option>
                                     <option value="1440">24 hours</option><option value="10080">7 days</option>
                                 </select>
@@ -117,7 +117,7 @@
 
                         <!-- Operations (admins) -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3 hidden" id="sys-ops-cards">
-                            <button id="sys-audit-card" onclick="openAuditModal()"
+                            <button id="sys-audit-card" data-on-click="openAuditModal()"
                                 class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
                                 <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
                                     style="background:var(--ov);border:1px solid var(--ov-border)">
@@ -128,7 +128,7 @@
                                     <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-audit-card-sub">Who did what</p>
                                 </div>
                             </button>
-                            <button id="sys-notify-card" onclick="openNotifyModal()"
+                            <button id="sys-notify-card" data-on-click="openNotifyModal()"
                                 class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
                                 <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
                                     style="background:var(--ov);border:1px solid var(--ov-border)">
@@ -139,7 +139,7 @@
                                     <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-notify-card-sub">Where to hear about problems</p>
                                 </div>
                             </button>
-                            <button id="sys-schedule-card" onclick="openScheduleModal()"
+                            <button id="sys-schedule-card" data-on-click="openScheduleModal()"
                                 class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
                                 <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
                                     style="background:var(--ov);border:1px solid var(--ov-border)">
@@ -150,7 +150,7 @@
                                     <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-schedule-card-sub">Automatic backups</p>
                                 </div>
                             </button>
-                            <button id="sys-shared-card" onclick="openSharedEnvModal()"
+                            <button id="sys-shared-card" data-on-click="openSharedEnvModal()"
                                 class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
                                 <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
                                     style="background:var(--ov);border:1px solid var(--ov-border)">
@@ -164,7 +164,7 @@
                         </div>
 
                         <!-- Backups -->
-                        <button id="sys-backups-card" onclick="openBackupsModal()"
+                        <button id="sys-backups-card" data-on-click="openBackupsModal()"
                             class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
                             <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
                                 style="background:var(--ov);border:1px solid var(--ov-border)">
@@ -186,10 +186,10 @@
                             </div>
                             <div class="flex-1 min-w-0">
                                 <p class="text-sm font-semibold" id="sys-update-card-title" style="color:var(--text)">Venvy</p>
-                                <p class="text-xs mt-0.5 truncate" style="color:var(--text3)"><span id="sys-update-card-sub">Loading…</span><button type="button" id="sys-update-notes" onclick="openReleaseNotes()" class="hidden ml-1.5 underline" style="color:var(--accent)">What's new</button></p>
+                                <p class="text-xs mt-0.5 truncate" style="color:var(--text3)"><span id="sys-update-card-sub">Loading…</span><button type="button" id="sys-update-notes" data-on-click="openReleaseNotes()" class="hidden ml-1.5 underline" style="color:var(--accent)">What's new</button></p>
                             </div>
-                            <button id="sys-update-check" onclick="loadUpdateCard(true)" class="btn-ghost shrink-0 px-3 py-2 text-xs font-bold rounded-lg">Check</button>
-                            <button id="sys-update-btn" onclick="onUpdateButton()" class="btn-primary shrink-0 px-3 py-2 text-xs font-bold rounded-lg hidden">Update</button>
+                            <button id="sys-update-check" data-on-click="loadUpdateCard(true)" class="btn-ghost shrink-0 px-3 py-2 text-xs font-bold rounded-lg">Check</button>
+                            <button id="sys-update-btn" data-on-click="onUpdateButton()" class="btn-primary shrink-0 px-3 py-2 text-xs font-bold rounded-lg hidden">Update</button>
                         </div>
 
                         <!-- Cloudflare Tunnel (admins only — see openSystemView) -->
@@ -220,7 +220,7 @@
                                 <!-- Setup guide -->
                                 <div class="rounded-xl overflow-hidden"
                                     style="border:1px solid var(--ov-border)">
-                                    <button onclick="toggleCfGuide()" id="cf-guide-toggle"
+                                    <button data-on-click="toggleCfGuide()" id="cf-guide-toggle"
                                         class="w-full flex items-center gap-2.5 px-4 py-3 transition text-left"
                                         style="background:var(--ov-soft)">
                                         <svg class="w-4 h-4 shrink-0" fill="none" stroke="var(--text)"
@@ -347,7 +347,7 @@
                                         <input type="password" id="cf-cred-token" placeholder="Paste your API token…"
                                             autocomplete="off" spellcheck="false"
                                             class="inp w-full px-4 py-2.5 text-xs mono pr-10">
-                                        <button type="button" onclick="toggleCfTokenVis('cf-cred-token','cf-tok-eye')"
+                                        <button type="button" data-on-click="toggleCfTokenVis('cf-cred-token','cf-tok-eye')"
                                             class="absolute right-3 top-1/2 -translate-y-1/2 transition"
                                             style="color:var(--text3)">
                                             <svg id="cf-tok-eye" class="w-4 h-4" fill="none" stroke="currentColor"
@@ -372,9 +372,9 @@
                                     </div>
                                 </div>
                                 <div class="flex gap-3">
-                                    <button onclick="saveCfCreds()" id="cf-creds-save-btn"
+                                    <button data-on-click="saveCfCreds()" id="cf-creds-save-btn"
                                         class="btn-secondary flex-1 py-2.5 text-sm">Save</button>
-                                    <button onclick="testCfCreds()" id="cf-creds-test-btn"
+                                    <button data-on-click="testCfCreds()" id="cf-creds-test-btn"
                                         class="flex-1 btn-ghost py-2.5 text-sm font-semibold flex items-center justify-center gap-2 rounded-xl">
                                         <svg class="w-4 h-4" style="color:var(--text)" fill="none" stroke="currentColor"
                                             viewBox="0 0 24 24" stroke-width="2">

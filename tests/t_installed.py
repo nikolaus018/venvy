@@ -49,7 +49,8 @@ if EXISTING:
     r = cl.req("POST", "/api/auth/login", json={"username": "admin", "password": "hunter2hunter2"})
     check("existing admin can still log in (data survived)", r.status_code == 200, r.text)
 else:
-    r = cl.req("POST", "/api/auth/setup", json={"username": "admin", "password": "hunter2hunter2"})
+    code = open("/var/lib/venvy/.setup-code").read().strip()
+    r = cl.req("POST", "/api/auth/setup", json={"username": "admin", "password": "hunter2hunter2", "setup_code": code})
     check("first-run setup", r.status_code == 200, r.text)
 cl.key = r.json().get("auth_key")
 

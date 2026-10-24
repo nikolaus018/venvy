@@ -61,7 +61,7 @@
                 <p id="upd-status" class="text-sm mb-3" style="color:var(--text2)"></p>
                 <pre id="upd-log" class="mono text-xs p-3 rounded-lg overflow-auto whitespace-pre-wrap break-words hidden"
                     style="background:var(--surface2);border:1px solid var(--border2);color:var(--text2);max-height:22rem"></pre>
-                <div class="flex justify-end mt-4"><button id="upd-reload" class="btn-primary px-4 py-2 text-sm font-bold hidden" onclick="location.reload()">Reload Venvy</button></div>`;
+                <div class="flex justify-end mt-4"><button id="upd-reload" class="btn-primary px-4 py-2 text-sm font-bold hidden" data-on-click="reloadPage()">Reload Venvy</button></div>`;
             openModal('update-modal');
         }
 
@@ -138,5 +138,5 @@
                             ${sec.items.map(it => `<li>${escapeHtml(it)}</li>`).join('')}
                         </ul>
                     </div>`).join('') : (r.data.error ? `<p class="text-xs" style="color:var(--text3)">${escapeHtml(r.data.error)}</p>` : '')}
-                ${d.update_available && d.supported ? `<div class="flex justify-end mt-2"><button class="btn-primary px-4 py-2 text-sm font-bold" onclick="closeModal('notes-modal'); onUpdateButton()">Update to ${escapeHtml(d.latest)}</button></div>` : ''}`;
+                ${d.update_available && d.supported ? `<div class="flex justify-end mt-2"><button class="btn-primary px-4 py-2 text-sm font-bold" data-on-click="closeModal('notes-modal'); onUpdateButton()">Update to ${escapeHtml(d.latest)}</button></div>` : ''}`;
         }

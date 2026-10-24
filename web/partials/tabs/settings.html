@@ -19,7 +19,7 @@
                                     <div>
                                         <label class="block section-label mb-2">Runtime Environment</label>
                                         <select id="setting-runtime" class="inp w-full px-4 py-3 text-sm font-semibold"
-                                            onchange="onRuntimeChange('settings')">
+                                            data-on-change="onRuntimeChange('settings')">
                                             <option value="python">Python 3 (Venv)</option>
                                         </select>
                                     </div>
@@ -60,7 +60,7 @@
                                         Resource Limits
                                     </h3>
                                     <button type="button" id="setting-limits-toggle" role="switch"
-                                        aria-checked="false" aria-label="Limit resources" onclick="toggleResourceLimits()"
+                                        aria-checked="false" aria-label="Limit resources" data-on-click="toggleResourceLimits()"
                                         class="toggle-track shrink-0">
                                         <span class="toggle-knob"></span>
                                     </button>
@@ -87,7 +87,7 @@
                                         </div>
                                         <input type="range" id="setting-memory-limit" class="slider" min="16"
                                             max="8192" step="16" value="512"
-                                            oninput="_updateResourceLimitLabels()">
+                                            data-on-input="_updateResourceLimitLabels()">
                                         <p class="text-xs mt-2" style="color:var(--text3)">Max reflects this host's
                                             total RAM<span id="setting-memory-limit-hint"></span>.</p>
                                     </div>
@@ -98,7 +98,7 @@
                                                 style="color:var(--text)">0.5 cores</span>
                                         </div>
                                         <input type="range" id="setting-cpu-limit" class="slider" min="25" max="800"
-                                            step="25" value="50" oninput="_updateResourceLimitLabels()">
+                                            step="25" value="50" data-on-input="_updateResourceLimitLabels()">
                                         <p class="text-xs mt-2" style="color:var(--text3)">Max reflects this host's
                                             core count<span id="setting-cpu-limit-hint"></span>.</p>
                                     </div>
@@ -111,7 +111,7 @@
                                     <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
                                         <i data-feather="activity" class="w-4 h-4"></i> Usage
                                     </h3>
-                                    <select id="usage-range" class="inp px-2.5 py-1.5 text-xs" onchange="loadUsage()">
+                                    <select id="usage-range" class="inp px-2.5 py-1.5 text-xs" data-on-change="loadUsage()">
                                         <option value="60">Last hour</option>
                                         <option value="360">6 hours</option>
                                         <option value="1440">24 hours</option>
@@ -179,7 +179,7 @@
                                         <label class="block section-label mb-1.5" for="setting-pyver">Python</label>
                                         <select id="setting-pyver" class="inp w-full px-3.5 py-2.5 text-sm"></select>
                                     </div>
-                                    <button onclick="rebuildVenv()" data-requires-operator id="pyenv-btn" class="btn-secondary px-4 py-2.5 text-sm shrink-0">Rebuild</button>
+                                    <button data-on-click="rebuildVenv()" data-requires-operator id="pyenv-btn" class="btn-secondary px-4 py-2.5 text-sm shrink-0">Rebuild</button>
                                 </div>
                             </div>
 
@@ -205,10 +205,10 @@
                                     </div>
                                     <div class="flex items-center gap-1 p-1 rounded-xl"
                                         style="background:var(--surface);border:1px solid var(--border)">
-                                        <button id="open-pref-local" onclick="setOpenUrlPref('local')"
+                                        <button id="open-pref-local" data-on-click="setOpenUrlPref('local')"
                                             class="px-3 py-1.5 text-xs font-bold rounded-lg transition"
                                             style="color:var(--text3)">Local IP</button>
-                                        <button id="open-pref-public" onclick="setOpenUrlPref('public')"
+                                        <button id="open-pref-public" data-on-click="setOpenUrlPref('public')"
                                             class="px-3 py-1.5 text-xs font-bold rounded-lg transition"
                                             style="color:var(--text3)">Public URL</button>
                                     </div>
@@ -228,14 +228,14 @@
                                         <div class="flex justify-between items-center mb-1">
                                             <label class="block section-label">Port Numbers</label>
                                             <button
-                                                onclick="document.getElementById('setting-port').value='';saveSettings()"
+                                                data-on-click="clearValue('setting-port'); saveSettings()"
                                                 class="text-[10px] uppercase font-bold tracking-wider opacity-40 hover:opacity-100 transition-opacity">Clear
                                                 All</button>
                                         </div>
                                         <div class="flex gap-2">
                                             <input type="text" id="setting-port"
                                                 class="inp flex-1 px-4 py-3 mono text-sm" placeholder="e.g. 8000, 8080"
-                                                onblur="saveSettings()">
+                                                data-on-blur="saveSettings()">
                                         </div>
                                         <p class="text-xs leading-relaxed" style="color:var(--text3)">Injected as
                                             <code class="px-1 py-0.5 rounded mono text-[10px]"
@@ -279,7 +279,7 @@
                                             <path stroke-linecap="round" stroke-linejoin="round"
                                                 d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                                         </svg>
-                                        <span>Not configured. <button onclick="openSystemView()"
+                                        <span>Not configured. <button data-on-click="openSystemView()"
                                                 class="underline font-bold">System → Cloudflare Tunnel</button></span>
                                     </div>
                                     <!-- Warning: no port set -->
@@ -301,7 +301,7 @@
                                             <a id="cf-route-url-link" href="#" target="_blank"
                                                 class="flex-1 text-sm mono font-bold hover:underline truncate min-w-0 select-text"
                                                 style="color:var(--text)"></a>
-                                            <button onclick="copyCfRouteUrl()" title="Copy URL"
+                                            <button data-on-click="copyCfRouteUrl()" title="Copy URL"
                                                 class="shrink-0 p-1.5 rounded-lg transition active:scale-95"
                                                 style="color:var(--text)">
                                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
@@ -336,8 +336,8 @@
                                                         placeholder="subdomain (optional)" autocomplete="off"
                                                         spellcheck="false"
                                                         class="flex-1 bg-transparent px-3 py-3 text-sm mono outline-none min-w-0 select-text"
-                                                        style="color:var(--text)" oninput="updateCfHostnamePreview()"
-                                                        onkeydown="if(event.key==='Enter') publishCfRoute()">
+                                                        style="color:var(--text)" data-on-input="updateCfHostnamePreview()"
+                                                        data-on-enter="publishCfRoute()">
                                                 </div>
                                                 <!-- Dot separator -->
                                                 <span class="flex items-center text-sm mono shrink-0 px-1 select-none"
@@ -347,7 +347,7 @@
                                                     <select id="cf-domain-select"
                                                         class="w-full h-full rounded-xl px-3 py-3 text-sm mono outline-none appearance-none cursor-pointer"
                                                         style="background:var(--surface2);border:1px solid var(--border);color:var(--text);transition:border-color 0.15s"
-                                                        onchange="updateCfHostnamePreview()">
+                                                        data-on-change="updateCfHostnamePreview()">
                                                         <option value="" disabled selected style="color:var(--text3)">
                                                             loading domains…</option>
                                                     </select>
@@ -370,7 +370,7 @@
                                         <!-- Button row — mutually exclusive states managed by loadCfRouteStatus() -->
                                         <div class="flex gap-3">
                                             <!-- UNPUBLISHED: single Publish button -->
-                                            <button onclick="publishCfRoute()" id="cf-publish-btn" data-requires-operator
+                                            <button data-on-click="publishCfRoute()" id="cf-publish-btn" data-requires-operator
                                                 class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
                                                 style="display:flex">
                                                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -380,7 +380,7 @@
                                                 Publish
                                             </button>
                                             <!-- PUBLISHED: Republish + Remove side-by-side -->
-                                            <button onclick="publishCfRoute()" id="cf-republish-btn" data-requires-operator
+                                            <button data-on-click="publishCfRoute()" id="cf-republish-btn" data-requires-operator
                                                 class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
                                                 style="display:none">
                                                 <svg class="w-4 h-4" fill="none" stroke="currentColor"
@@ -390,7 +390,7 @@
                                                 </svg>
                                                 Republish
                                             </button>
-                                            <button onclick="unpublishCfRoute()" id="cf-unpublish-btn" data-requires-operator
+                                            <button data-on-click="unpublishCfRoute()" id="cf-unpublish-btn" data-requires-operator
                                                 class="btn-danger py-3 px-5 text-sm items-center justify-center gap-2"
                                                 style="display:none">
                                                 <svg class="w-4 h-4" fill="none" stroke="currentColor"
@@ -416,7 +416,7 @@
                                 </h3>
                                 <p class="text-sm mb-4" style="color:var(--text3)">Download a .zip archive with all
                                     source files for this application.</p>
-                                <button onclick="downloadAppZip()" id="btn-download-zip" data-requires-operator
+                                <button data-on-click="downloadAppZip()" id="btn-download-zip" data-requires-operator
                                     class="btn-secondary w-full py-3 text-sm flex items-center justify-center gap-2">
                                     <i data-feather="archive" class="w-4 h-4"></i> Download Source Code
                                 </button>
@@ -429,7 +429,7 @@
                                 </h3>
                                 <p class="text-sm mb-4" style="color:var(--text3)">A new app with this one's files, settings and variables, and an environment of its own.
                                     Not copied: the port, domain, public route, logs and history.</p>
-                                <button onclick="duplicateApp()" data-requires-operator class="btn-secondary w-full py-3 text-sm">Duplicate application</button>
+                                <button data-on-click="duplicateApp()" data-requires-operator class="btn-secondary w-full py-3 text-sm">Duplicate application</button>
                             </div>
 
                             <!-- Danger zone -->
@@ -439,7 +439,7 @@
                                 </h3>
                                 <p class="text-xs mb-4" style="color:var(--text3)">Permanently delete this application
                                     and all its files.</p>
-                                <button onclick="deleteApp()" data-requires-operator
+                                <button data-on-click="deleteApp()" data-requires-operator
                                     class="btn-danger w-full py-3 rounded-xl text-sm font-medium">Delete
                                     Application</button>
                             </div>

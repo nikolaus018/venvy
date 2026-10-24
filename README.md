@@ -24,7 +24,8 @@ curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install
 ```
 
 That installs the system packages it needs, creates a `venvy` service user, sets up a systemd
-service that starts at boot, and prints the URL. The first visit creates the admin account.
+service that starts at boot, and prints the URL and a one-time setup code. The first visit creates the admin account, with that code
+(it is also in the server log and in `.setup-code` in the data directory).
 
 Run the same command again to update. The new version is downloaded, checksum-verified and
 prepared next to the running one; the database is snapshotted; and if the new version does not

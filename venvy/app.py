@@ -22,12 +22,12 @@ from venvy.config import (
     APPS_BASE_DIR,
     ASSETS_DIR,
     WEB_DIR,
-    SESSION_COOKIE_SECURE,
     utc_now,
     _VENVY_BOOT_TIME,
 )
 from venvy import notify, proxy
 from venvy.audit import set_client_ip
+from venvy.auth import ensure_setup_code, request_is_https
 from venvy.backup import load_operation_state
 from venvy.db import create_db_and_tables, engine
 from venvy.models import App, SystemSetting
@@ -89,6 +89,8 @@ def _rebase_app_paths(app_row: App) -> bool:
 async def lifespan(app: FastAPI):
     create_db_and_tables()
     load_operation_state()
+    with Session(engine) as session:
+        ensure_setup_code(session)
     notify.set_loop(asyncio.get_running_loop())
 
     await _check_python3_venv()
@@ -215,7 +217,9 @@ async def lifespan(app: FastAPI):
     _log_tasks.clear()
 
 
-app = FastAPI(title="Venvy", lifespan=lifespan)
+# No /docs, /redoc or /openapi.json: they would hand anyone who can reach the
+# port a map of every endpoint. The API is described in venvy-api-documentation.md.
+app = FastAPI(title="Venvy", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 app.add_middleware(
     CORSMiddleware,
@@ -227,7 +231,7 @@ app.add_middleware(
 )
 
 
-def _add_security_headers(response) -> None:
+def _add_security_headers(response, https: bool = False) -> None:
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -236,32 +240,47 @@ def _add_security_headers(response) -> None:
     # are best told to keep it off. The CSP below is the real protection.
     response.headers.setdefault("X-XSS-Protection", "0")
     response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
-    if SESSION_COOKIE_SECURE:
-        # Set by the operator once Venvy is only reached over HTTPS: from
-        # then on a browser should not try plain HTTP for this host at all.
+    if https:
+        # Reached over HTTPS (see request_is_https): from now on the browser
+        # should not try plain HTTP for this host at all. Browsers ignore the
+        # header on plain-HTTP answers, so a LAN address is not affected.
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+
+
+_HOST_RE = re.compile(r"\A[A-Za-z0-9.\-]+(?::\d{1,5})?\Z|\A\[[0-9A-Fa-f:.]+\](?::\d{1,5})?\Z")
+
+
+def _content_security_policy(host: str) -> str:
+    # No 'unsafe-inline' for scripts: the UI has no inline script and no
+    # onclick="…" handlers (see web/static/js/head/actions.js), so markup
+    # that slips into a page can't run any. Styles keep it — the Tailwind
+    # runtime writes its CSS into a <style> element, and the markup is full
+    # of style="…"; CSS can't run script.
+    # WebSockets only back to this host (the terminal), not to anywhere:
+    # "ws: wss:" would let a script talk to any server on the internet.
+    sockets = f" ws://{host} wss://{host}" if _HOST_RE.match(host or "") else ""
+    return (
+        "default-src 'self'; "
+        "script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: blob:; "
+        f"connect-src 'self'{sockets} https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "worker-src 'self' blob:; "
+        "manifest-src 'self' blob:; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none';"
+    )
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add conservative security headers to every response."""
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        _add_security_headers(response)
-        response.headers.setdefault(
-            "Content-Security-Policy",
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' "
-            "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
-            "https://cdn.jsdelivr.net; "
-            "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data: blob:; "
-            "connect-src 'self' ws: wss: "
-            "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
-            "worker-src 'self' blob:; "
-            "manifest-src 'self' blob:; "
-            "frame-ancestors 'none';",
-        )
+        _add_security_headers(response, request_is_https(request))
+        response.headers.setdefault("Content-Security-Policy", _content_security_policy(request.headers.get("host", "")))
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)
@@ -280,12 +299,12 @@ class CSRFMiddleware(BaseHTTPMiddleware):
                     csrf_cookie.encode("utf-8"), csrf_header.encode("utf-8")):
                 # This answer never reaches SecurityHeadersMiddleware below.
                 response = JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
-                _add_security_headers(response)
+                _add_security_headers(response, request_is_https(request))
                 return response
         response = await call_next(request)
         if "csrf_token" not in request.cookies:
             token = secrets.token_urlsafe(32)
-            response.set_cookie("csrf_token", token, httponly=False, samesite="lax", path="/", secure=SESSION_COOKIE_SECURE)
+            response.set_cookie("csrf_token", token, httponly=False, samesite="lax", path="/", secure=request_is_https(request))
         return response
 
 app.add_middleware(CSRFMiddleware)

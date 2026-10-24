@@ -356,6 +356,7 @@ def login(payload: LoginReq, response: Response):
 class SetupReq(BaseModel):
     username: str
     password: str
+    setup_code: str = ""
 
 @app.post("/api/auth/setup")
 def auth_setup(payload: SetupReq, response: Response):

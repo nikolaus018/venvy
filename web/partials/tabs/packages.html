@@ -6,8 +6,8 @@
                             <div id="pkg-install-controls" data-requires-operator class="flex gap-3 mb-5 flex-col md:flex-row">
                                 <input type="text" id="pkg-input" placeholder="Package name, e.g. numpy==1.26"
                                     class="inp flex-1 px-4 py-3 text-sm"
-                                    onkeydown="if(event.key==='Enter') installPackage()">
-                                <button onclick="installPackage()" id="pkg-install-btn"
+                                    data-on-enter="installPackage()">
+                                <button data-on-click="installPackage()" id="pkg-install-btn"
                                     class="btn-primary px-8 py-3 text-sm">Install</button>
                             </div>
 
@@ -18,7 +18,7 @@
                                     <p class="text-sm font-semibold" style="color:var(--text)">Install from manifest</p>
                                     <p id="pkg-sync-hint" class="text-xs mt-0.5" style="color:var(--text3)"></p>
                                 </div>
-                                <button onclick="syncPackages()" id="pkg-sync-btn"
+                                <button data-on-click="syncPackages()" id="pkg-sync-btn"
                                     class="shrink-0 text-xs font-bold px-4 py-2 rounded-xl transition active:scale-95"
                                     style="background:var(--surface2);color:var(--text);border:1px solid var(--border2)">Install</button>
                             </div>
@@ -35,7 +35,7 @@
                                         <p class="text-xs mt-0.5" style="color:var(--text3)">Finds imports missing from
                                             your venv</p>
                                     </div>
-                                    <button onclick="scanImports()" id="scan-btn"
+                                    <button data-on-click="scanImports()" id="scan-btn"
                                         class="shrink-0 text-xs font-bold px-4 py-2 rounded-xl transition active:scale-95 flex items-center gap-2"
                                         style="background:var(--surface2);color:var(--text);border:1px solid var(--border2)">
                                         <i data-feather="search" class="w-3.5 h-3.5"></i> Scan
@@ -49,7 +49,7 @@
                                                 style="color:var(--text)"><i data-feather="alert-triangle"
                                                     class="w-3.5 h-3.5"></i> <span id="scan-missing-count"></span>
                                                 missing</span>
-                                            <button onclick="installAllMissing()" id="install-all-btn" data-requires-operator
+                                            <button data-on-click="installAllMissing()" id="install-all-btn" data-requires-operator
                                                 class="btn-secondary text-xs px-4 py-1.5 flex items-center gap-1.5">
                                                 <i data-feather="download" class="w-3 h-3"></i> Install All
                                             </button>

@@ -5,7 +5,7 @@
             <div class="flex justify-between items-center mb-2 shrink-0">
                 <h2 class="text-lg font-bold" id="backups-modal-title" style="color:var(--text)">Backups
                 </h2>
-                <button onclick="closeModal('backups-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
+                <button data-on-click="closeModal('backups-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
                         data-feather="x" class="w-4 h-4"></i></button>
             </div>
             <p class="text-xs mb-4 leading-relaxed shrink-0" style="color:var(--text3)">
@@ -14,16 +14,16 @@
                 else; to roll back, restore one from the list or upload one you kept.
             </p>
             <div class="flex gap-2 mb-4 shrink-0">
-                <button onclick="createBackup()" id="btn-create-backup"
+                <button data-on-click="createBackup()" id="btn-create-backup"
                     class="btn-primary flex-1 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm font-bold rounded-xl whitespace-nowrap disabled:opacity-40">
                     <i data-feather="plus" class="w-4 h-4"></i> Create Backup
                 </button>
-                <button onclick="document.getElementById('backup-upload-input').click()" id="btn-upload-backup"
+                <button data-on-click="clickEl('backup-upload-input')" id="btn-upload-backup"
                     class="btn-ghost flex-1 flex items-center justify-center gap-1.5 px-2 py-2.5 text-sm font-bold rounded-xl whitespace-nowrap disabled:opacity-40">
                     <i data-feather="upload" class="w-4 h-4"></i> Upload Backup
                 </button>
                 <input type="file" id="backup-upload-input" class="hidden" accept=".gz,.tgz,application/gzip"
-                    onchange="uploadBackupFile(this)">
+                    data-on-change="uploadBackupFile(this)">
             </div>
             <!-- What the server is doing right now (or how the last run ended) — filled by _paintBackupOp() -->
             <div id="backup-op-panel" class="hidden shrink-0 mb-4 rounded-xl p-4" aria-live="polite"
@@ -67,11 +67,11 @@
             </label>
             <input type="text" id="restore-backup-confirm-input" autocomplete="off" spellcheck="false"
                 class="inp w-full px-3.5 py-2.5 text-sm mono mb-5" placeholder="RESTORE"
-                oninput="onRestoreConfirmInput()" onkeydown="if(event.key==='Enter')confirmRestoreBackup()">
+                data-on-input="onRestoreConfirmInput()" data-on-enter="confirmRestoreBackup()">
             <div class="flex gap-3">
-                <button onclick="closeModal('restore-backup-modal')"
+                <button data-on-click="closeModal('restore-backup-modal')"
                     class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
-                <button onclick="confirmRestoreBackup()" id="restore-backup-confirm-btn" disabled
+                <button data-on-click="confirmRestoreBackup()" id="restore-backup-confirm-btn" disabled
                     class="btn-danger-solid flex-1 py-2.5 text-sm disabled:opacity-40">Restore &amp; Restart</button>
             </div>
         </div>

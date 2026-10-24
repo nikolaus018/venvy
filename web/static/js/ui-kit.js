@@ -85,7 +85,7 @@
                     <div class="modal-panel p-5 w-full ${width} shadow-lg flex flex-col" style="max-height:88vh">
                         <div class="flex justify-between items-center mb-4 shrink-0">
                             <h2 class="text-lg font-bold" id="${id}-title" style="color:var(--text)"></h2>
-                            <button type="button" aria-label="Close" onclick="closeModal('${id}')" class="p-1.5 rounded-lg" style="color:var(--text3)">
+                            <button type="button" aria-label="Close" data-on-click="closeModal('${id}')" class="p-1.5 rounded-lg" style="color:var(--text3)">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 18L18 6M6 6l12 12"/></svg>
                             </button>
                         </div>

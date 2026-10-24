@@ -4,7 +4,7 @@
         <div class="modal-panel-sheet md:modal-panel p-5 w-full max-w-lg shadow-lg max-h-[92vh] flex flex-col">
             <div class="flex justify-between items-center mb-5 shrink-0">
                 <h2 class="text-lg font-bold" id="create-app-modal-title" style="color:var(--text)">New Application</h2>
-                <button onclick="closeModal('create-app-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
+                <button data-on-click="closeModal('create-app-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
                         data-feather="x" class="w-4 h-4"></i></button>
             </div>
             <form id="create-form" class="space-y-4 overflow-y-auto flex-1 pb-2" style="touch-action: pan-y;">
@@ -16,7 +16,7 @@
                     <div class="col-span-2">
                         <label class="block section-label mb-2">Runtime</label>
                         <select name="runtime" class="inp w-full px-4 py-3 text-sm"
-                            onchange="onRuntimeChange('create')">
+                            data-on-change="onRuntimeChange('create')">
                             <option value="python">Python</option>
                         </select>
                     </div>
@@ -50,7 +50,7 @@
                     </div>
                 </div>
                 <div class="flex gap-3 pt-2">
-                    <button type="button" onclick="closeModal('create-app-modal')"
+                    <button type="button" data-on-click="closeModal('create-app-modal')"
                         class="btn-ghost flex-1 py-3 text-sm font-semibold rounded-xl">Cancel</button>
                     <button type="submit" class="btn-primary flex-1 py-3 text-sm rounded-xl">Create App</button>
                 </div>

@@ -92,7 +92,7 @@
                 return `<div class="palette-item" role="option" id="palette-opt-${i}" data-i="${i}"
                              data-active="${i === _paletteIndex ? 1 : 0}"
                              aria-selected="${i === _paletteIndex}"
-                             onmousemove="setPaletteIndex(${i})" onclick="runPaletteItem(${i})">
+                             data-on-mousemove="setPaletteIndex(${i})" data-on-click="runPaletteItem(${i})">
                     ${lead}
                     <span class="flex-1 min-w-0 truncate text-sm font-medium">${escapeHtml(it.label)}</span>
                     ${it.hint ? `<span class="text-[10.5px] mono shrink-0" style="color:var(--text3)">${escapeHtml(it.hint)}</span>` : ''}

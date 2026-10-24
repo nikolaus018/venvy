@@ -18,7 +18,7 @@
     <div class="md:hidden border-b shrink-0 z-30 pt-safe transition duration-300"
         style="background:var(--surface);border-color:var(--border)">
         <div class="h-14 flex items-center justify-between px-4">
-            <button onclick="toggleSidebar()" class="p-2 -ml-2 rounded-lg transition-colors" style="color:var(--text2)">
+            <button data-on-click="toggleSidebar()" class="p-2 -ml-2 rounded-lg transition-colors" style="color:var(--text2)">
                 <i data-feather="menu" class="w-5 h-5"></i>
             </button>
             <div class="flex items-center gap-0">
@@ -29,7 +29,7 @@
     </div>
 
     <!-- Sidebar overlay -->
-    <div id="sidebar-overlay" onclick="closeSidebar()"
+    <div id="sidebar-overlay" data-on-click="closeSidebar()"
         class="fixed inset-0 z-40 hidden md:hidden backdrop-blur-sm transition-opacity opacity-0 duration-300"
         style="background:rgba(0,0,0,0.6)"></div>
 

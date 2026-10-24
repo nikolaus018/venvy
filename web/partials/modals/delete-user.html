@@ -19,9 +19,9 @@
                 ⚠️ Deletion is <strong>permanent</strong>.
             </p>
             <div class="flex gap-3">
-                <button onclick="closeModal('delete-user-modal')"
+                <button data-on-click="closeModal('delete-user-modal')"
                     class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
-                <button onclick="confirmDeleteUser()" id="delete-user-confirm-btn"
+                <button data-on-click="confirmDeleteUser()" id="delete-user-confirm-btn"
                     class="btn-danger-solid flex-1 py-2.5 text-sm flex items-center justify-center gap-2">
                     <i data-feather="trash-2" class="w-4 h-4"></i> Delete User
                 </button>

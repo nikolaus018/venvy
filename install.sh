@@ -555,7 +555,9 @@ case "$HOST" in 127.0.0.1|localhost|::1) SHOW="127.0.0.1 (this machine only — 
 echo
 say "Venvy $REL_VERSION is running."
 say "  Open:      http://$SHOW:$PORT"
-[ "$EXISTING_DATA" -eq 0 ] && say "             the first visit creates the admin account"
+if [ -f "$DATA_DIR/.setup-code" ]; then
+  say "             the first visit creates the admin account, with setup code: $(cat "$DATA_DIR/.setup-code")"
+fi
 say "  Settings:  $ENV_FILE   (then: systemctl restart venvy)"
 say "  Data:      $DATA_DIR"
 say "  Logs:      journalctl -u venvy -f"

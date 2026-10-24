@@ -18,13 +18,13 @@
                 <p class="text-xs mb-4" style="color:var(--text3)">For scripts and CI: send <span class="mono">Authorization: Bearer &lt;token&gt;</span> to this server's API. A token acts as you — your role, your apps. It cannot make other tokens or change your password.</p>
                 ${fresh ? `<div class="rounded-xl p-4 mb-4" style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25)">
                     <p class="text-xs font-semibold mb-2" style="color:var(--green)">Copy it now — it is not shown again.</p>
-                    <div class="flex gap-2"><input readonly id="tok-new" class="inp flex-1 px-3 py-2 text-xs mono" value="${escapeHtml(fresh)}"><button class="btn-secondary px-3 py-1.5 text-xs" onclick="copyText($id('tok-new').value, 'Token copied')">Copy</button></div></div>` : ''}
+                    <div class="flex gap-2"><input readonly id="tok-new" class="inp flex-1 px-3 py-2 text-xs mono" value="${escapeHtml(fresh)}"><button class="btn-secondary px-3 py-1.5 text-xs" data-on-click="copyFrom('tok-new', 'Token copied')">Copy</button></div></div>` : ''}
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-5 items-end">
                     <div class="md:col-span-2">${fieldHtml('tok-name', 'Name', { placeholder: 'GitHub Actions' })}</div>
                     ${selectHtml('tok-scope', 'Access', [['full', 'Full'], ['read', 'Read-only']], 'full')}
                     ${selectHtml('tok-exp', 'Expires', [['', 'Never'], ['30', 'In 30 days'], ['90', 'In 90 days'], ['365', 'In a year']], '90')}
                 </div>
-                <button class="btn-primary px-4 py-2 text-xs font-bold mb-5" onclick="createToken()">Create token</button>
+                <button class="btn-primary px-4 py-2 text-xs font-bold mb-5" data-on-click="createToken()">Create token</button>
                 <div class="space-y-2">${r.data.length ? r.data.map(t => `
                     <div class="card px-4 py-3 flex items-center gap-3">
                         <div class="flex-1 min-w-0"><p class="text-sm font-semibold truncate" style="color:var(--text)">${escapeHtml(t.name)} <span class="text-[10px] uppercase font-bold ml-1" style="color:var(--text3)">${t.scope === 'read' ? 'read-only' : 'full'}</span></p>
@@ -60,7 +60,7 @@
                     ${apps.data.map(a => `<label class="flex items-center gap-2 text-sm cursor-pointer select-none" style="color:var(--text2)"><input type="checkbox" class="acc-app rounded" value="${a.id}" ${user.app_ids.includes(a.id) ? 'checked' : ''}> ${escapeHtml(a.name)}</label>`).join('') || '<p class="text-xs" style="color:var(--text3)">No apps yet.</p>'}
                 </div>
                 <p class="text-xs" style="color:var(--text3)">Without access an app does not exist for them: it is not listed, and its files, logs and terminal are out of reach. What they create themselves, they can use.</p>
-                <div class="flex gap-3 pt-1"><button class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" onclick="closeModal('access-modal')">Cancel</button>
+                <div class="flex gap-3 pt-1"><button class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" data-on-click="closeModal('access-modal')">Cancel</button>
                     <button class="btn-primary flex-1 py-2.5 text-sm rounded-xl" id="acc-save">Save</button></div></div>`;
             document.querySelectorAll('input[name="acc-mode"]').forEach(r => r.addEventListener('change', () => {
                 const all = document.querySelector('input[name="acc-mode"]:checked').value === 'all';

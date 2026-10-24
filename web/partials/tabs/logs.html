@@ -18,14 +18,14 @@
                                 <label for="log-search" class="sr-only">Filter log lines</label>
                                 <input type="text" id="log-search" placeholder="Filter…" autocomplete="off"
                                     spellcheck="false" class="inp w-full pl-2.5 pr-14 py-1 text-xs mono"
-                                    style="height:26px" oninput="onLogSearchInput()" onkeydown="onLogSearchKey(event)">
+                                    style="height:26px" data-on-input="onLogSearchInput()" data-on-keydown="onLogSearchKey(event)">
                                 <span id="log-search-count"
                                     class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] mono pointer-events-none"
                                     style="color:var(--text3)"></span>
                             </div>
 
                             <button class="log-tool-btn shrink-0" id="log-follow-btn" aria-pressed="true"
-                                onclick="toggleLogFollow()" title="Follow new output (F)">
+                                data-on-click="toggleLogFollow()" title="Follow new output (F)">
                                 <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
                                     <path d="M12 5v14m0 0l-6-6m6 6l6-6" stroke-linecap="round"
@@ -35,7 +35,7 @@
                             </button>
 
                             <button class="log-tool-btn shrink-0" id="log-wrap-btn" aria-pressed="true"
-                                onclick="toggleLogWrap()" title="Toggle line wrapping (W)">
+                                data-on-click="toggleLogWrap()" title="Toggle line wrapping (W)">
                                 <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
                                     <path d="M3 6h18M3 12h13a4 4 0 010 8h-3m0 0l2-2m-2 2l2 2M3 18h5"
@@ -46,7 +46,7 @@
 
                             <div class="w-px h-5 shrink-0 mx-0.5" style="background:var(--border2)"></div>
 
-                            <button class="log-tool-btn shrink-0" onclick="copyLogs()" title="Copy all logs">
+                            <button class="log-tool-btn shrink-0" data-on-click="copyLogs()" title="Copy all logs">
                                 <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
                                     <rect x="9" y="9" width="13" height="13" rx="2" />
@@ -55,7 +55,7 @@
                                 <span class="hidden md:inline">Copy</span>
                             </button>
 
-                            <button class="log-tool-btn shrink-0" onclick="downloadLogs()" title="Download as .log">
+                            <button class="log-tool-btn shrink-0" data-on-click="downloadLogs()" title="Download as .log">
                                 <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
                                     <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
@@ -64,17 +64,17 @@
                                 <span class="hidden md:inline">Save</span>
                             </button>
 
-                            <button class="log-tool-btn shrink-0" onclick="toggleLogSearchPanel()" id="log-search-all-btn" title="Search all logs, including older ones" aria-pressed="false">
+                            <button class="log-tool-btn shrink-0" data-on-click="toggleLogSearchPanel()" id="log-search-all-btn" title="Search all logs, including older ones" aria-pressed="false">
                                 <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/><path d="M8 11h6" stroke-linecap="round"/></svg>
                                 <span class="hidden md:inline">Search all</span>
                             </button>
 
-                            <button class="log-tool-btn shrink-0" onclick="downloadAllLogs()" title="Download every log file of this app as one text file">
+                            <button class="log-tool-btn shrink-0" data-on-click="downloadAllLogs()" title="Download every log file of this app as one text file">
                                 <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                                 <span class="hidden md:inline">All logs</span>
                             </button>
 
-                            <button class="log-tool-btn shrink-0" onclick="deleteLogs()" title="Clear the log file"
+                            <button class="log-tool-btn shrink-0" data-on-click="deleteLogs()" title="Clear the log file"
                                 style="color:var(--red)" data-requires-operator>
                                 <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
@@ -88,20 +88,20 @@
                         <div id="log-search-panel" class="hidden shrink-0" style="border-bottom:1px solid var(--border);background:var(--surface2)">
                             <div class="flex flex-wrap items-center gap-2 px-3 py-2">
                                 <input id="lsp-q" type="text" placeholder="Search every log of this app…" autocomplete="off" spellcheck="false"
-                                    class="inp flex-1 px-2.5 py-1 text-xs mono" style="min-width:140px;height:28px" onkeydown="if(event.key==='Enter') runLogSearch()">
+                                    class="inp flex-1 px-2.5 py-1 text-xs mono" style="min-width:140px;height:28px" data-on-enter="runLogSearch()">
                                 <label class="flex items-center gap-1 text-[11px] select-none" style="color:var(--text3)"><input type="checkbox" id="lsp-regex"> regex</label>
                                 <label class="flex items-center gap-1 text-[11px] select-none" style="color:var(--text3)"><input type="checkbox" id="lsp-case"> case</label>
                                 <select id="lsp-ctx" class="inp px-1.5 text-[11px]" style="height:28px" title="Lines of context around each match">
                                     <option value="0">no context</option><option value="2">±2 lines</option><option value="5">±5 lines</option>
                                 </select>
-                                <button class="btn-secondary px-3 text-xs" style="height:28px" onclick="runLogSearch()" id="lsp-go">Search</button>
+                                <button class="btn-secondary px-3 text-xs" style="height:28px" data-on-click="runLogSearch()" id="lsp-go">Search</button>
                             </div>
                             <div id="lsp-results" class="hidden mono text-xs overflow-y-auto px-3 pb-3" style="max-height:16rem"></div>
                         </div>
                         <div class="flex-1 relative min-h-0 flex flex-col">
                             <pre id="log-viewer" tabindex="0" role="log" aria-label="Application logs"
                                 class="flex-1 p-4 overflow-y-auto whitespace-pre-wrap select-text leading-relaxed"><span class="italic" style="color:var(--text3)">No log output yet. Start the application to see live logs.</span></pre>
-                            <button id="log-jump-btn" onclick="logJumpToLatest()"
+                            <button id="log-jump-btn" data-on-click="logJumpToLatest()"
                                 class="btn-primary px-3 py-1.5 text-xs font-semibold rounded-full flex items-center gap-1.5">
                                 <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="3">

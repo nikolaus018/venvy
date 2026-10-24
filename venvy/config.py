@@ -45,11 +45,15 @@ TERMINAL_RC_DIR = DATA_DIR / ".terminal"
 APP_LOGS_DIR = DATA_DIR / "app-logs"
 _UPLOAD_TMP_DIR = DATA_DIR / ".upload-tmp"
 _VENVY_KEY_FILE = DATA_DIR / ".venvy_key"
+# One-time code that first-run setup asks for (see venvy.auth.ensure_setup_code).
+SETUP_CODE_FILE = DATA_DIR / ".setup-code"
 
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days — keeps PWA users signed in
 
-# Default False so plain-HTTP LAN deployments work out of the box.
-# Set SESSION_COOKIE_SECURE=1 in env when running behind HTTPS.
+# Default False so plain-HTTP LAN deployments work out of the box. Requests
+# that arrive over HTTPS (directly, or through the tunnel — see
+# venvy.auth.request_is_https) get Secure cookies and HSTS either way;
+# SESSION_COOKIE_SECURE=1 makes that unconditional.
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0") == "1"
 
 # ---------------------------------------------------------------------------

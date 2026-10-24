@@ -28,21 +28,21 @@
 
                             <!-- Global quick-keys -->
                             <div class="flex items-center gap-1">
-                                <button onclick="termSend('\x03')" class="term-key" title="Ctrl+C">^C</button>
-                                <button onclick="termSend('\x04')" class="term-key" title="Ctrl+D">^D</button>
-                                <button onclick="termSend('\t')" class="term-key hidden md:block">Tab</button>
+                                <button data-on-click="termSend('\x03')" class="term-key" title="Ctrl+C">^C</button>
+                                <button data-on-click="termSend('\x04')" class="term-key" title="Ctrl+D">^D</button>
+                                <button data-on-click="termSend('\t')" class="term-key hidden md:block">Tab</button>
                             </div>
                             <div class="w-px h-5 shrink-0 mx-1" style="background:var(--border2)"></div>
 
                             <!-- Clear + reconnect + status (always visible) -->
-                            <button onclick="_termClear()" title="Clear" class="term-action-btn">
+                            <button data-on-click="_termClear()" title="Clear" class="term-action-btn">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
                                     stroke-width="2">
                                     <path stroke-linecap="round" stroke-linejoin="round"
                                         d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                 </svg>
                             </button>
-                            <button onclick="_termReconnect()" id="term-reconnect-btn" title="Reconnect"
+                            <button data-on-click="_termReconnect()" id="term-reconnect-btn" title="Reconnect"
                                 class="term-action-btn">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
                                     stroke-width="2">
@@ -57,7 +57,7 @@
 
                         <!-- xterm.js mount — fills all available space -->
                         <div id="terminal-container" class="flex-1 overflow-hidden min-h-0" style="padding:0"
-                            onclick="if(window.term) window.term.focus()"></div>
+                            data-on-click="focusTerminal()"></div>
 
                         <!-- Mobile quick-key keyboard — stacks above the soft keyboard -->
                         <!-- Row 1: always visible primary keys -->
@@ -68,45 +68,45 @@
                             <div class="flex items-center gap-1 px-2 py-1.5 overflow-x-auto scrollbar-hide"
                                 style="touch-action:pan-x;">
                                 <!-- Sticky Ctrl modifier -->
-                                <button id="mob-ctrl-btn" onclick="termModToggle('ctrl')"
+                                <button id="mob-ctrl-btn" data-on-click="termModToggle('ctrl')"
                                     class="term-mob-key mod-accent-blue font-bold tracking-wider"
                                     style="min-width:46px;"
                                     title="Sticky Ctrl — tap then press another key">Ctrl</button>
 
                                 <!-- Sticky Alt modifier -->
-                                <button id="mob-alt-btn" onclick="termModToggle('alt')"
+                                <button id="mob-alt-btn" data-on-click="termModToggle('alt')"
                                     class="term-mob-key mod-accent-purple font-bold tracking-wider"
                                     style="min-width:40px;" title="Sticky Alt">Alt</button>
 
                                 <div class="w-px h-6 shrink-0 mx-0.5" style="background:var(--border2)"></div>
 
                                 <!-- Tab -->
-                                <button onclick="termMobKey('\t')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\t')" class="term-mob-key shrink-0"
                                     style="min-width:42px;">Tab</button>
 
                                 <!-- Arrows -->
-                                <button onclick="termMobKey('\x1b[A')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x1b[A')" class="term-mob-key shrink-0"
                                     style="min-width:36px;font-size:16px;">↑</button>
-                                <button onclick="termMobKey('\x1b[B')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x1b[B')" class="term-mob-key shrink-0"
                                     style="min-width:36px;font-size:16px;">↓</button>
-                                <button onclick="termMobKey('\x1b[D')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x1b[D')" class="term-mob-key shrink-0"
                                     style="min-width:36px;font-size:16px;">←</button>
-                                <button onclick="termMobKey('\x1b[C')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x1b[C')" class="term-mob-key shrink-0"
                                     style="min-width:36px;font-size:16px;">→</button>
 
                                 <div class="w-px h-6 shrink-0 mx-0.5" style="background:var(--border2)"></div>
 
                                 <!-- Backspace -->
-                                <button onclick="termMobKey('\x7f')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x7f')" class="term-mob-key shrink-0"
                                     style="min-width:42px;font-size:15px;">⌫</button>
                                 <!-- Esc -->
-                                <button onclick="termMobKey('\x1b')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x1b')" class="term-mob-key shrink-0"
                                     style="min-width:38px;">Esc</button>
 
                                 <div class="w-px h-6 shrink-0 mx-0.5" style="background:var(--border2)"></div>
 
                                 <!-- Expand/collapse more row -->
-                                <button id="mob-more-btn" onclick="termMobToggleMore()" class="term-mob-key ml-auto"
+                                <button id="mob-more-btn" data-on-click="termMobToggleMore()" class="term-mob-key ml-auto"
                                     style="min-width:36px;font-size:15px;" title="More keys">⋯</button>
                             </div>
 
@@ -115,41 +115,41 @@
                                 class="hidden flex items-center gap-1 px-2 pb-1.5 overflow-x-auto scrollbar-hide"
                                 style="touch-action:pan-x;">
                                 <!-- Ctrl shortcuts -->
-                                <button onclick="termMobKey('\x03')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x03')" class="term-mob-key shrink-0"
                                     style="min-width:36px;color:var(--red);" title="Ctrl+C — interrupt">^C</button>
-                                <button onclick="termMobKey('\x04')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x04')" class="term-mob-key shrink-0"
                                     style="min-width:36px;color:var(--text);" title="Ctrl+D — EOF/logout">^D</button>
-                                <button onclick="termMobKey('\x1a')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x1a')" class="term-mob-key shrink-0"
                                     style="min-width:36px;color:var(--text);" title="Ctrl+Z — suspend">^Z</button>
-                                <button onclick="termMobKey('\x0c')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x0c')" class="term-mob-key shrink-0"
                                     style="min-width:36px;color:var(--green);" title="Ctrl+L — clear">^L</button>
-                                <button onclick="termMobKey('\x01')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x01')" class="term-mob-key shrink-0"
                                     style="min-width:36px;" title="Ctrl+A — line start">^A</button>
-                                <button onclick="termMobKey('\x05')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x05')" class="term-mob-key shrink-0"
                                     style="min-width:36px;" title="Ctrl+E — line end">^E</button>
-                                <button onclick="termMobKey('\x15')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x15')" class="term-mob-key shrink-0"
                                     style="min-width:36px;" title="Ctrl+U — clear line">^U</button>
-                                <button onclick="termMobKey('\x17')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x17')" class="term-mob-key shrink-0"
                                     style="min-width:36px;" title="Ctrl+W — delete word">^W</button>
-                                <button onclick="termMobKey('\x0b')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\x0b')" class="term-mob-key shrink-0"
                                     style="min-width:36px;" title="Ctrl+K — kill to end">^K</button>
 
                                 <div class="w-px h-6 shrink-0 mx-0.5" style="background:var(--border2)"></div>
 
                                 <!-- Special chars often needed in terminal -->
-                                <button onclick="termMobKey('/')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('/')" class="term-mob-key shrink-0"
                                     style="min-width:30px;">/</button>
-                                <button onclick="termMobKey('~')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('~')" class="term-mob-key shrink-0"
                                     style="min-width:30px;">~</button>
-                                <button onclick="termMobKey('-')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('-')" class="term-mob-key shrink-0"
                                     style="min-width:30px;">-</button>
-                                <button onclick="termMobKey('.')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('.')" class="term-mob-key shrink-0"
                                     style="min-width:30px;">.</button>
-                                <button onclick="termMobKey('|')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('|')" class="term-mob-key shrink-0"
                                     style="min-width:30px;">|</button>
-                                <button onclick="termMobKey('>')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('>')" class="term-mob-key shrink-0"
                                     style="min-width:30px;">&gt;</button>
-                                <button onclick="termMobKey('\n')" class="term-mob-key shrink-0"
+                                <button data-on-click="termMobKey('\n')" class="term-mob-key shrink-0"
                                     style="min-width:46px;color:var(--green);">↵ Enter</button>
                             </div>
                         </div>

@@ -4,9 +4,9 @@
             <h2 class="text-base font-bold mb-4" id="file-name-modal-title" style="color:var(--text)">New File</h2>
             <input type="text" id="file-name-input" class="inp w-full px-4 py-3 text-sm mb-5" placeholder="filename.py">
             <div class="flex gap-3">
-                <button onclick="closeModal('file-name-modal')"
+                <button data-on-click="closeModal('file-name-modal')"
                     class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
-                <button onclick="confirmFileNameOp()" id="file-name-confirm-btn"
+                <button data-on-click="confirmFileNameOp()" id="file-name-confirm-btn"
                     class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Create</button>
             </div>
         </div>

@@ -19,11 +19,11 @@
             </label>
             <input type="text" id="delete-app-confirm-input" autocomplete="off" spellcheck="false"
                 class="inp w-full px-3.5 py-2.5 text-sm mono mb-5" placeholder="Application name"
-                oninput="onDeleteAppConfirmInput()" onkeydown="if(event.key==='Enter')confirmDeleteApp()">
+                data-on-input="onDeleteAppConfirmInput()" data-on-enter="confirmDeleteApp()">
             <div class="flex gap-3">
-                <button onclick="closeModal('delete-app-modal')"
+                <button data-on-click="closeModal('delete-app-modal')"
                     class="btn-ghost flex-1 py-2.5 text-sm font-medium">Cancel</button>
-                <button onclick="confirmDeleteApp()" id="delete-app-confirm-btn" disabled
+                <button data-on-click="confirmDeleteApp()" id="delete-app-confirm-btn" disabled
                     class="btn-danger-solid flex-1 py-2.5 text-sm disabled:opacity-40">Delete</button>
             </div>
         </div>

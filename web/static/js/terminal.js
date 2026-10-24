@@ -79,6 +79,10 @@
          * For Ctrl: converts letter keys to their control codes (Ctrl+A = 0x01, etc.)
          * For Alt: prepends ESC byte (standard xterm Alt encoding).
          */
+        function focusTerminal() {
+            if (window.term) window.term.focus();
+        }
+
         function termMobKey(data) {
             _mobHaptic(8);
             let toSend = data;

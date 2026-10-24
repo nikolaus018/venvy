@@ -30,6 +30,7 @@ run ops "$PYB" t_ops.py "$R"
 run monitor "$PYB" t_monitor.py "$R"
 run deploy "$PYB" t_deploy.py "$R"
 run hardening "$PYB" t_hardening.py "$R"
+run security "$PYB" t_security.py "$R"
 # Browser pass; needs `pip install playwright` and an installed Google Chrome.
 "$PYB" -c "import playwright" 2>/dev/null && run ui "$PYB" t_ui.py "$R"
 [ -n "$SLOW" ] && run login_lockout "$PYB" t_misc.py "$R" login_lockout

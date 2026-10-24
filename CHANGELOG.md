@@ -5,6 +5,16 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.6.0
+
+Security hardening before going into production.
+
+- First-run setup needs a one-time setup code. Until the first admin existed, anyone who could reach a fresh install could create that admin and own the host. The code is printed by the installer, logged at startup and kept in `.setup-code` in the data directory until setup is done.
+- Cookies are marked Secure and Strict-Transport-Security is sent whenever Venvy is reached over HTTPS, including through the Cloudflare tunnel. Before, both needed `SESSION_COOKIE_SECURE=1`, which a tunnel-only install easily went without. A plain-HTTP LAN address keeps working.
+- The Content-Security-Policy no longer allows inline script, so markup that got into a page can't run any. The UI's buttons and fields name their handlers in `data-on-*` attributes instead of `onclick`, and those can only call Venvy's own functions. WebSockets may only connect back to Venvy's own host, no longer to any server.
+- `/docs`, `/redoc` and `/openapi.json` are switched off: they showed anyone the full list of API endpoints.
+- A new test checks every API route: the session cookie without this session's key gets 401, and viewers and operators get 403 on everything outside their role.
+
 ## v4.5.6
 
 - After an update, the Updating window offers "Reload Venvy" again. It used to stop following the update as soon as the new version answered, while the update was still finishing, and lost track of the version it started from.

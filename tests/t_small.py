@@ -1,6 +1,6 @@
 import concurrent.futures as cf, shutil, sys, time
 import httpx
-from harness import Client, admin, make_app, server
+from harness import Client, admin, make_app, server, setup_code
 repo = sys.argv[1]; fails = []
 def check(n, c, x=""):
     print(("  ok   " if c else "  FAIL ") + n, x if not c else "")
@@ -9,7 +9,7 @@ with server(repo, 55007) as (base, d, srv):
     # setup race: 8 simultaneous first-run setups
     def setup(i):
         c = Client(base); c.c.get("/")
-        return c.req("POST", "/api/auth/setup", json={"username": f"admin{i}", "password": "hunter2hunter2"}).status_code
+        return c.req("POST", "/api/auth/setup", json={"username": f"admin{i}", "password": "hunter2hunter2", "setup_code": setup_code(base)}).status_code
     with cf.ThreadPoolExecutor(8) as ex: codes = list(ex.map(setup, range(8)))
     check("only one setup wins", codes.count(200) == 1, str(codes))
     win = codes.index(200)

@@ -11,19 +11,19 @@
                     <label class="block section-label mb-1.5">Current password</label>
                     <input type="password" id="current-pwd-input" placeholder="Current password"
                         autocomplete="current-password" class="inp w-full px-4 py-2.5 text-sm"
-                        onkeydown="if(event.key==='Enter')document.getElementById('new-pwd-input').focus()">
+                        data-on-enter="focusEl('new-pwd-input')">
                 </div>
                 <div>
                     <label class="block section-label mb-1.5">New password</label>
                     <input type="password" id="new-pwd-input" placeholder="New password" autocomplete="new-password"
                         class="inp w-full px-4 py-2.5 text-sm"
-                        onkeydown="if(event.key==='Enter')document.getElementById('confirm-pwd-input').focus()">
+                        data-on-enter="focusEl('confirm-pwd-input')">
                 </div>
                 <div>
                     <label class="block section-label mb-1.5">Confirm new password</label>
                     <input type="password" id="confirm-pwd-input" placeholder="Repeat new password"
                         autocomplete="new-password" class="inp w-full px-4 py-2.5 text-sm"
-                        onkeydown="if(event.key==='Enter')changePassword()">
+                        data-on-enter="changePassword()">
                 </div>
                 <div id="pwd-match-hint" class="hidden text-xs px-3 py-2 rounded-lg"
                     style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)">
@@ -31,9 +31,9 @@
                     do not match.</div>
             </div>
             <div class="flex gap-3 pt-1">
-                <button onclick="closeModal('change-pwd-modal')"
+                <button data-on-click="closeModal('change-pwd-modal')"
                     class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
-                <button onclick="changePassword()" id="change-pwd-btn"
+                <button data-on-click="changePassword()" id="change-pwd-btn"
                     class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Save</button>
             </div>
         </div>
@@ -54,24 +54,24 @@
                     </div>
                     <div class="text-xs" style="color:var(--text3)">Your account</div>
                 </div>
-                <button onclick="closeModal('account-menu-modal')" class="p-1.5 rounded-lg"
+                <button data-on-click="closeModal('account-menu-modal')" class="p-1.5 rounded-lg"
                     style="color:var(--text3)"><i data-feather="x" class="w-4 h-4"></i></button>
             </div>
             <!-- Menu items -->
             <div class="py-2">
-                <button onclick="closeModal('account-menu-modal');openTokensModal()"
+                <button data-on-click="closeModal('account-menu-modal');openTokensModal()"
                     class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
                     style="color:var(--text2)">
                     <i data-feather="terminal" class="w-4 h-4 shrink-0"></i>
                     API tokens
                 </button>
-                <button onclick="closeModal('account-menu-modal');openChangePwdModal()"
+                <button data-on-click="closeModal('account-menu-modal');openChangePwdModal()"
                     class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
                     style="color:var(--text2)">
                     <i data-feather="lock" class="w-4 h-4 shrink-0"></i>
                     Change Password
                 </button>
-                <button onclick="closeModal('account-menu-modal');openTotpSetup()" id="acct-totp-btn"
+                <button data-on-click="closeModal('account-menu-modal');openTotpSetup()" id="acct-totp-btn"
                     class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
                     style="color:var(--text2)">
                     <i data-feather="shield" class="w-4 h-4 shrink-0"></i>
@@ -80,7 +80,7 @@
                         style="background:rgba(16,185,129,0.15);color:var(--green);border:1px solid rgba(16,185,129,0.2)">ON</span>
                 </button>
 
-                <button onclick="closeModal('account-menu-modal');openShortcutsModal()"
+                <button data-on-click="closeModal('account-menu-modal');openShortcutsModal()"
                     class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
                     style="color:var(--text2)">
                     <i data-feather="command" class="w-4 h-4 shrink-0"></i>
@@ -96,15 +96,15 @@
                     <div class="text-xs mb-1.5" style="color:var(--text3)">Theme</div>
                     <div class="segmented w-full" role="radiogroup" aria-label="Theme">
                         <button type="button" role="radio" aria-checked="false" data-theme-opt="light"
-                            onclick="setTheme('light')">
+                            data-on-click="setTheme('light')">
                             <i data-feather="sun" class="w-3.5 h-3.5"></i> Light
                         </button>
                         <button type="button" role="radio" aria-checked="false" data-theme-opt="dark"
-                            onclick="setTheme('dark')">
+                            data-on-click="setTheme('dark')">
                             <i data-feather="moon" class="w-3.5 h-3.5"></i> Dark
                         </button>
                         <button type="button" role="radio" aria-checked="true" data-theme-opt="system"
-                            onclick="setTheme('system')">
+                            data-on-click="setTheme('system')">
                             <i data-feather="monitor" class="w-3.5 h-3.5"></i> Auto
                         </button>
                     </div>
@@ -115,14 +115,14 @@
                         <div class="text-[11px]" style="color:var(--text3)">Disable animations</div>
                     </div>
                     <button type="button" id="motion-toggle" role="switch" aria-checked="false"
-                        aria-label="Reduce motion" onclick="toggleReduceMotion()" class="toggle-track shrink-0">
+                        aria-label="Reduce motion" data-on-click="toggleReduceMotion()" class="toggle-track shrink-0">
                         <span class="toggle-knob"></span>
                     </button>
                 </div>
             </div>
             <!-- Logout -->
             <div style="border-top:1px solid var(--border)" class="py-2">
-                <button onclick="logout()"
+                <button data-on-click="logout()"
                     class="w-full flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors hover-ov text-left"
                     style="color:var(--red)">
                     <i data-feather="log-out" class="w-4 h-4 shrink-0"></i>
@@ -164,7 +164,7 @@
                             style="background:var(--surface2);border:1px solid var(--border)">
                             <code class="text-xs mono flex-1 break-all" id="totp-secret-display"
                                 style="color:var(--text2)"></code>
-                            <button onclick="copyTotpSecret()"
+                            <button data-on-click="copyTotpSecret()"
                                 class="shrink-0 text-[10px] px-2 py-1 rounded-lg font-semibold transition"
                                 style="background:var(--surface);color:var(--text3)">Copy</button>
                         </div>
@@ -175,15 +175,15 @@
                 <div class="mt-4 space-y-3">
                     <input type="text" id="totp-confirm-code" placeholder="000000" inputmode="numeric" maxlength="6"
                         class="inp w-full px-4 py-3 text-sm font-medium mono text-center tracking-[0.4em]"
-                        autocomplete="one-time-code" onkeydown="if(event.key==='Enter')confirmTotpSetup()">
+                        autocomplete="one-time-code" data-on-enter="confirmTotpSetup()">
                     <div id="totp-setup-error" class="hidden text-xs px-3 py-2 rounded-lg"
                         style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)">
                     </div>
                 </div>
                 <div class="flex gap-3 mt-4">
-                    <button onclick="closeModal('totp-setup-modal')"
+                    <button data-on-click="closeModal('totp-setup-modal')"
                         class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
-                    <button onclick="confirmTotpSetup()" id="totp-confirm-btn"
+                    <button data-on-click="confirmTotpSetup()" id="totp-confirm-btn"
                         class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Verify &amp; Enable</button>
                 </div>
             </div>
@@ -196,13 +196,13 @@
                 </div>
                 <input type="password" id="totp-disable-pwd" placeholder="Your current password"
                     autocomplete="current-password" class="inp w-full px-4 py-3 text-sm"
-                    onkeydown="if(event.key==='Enter')disableTotp()">
+                    data-on-enter="disableTotp()">
                 <div id="totp-disable-error" class="hidden text-xs px-3 py-2 rounded-lg"
                     style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:var(--red)"></div>
                 <div class="flex gap-3">
-                    <button onclick="closeModal('totp-setup-modal')"
+                    <button data-on-click="closeModal('totp-setup-modal')"
                         class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl">Cancel</button>
-                    <button onclick="disableTotp()" id="totp-disable-btn"
+                    <button data-on-click="disableTotp()" id="totp-disable-btn"
                         class="flex-1 py-2.5 text-sm font-bold rounded-xl transition"
                         style="background:rgba(239,68,68,0.15);color:var(--red);border:1px solid rgba(239,68,68,0.2)">Disable
                         2FA</button>

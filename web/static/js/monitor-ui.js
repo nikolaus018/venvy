@@ -76,7 +76,7 @@
             body.innerHTML = `<div class="space-y-4">
                 ${fieldHtml('dup-name', 'Name of the copy', { value: `${activeApp.name} copy` })}
                 <p class="text-xs" style="color:var(--text3)">Copies the files, settings and variables, and builds a fresh environment (this can take a minute).</p>
-                <div class="flex gap-3"><button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" onclick="closeModal('dup-modal')">Cancel</button>
+                <div class="flex gap-3"><button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" data-on-click="closeModal('dup-modal')">Cancel</button>
                 <button type="button" id="dup-go" class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Duplicate</button></div></div>`;
             $id('dup-go').addEventListener('click', async () => {
                 const name = _val('dup-name');

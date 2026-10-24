@@ -10,6 +10,8 @@
                 </div>
                 <form id="login-form" class="space-y-3">
                     <div id="login-step-password" class="space-y-3">
+                        <input type="text" id="setup-code" placeholder="Setup code" autocomplete="off"
+                            spellcheck="false" class="hidden inp w-full px-4 py-3.5 text-sm font-medium mono">
                         <input type="text" id="username" placeholder="Username" autocomplete="username"
                             class="inp w-full px-4 py-3.5 text-sm font-medium">
                         <input type="password" id="password" placeholder="Password" autocomplete="current-password"
@@ -24,7 +26,7 @@
                         <input type="text" id="totp-code" placeholder="000 000" autocomplete="one-time-code"
                             inputmode="numeric" maxlength="6"
                             class="inp w-full px-4 py-3.5 text-lg font-semibold mono text-center tracking-[0.5em]">
-                        <button type="button" onclick="cancelTotpStep()"
+                        <button type="button" data-on-click="cancelTotpStep()"
                             class="btn-ghost w-full py-2.5 text-sm font-medium rounded-xl">← Back</button>
                     </div>
                     <button type="submit" class="btn-primary w-full py-4 text-sm font-semibold mt-1"
@@ -35,6 +37,8 @@
                 <div id="setup-hint" class="hidden mt-5 text-center text-xs rounded-xl py-3 px-4"
                     style="background:rgba(var(--accent-rgb),0.07);color:var(--text3);border:1px solid rgba(var(--accent-rgb),0.15)">
                     Welcome — create your admin account to get started.
+                    The setup code is in the server log (<span class="mono">journalctl -u venvy</span>)
+                    and in the <span class="mono">.setup-code</span> file in Venvy's data directory.
                 </div>
             </div>
         </div>

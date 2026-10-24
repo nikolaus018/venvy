@@ -8,20 +8,20 @@
                             <!-- Toolbar -->
                             <div class="px-3 py-2.5 flex gap-1.5 shrink-0 items-center overflow-x-auto scrollbar-hide"
                                 style="border-bottom:1px solid var(--border);background:var(--surface2)">
-                                <button onclick="fileOp('refresh')" class="p-2 rounded-lg transition"
+                                <button data-on-click="fileOp('refresh')" class="p-2 rounded-lg transition"
                                     style="color:var(--text3)" title="Refresh"><i data-feather="refresh-cw"
                                         class="w-3.5 h-3.5"></i></button>
                                 <div class="w-px h-4 mx-0.5" style="background:var(--border)"></div>
-                                <button onclick="promptFileOp('create_folder')" class="p-2 rounded-lg transition"
+                                <button data-on-click="promptFileOp('create_folder')" class="p-2 rounded-lg transition"
                                     style="color:var(--text3)" title="New Folder"><i data-feather="folder-plus"
                                         class="w-3.5 h-3.5"></i></button>
-                                <button onclick="promptFileOp('create_file')" class="p-2 rounded-lg transition"
+                                <button data-on-click="promptFileOp('create_file')" class="p-2 rounded-lg transition"
                                     style="color:var(--text3)" title="New File"><i data-feather="file-plus"
                                         class="w-3.5 h-3.5"></i></button>
                                 <label class="p-2 rounded-lg cursor-pointer transition ml-auto"
                                     style="color:var(--text3)" title="Upload">
                                     <i data-feather="upload-cloud" class="w-3.5 h-3.5"></i>
-                                    <input type="file" class="hidden" multiple onchange="uploadFile(this)">
+                                    <input type="file" class="hidden" multiple data-on-change="uploadFile(this)">
                                 </label>
                             </div>
                             <!-- Breadcrumb -->
@@ -29,7 +29,7 @@
                                 style="background:var(--bg);border-bottom:1px solid var(--border);color:var(--text3)">
                                 <i data-feather="home"
                                     class="w-3 h-3 shrink-0 cursor-pointer hover:text-white transition"
-                                    onclick="loadFiles('')" title="Root"></i>
+                                    data-on-click="loadFiles('')" title="Root"></i>
                                 <div id="current-browser-path" class="truncate flex items-center gap-1"></div>
                             </div>
                             <div id="file-tree" class="flex-1 overflow-y-auto p-2 text-sm space-y-0.5 relative"></div>
@@ -53,7 +53,7 @@
                             <div class="h-11 flex items-center justify-between px-3 shrink-0 shadow-sm z-10"
                                 style="border-bottom:1px solid var(--border);background:var(--surface2)">
                                 <div class="flex items-center gap-2 min-w-0 flex-1">
-                                    <button onclick="closeEditorMobile()" class="md:hidden p-1.5 rounded-md -ml-1"
+                                    <button data-on-click="closeEditorMobile()" class="md:hidden p-1.5 rounded-md -ml-1"
                                         style="color:var(--text3)">
                                         <i data-feather="arrow-left" class="w-4 h-4"></i>
                                     </button>
@@ -63,13 +63,13 @@
                                 <div class="flex items-center gap-2 ml-2">
                                     <span id="editor-dirty-indicator" class="hidden w-2 h-2 rounded-full shrink-0"
                                         style="background:var(--yellow)" title="Unsaved changes"></span>
-                                    <button onclick="aceSearch()" class="p-1.5 rounded-lg transition"
+                                    <button data-on-click="aceSearch()" class="p-1.5 rounded-lg transition"
                                         style="color:var(--text3)" title="Search (Ctrl+F)"><i data-feather="search"
                                             class="w-3.5 h-3.5"></i></button>
-                                    <button onclick="downloadCurrentFile()" class="p-1.5 rounded-lg transition"
+                                    <button data-on-click="downloadCurrentFile()" class="p-1.5 rounded-lg transition"
                                         style="color:var(--text3)" title="Download"><i data-feather="download"
                                             class="w-3.5 h-3.5"></i></button>
-                                    <button id="editor-save-btn" onclick="saveCurrentFile()"
+                                    <button id="editor-save-btn" data-on-click="saveCurrentFile()"
                                         class="text-xs btn-primary px-3 py-1.5 rounded-lg text-sm font-medium">Save</button>
                                 </div>
                             </div>

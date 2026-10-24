@@ -115,7 +115,7 @@
 
                 const freeHtml = !free.length
                     ? `<span class="text-xs italic" style="color:var(--text3)">No suggestions available</span>`
-                    : '<div class="flex flex-wrap gap-2">' + free.map(port => `<button onclick="copyPortToClipboard(${port})" title="Click to copy"
+                    : '<div class="flex flex-wrap gap-2">' + free.map(port => `<button data-on-click="copyPortToClipboard(${port})" title="Click to copy"
                         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs mono font-bold transition active:scale-95"
                         style="background:var(--ov-soft);color:var(--text);border:1px dashed var(--border3)">
                         ${port}
@@ -184,20 +184,20 @@
                             <p class="text-[11px] mt-0.5" style="color:var(--text3)">${new Date(b.created_at).toLocaleString()} · ${formatBytes(b.size_bytes)}${b.type !== 'full' ? ' · legacy, database only' : ''}</p>
                         </div>
                         ${b.type === 'full' ? `
-                        <button data-filename="${escapeHtml(b.filename)}" onclick="openRestoreBackupModal(this.dataset.filename)" title="Restore this backup"
+                        <button data-filename="${escapeHtml(b.filename)}" data-on-click="openRestoreBackupModal(this.dataset.filename)" title="Restore this backup"
                             class="shrink-0 p-1.5 rounded-lg transition active:scale-95" style="color:var(--amber)">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                                 <polyline points="1 4 1 10 7 10" />
                                 <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
                             </svg>
                         </button>` : ''}
-                        <button data-filename="${escapeHtml(b.filename)}" onclick="downloadBackup(this.dataset.filename)" title="Download"
+                        <button data-filename="${escapeHtml(b.filename)}" data-on-click="downloadBackup(this.dataset.filename)" title="Download"
                             class="shrink-0 p-1.5 rounded-lg transition active:scale-95" style="color:var(--text)">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
                             </svg>
                         </button>
-                        <button data-filename="${escapeHtml(b.filename)}" onclick="deleteBackup(this.dataset.filename)" title="Delete"
+                        <button data-filename="${escapeHtml(b.filename)}" data-on-click="deleteBackup(this.dataset.filename)" title="Delete"
                             class="shrink-0 p-1.5 rounded-lg transition active:scale-95" style="color:var(--red)">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" />
@@ -453,14 +453,14 @@
                         <p class="text-sm font-bold truncate" style="color:var(${color})">${escapeHtml(title)}</p>
                         <span class="text-[11px] mono shrink-0" data-op-side style="color:var(--text3)"></span>
                     </div>`;
-                const dismiss = `<button onclick="dismissBackupOp()" class="btn-ghost shrink-0 px-2.5 py-1 text-[11px] font-bold rounded-lg">Dismiss</button>`;
+                const dismiss = `<button data-on-click="dismissBackupOp()" class="btn-ghost shrink-0 px-2.5 py-1 text-[11px] font-bold rounded-lg">Dismiss</button>`;
                 if (up) {
                     panel.innerHTML = head(`Uploading ${up.name}`) + `
                         <div class="op-bar"><div class="op-bar-fill" data-op-fill></div></div>
                         <p class="text-[11px] mt-2" data-op-detail style="color:var(--text3)"></p>
                         <div class="flex items-center justify-between gap-3 mt-2">
                             <p class="text-[11px]" style="color:var(--text3)">The upload comes from this tab — keep it open until it is done.</p>
-                            <button onclick="cancelBackupUpload()" class="shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-lg" style="color:var(--red)">Cancel</button>
+                            <button data-on-click="cancelBackupUpload()" class="shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-lg" style="color:var(--red)">Cancel</button>
                         </div>`;
                 } else if (running) {
                     panel.innerHTML = head(op.kind === 'restore' ? `Restoring ${op.filename}` : 'Creating backup…') + `

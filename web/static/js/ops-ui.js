@@ -37,7 +37,7 @@
                     <input id="aud-action" class="inp px-2.5 py-1.5 text-xs w-36 mono" placeholder="action (app_, user_…)" autocomplete="off">
                     <input id="aud-q" class="inp px-2.5 py-1.5 text-xs flex-1 min-w-[8rem]" placeholder="Search the details" autocomplete="off">
                     <select id="aud-since" class="inp px-2 py-1.5 text-xs"><option value="0">Any time</option><option value="1">Last hour</option><option value="24">Last day</option><option value="168">Last week</option></select>
-                    <button class="btn-secondary px-3 py-1.5 text-xs" onclick="loadAudit(true)">Filter</button>
+                    <button class="btn-secondary px-3 py-1.5 text-xs" data-on-click="loadAudit(true)">Filter</button>
                 </div>
                 <div class="rounded-xl overflow-hidden" style="border:1px solid var(--border)">
                     <table class="w-full text-left text-xs"><thead class="section-label" style="background:var(--surface2);border-bottom:1px solid var(--border)">
@@ -45,7 +45,7 @@
                         <tbody id="aud-rows" class="divide-y" style="border-color:var(--border)"></tbody></table>
                 </div>
                 <div class="flex items-center justify-between mt-3"><span id="aud-count" class="text-xs" style="color:var(--text3)"></span>
-                    <button id="aud-more" class="btn-ghost px-3 py-1.5 text-xs hidden" onclick="loadAudit(false)">Load more</button></div>`;
+                    <button id="aud-more" class="btn-ghost px-3 py-1.5 text-xs hidden" data-on-click="loadAudit(false)">Load more</button></div>`;
             ['aud-user', 'aud-action', 'aud-q'].forEach(id => $id(id).addEventListener('keydown', e => { if (e.key === 'Enter') loadAudit(true); }));
             openModal('audit-modal');
             loadAudit(true);
@@ -96,7 +96,7 @@
             _notifyData = n.data; _alertsData = a.data;
             body.innerHTML = `
                 <div class="flex items-center justify-between mb-2"><h3 class="text-sm font-semibold" style="color:var(--text)">Channels</h3>
-                    <button class="btn-primary px-3 py-1.5 text-xs font-bold" onclick="openChannelModal()">Add channel</button></div>
+                    <button class="btn-primary px-3 py-1.5 text-xs font-bold" data-on-click="openChannelModal()">Add channel</button></div>
                 <p class="text-xs mb-3" style="color:var(--text3)">Where Venvy tells you about crashes, failed deploys and jobs, backups and resource alerts.</p>
                 <div class="space-y-2 mb-6">${n.data.channels.length ? n.data.channels.map(c => `
                     <div class="card px-4 py-3 flex items-center gap-3" data-ch="${c.id}">
@@ -110,7 +110,7 @@
                     </div>`).join('') : '<p class="text-xs py-4 text-center" style="color:var(--text3)">No channels yet — nobody will be told.</p>'}</div>
 
                 <div class="flex items-center justify-between mb-2"><h3 class="text-sm font-semibold" style="color:var(--text)">Resource alerts</h3>
-                    <button class="btn-primary px-3 py-1.5 text-xs font-bold" onclick="openAlertModal()">Add alert</button></div>
+                    <button class="btn-primary px-3 py-1.5 text-xs font-bold" data-on-click="openAlertModal()">Add alert</button></div>
                 <p class="text-xs mb-3" style="color:var(--text3)">Fires when a value stays above its threshold for the time given, and again when it is back under.</p>
                 <div class="space-y-2">${a.data.length ? a.data.map(r => `
                     <div class="card px-4 py-3 flex items-center gap-3" data-al="${r.id}">
@@ -163,7 +163,7 @@
                         ${Object.entries(events).map(([k, d]) => `<label class="flex items-start gap-2 text-xs select-none cursor-pointer" style="color:var(--text2)"><input type="checkbox" class="ch-ev rounded mt-0.5" value="${k}" ${sel.has(k) ? 'checked' : ''}> <span>${escapeHtml(d)}</span></label>`).join('')}
                     </div></div>
                 <label class="flex items-center gap-2 text-sm cursor-pointer select-none" style="color:var(--text2)"><input type="checkbox" id="ch-enabled" class="rounded" ${!c || c.enabled ? 'checked' : ''}> Enabled</label>
-                <div class="flex gap-3"><button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" onclick="closeModal('channel-modal')">Cancel</button>
+                <div class="flex gap-3"><button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" data-on-click="closeModal('channel-modal')">Cancel</button>
                     <button type="button" id="ch-save" class="btn-primary flex-1 py-2.5 text-sm rounded-xl">${c ? 'Save' : 'Add channel'}</button></div></div>`;
             const renderFields = () => {
                 const kind = $id('ch-kind').value;
@@ -208,7 +208,7 @@
                 ${selectHtml('al-metric', 'Metric', [['cpu', 'CPU'], ['memory', 'Memory'], ['disk', 'Disk']], 'cpu')}
                 ${fieldHtml('al-threshold', 'Above', { type: 'number', value: '90', attrs: 'min="1" step="any"', hint: '<span id="al-unit">percent</span>' })}
                 ${fieldHtml('al-minutes', 'For (minutes)', { type: 'number', value: '5', attrs: 'min="1" max="1440"' })}
-                <div class="flex gap-3"><button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" onclick="closeModal('alert-modal')">Cancel</button>
+                <div class="flex gap-3"><button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" data-on-click="closeModal('alert-modal')">Cancel</button>
                     <button type="button" id="al-save" class="btn-primary flex-1 py-2.5 text-sm rounded-xl">Add alert</button></div></div>`;
             const unit = () => {
                 const host = $id('al-scope').value === '0', m = $id('al-metric').value;
@@ -262,8 +262,8 @@
                     ${fieldHtml('sch-keep', 'Keep the last', { type: 'number', value: String(d.keep), attrs: 'min="1" max="365"', hint: 'automatic backups (older ones are deleted)' })}
                 </div>
                 <div class="flex items-center gap-2 mt-3 flex-wrap">
-                    <button class="btn-primary px-4 py-2 text-xs font-bold" onclick="saveBackupSchedule()">Save schedule</button>
-                    <button class="btn-ghost px-3 py-2 text-xs" onclick="runScheduledBackupNow()">Run it now</button>
+                    <button class="btn-primary px-4 py-2 text-xs font-bold" data-on-click="saveBackupSchedule()">Save schedule</button>
+                    <button class="btn-ghost px-3 py-2 text-xs" data-on-click="runScheduledBackupNow()">Run it now</button>
                     <span class="text-xs" style="color:var(--text3)" id="sch-status">${scheduleStatusText(d)}</span>
                 </div>
 
@@ -272,9 +272,9 @@
                 ${selectHtml('rem-kind', 'Send backups to', [['', 'Nowhere'], ['s3', 'S3-compatible storage (AWS, Backblaze, MinIO, Wasabi…)'], ['webdav', 'WebDAV (Nextcloud, …)'], ['scp', 'A server over SSH (scp)']], remote?.kind || '')}
                 <div id="rem-fields" class="space-y-3 mt-3"></div>
                 <div id="rem-buttons" class="flex gap-2 mt-4 ${remote || false ? '' : 'hidden'}">
-                    <button class="btn-primary px-4 py-2 text-xs font-bold" onclick="saveBackupRemote()">Save</button>
-                    <button class="btn-ghost px-3 py-2 text-xs" onclick="testBackupRemote()">Test</button>
-                    <button class="btn-danger px-3 py-2 text-xs rounded-lg font-bold" onclick="removeBackupRemote()">Remove</button>
+                    <button class="btn-primary px-4 py-2 text-xs font-bold" data-on-click="saveBackupRemote()">Save</button>
+                    <button class="btn-ghost px-3 py-2 text-xs" data-on-click="testBackupRemote()">Test</button>
+                    <button class="btn-danger px-3 py-2 text-xs rounded-lg font-bold" data-on-click="removeBackupRemote()">Remove</button>
                     <span id="rem-status" class="text-xs self-center" style="color:var(--text3)"></span>
                 </div>`;
             $id('sch-preset').addEventListener('change', () => $id('sch-cron-row').classList.toggle('hidden', $id('sch-preset').value !== 'custom'));
@@ -354,7 +354,7 @@
             const body = buildModal('shared-env-modal', 'Shared variables', { width: 'max-w-2xl' });
             body.innerHTML = `<p class="text-xs mb-3" style="color:var(--text3)">Every app starts with these in its environment. An app's own variable of the same name wins. Applied the next time an app starts.</p>
                 <div id="genv-mount"></div>
-                <div class="flex justify-end mt-4"><button class="btn-primary px-5 py-2 text-sm font-bold" onclick="saveSharedEnv()" id="genv-save">Save</button></div>`;
+                <div class="flex justify-end mt-4"><button class="btn-primary px-5 py-2 text-sm font-bold" data-on-click="saveSharedEnv()" id="genv-save">Save</button></div>`;
             _sharedEnv = makeEnvEditor('genv', 'genv-mount', { onChange: () => { }, noHistory: true, noImport: false, title: 'Variables', emptyText: 'No shared variables.' });
             openModal('shared-env-modal');
             const r = await apiJson('GET', '/system/shared-env');

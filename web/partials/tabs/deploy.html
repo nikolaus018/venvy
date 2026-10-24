@@ -14,9 +14,9 @@
                                         <p id="dep-last" class="text-xs mt-1" style="color:var(--text3)">Nothing deployed yet.</p>
                                     </div>
                                     <div class="flex gap-2 shrink-0">
-                                        <button id="dep-btn-start" onclick="deployNow(true)" data-requires-operator
+                                        <button id="dep-btn-start" data-on-click="deployNow(true)" data-requires-operator
                                             class="btn-secondary px-4 py-2 text-xs hidden">Deploy &amp; start</button>
-                                        <button id="dep-btn" onclick="deployNow(false)" data-requires-operator
+                                        <button id="dep-btn" data-on-click="deployNow(false)" data-requires-operator
                                             class="btn-primary px-5 py-2 text-xs font-bold">Deploy now</button>
                                     </div>
                                 </div>
@@ -47,7 +47,7 @@
                                     <div class="flex gap-2">
                                         <input id="git-token" type="password" class="inp flex-1 px-3.5 py-2.5 text-sm mono" autocomplete="new-password" spellcheck="false"
                                             placeholder="Paste a read-only personal access token">
-                                        <button id="git-token-clear" type="button" onclick="clearGitToken()" data-requires-operator class="btn-ghost px-3 py-2 text-xs hidden">Remove</button>
+                                        <button id="git-token-clear" type="button" data-on-click="clearGitToken()" data-requires-operator class="btn-ghost px-3 py-2 text-xs hidden">Remove</button>
                                     </div>
                                     <p class="text-xs mt-1" style="color:var(--text3)">Stored encrypted and never shown again. It is only sent to the repository's own host.</p>
                                 </div>
@@ -58,7 +58,7 @@
                                     <p class="text-xs mt-1" style="color:var(--text3)">Runs in the app's folder after the dependencies are installed, with the app's environment variables. Without a repository it just rebuilds.</p>
                                 </div>
                                 <div class="flex items-center justify-end">
-                                    <button id="git-save-btn" onclick="saveGit()" data-requires-operator class="btn-primary px-5 py-2 text-xs font-bold">Save</button>
+                                    <button id="git-save-btn" data-on-click="saveGit()" data-requires-operator class="btn-primary px-5 py-2 text-xs font-bold">Save</button>
                                 </div>
 
                                 <!-- Deploy key (ssh repositories) -->
@@ -67,8 +67,8 @@
                                     <p class="text-xs mb-2" style="color:var(--text3)">For ssh repositories: add this public key to the repository as a read-only deploy key.</p>
                                     <div id="git-key-pub" class="hidden mono text-[11px] p-2.5 rounded-lg break-all" style="background:var(--surface2);border:1px solid var(--border2);color:var(--text2)"></div>
                                     <div class="flex gap-2 mt-2">
-                                        <button onclick="makeDeployKey()" data-requires-operator class="btn-secondary px-3 py-1.5 text-xs" id="git-key-btn">Generate key</button>
-                                        <button onclick="copyText(document.getElementById('git-key-pub').textContent, 'Public key copied')" class="btn-ghost px-3 py-1.5 text-xs hidden" id="git-key-copy">Copy</button>
+                                        <button data-on-click="makeDeployKey()" data-requires-operator class="btn-secondary px-3 py-1.5 text-xs" id="git-key-btn">Generate key</button>
+                                        <button data-on-click="copyFrom('git-key-pub', 'Public key copied')" class="btn-ghost px-3 py-1.5 text-xs hidden" id="git-key-copy">Copy</button>
                                     </div>
                                 </div>
                             </div>
@@ -80,7 +80,7 @@
                                         <i data-feather="zap" class="w-4 h-4"></i> Deploy on push
                                     </h3>
                                     <label class="flex items-center gap-2 text-xs cursor-pointer select-none" style="color:var(--text2)">
-                                        <input type="checkbox" id="git-auto" class="rounded" onchange="toggleAutoDeploy(this.checked)"> Auto-deploy
+                                        <input type="checkbox" id="git-auto" class="rounded" data-on-change="toggleAutoDeploy(this.checked)"> Auto-deploy
                                     </label>
                                 </div>
                                 <div id="hook-box" class="hidden space-y-3">
@@ -89,16 +89,16 @@
                                         <span class="mono">curl -X POST -H "Authorization: Bearer &lt;secret&gt;" &lt;url&gt;</span></p>
                                     <div>
                                         <label class="block section-label mb-1">Payload URL</label>
-                                        <div class="flex gap-2"><input id="hook-url" readonly class="inp flex-1 px-3 py-2 text-xs mono"><button onclick="copyText(document.getElementById('hook-url').value, 'URL copied')" class="btn-ghost px-3 py-1.5 text-xs">Copy</button></div>
+                                        <div class="flex gap-2"><input id="hook-url" readonly class="inp flex-1 px-3 py-2 text-xs mono"><button data-on-click="copyFrom('hook-url', 'URL copied')" class="btn-ghost px-3 py-1.5 text-xs">Copy</button></div>
                                         <p class="text-xs mt-1" style="color:var(--text3)">Must be reachable from the git host — use the public address of this Venvy.</p>
                                     </div>
                                     <div>
                                         <label class="block section-label mb-1">Secret</label>
                                         <div class="flex gap-2">
                                             <input id="hook-secret" type="password" readonly class="inp flex-1 px-3 py-2 text-xs mono">
-                                            <button onclick="const i=document.getElementById('hook-secret'); i.type = i.type==='password' ? 'text' : 'password'" class="btn-ghost px-3 py-1.5 text-xs">Show</button>
-                                            <button onclick="copyText(document.getElementById('hook-secret').value, 'Secret copied')" class="btn-ghost px-3 py-1.5 text-xs">Copy</button>
-                                            <button onclick="regenWebhookSecret()" class="btn-ghost px-3 py-1.5 text-xs">New secret</button>
+                                            <button data-on-click="toggleSecretVis('hook-secret')" class="btn-ghost px-3 py-1.5 text-xs">Show</button>
+                                            <button data-on-click="copyFrom('hook-secret', 'Secret copied')" class="btn-ghost px-3 py-1.5 text-xs">Copy</button>
+                                            <button data-on-click="regenWebhookSecret()" class="btn-ghost px-3 py-1.5 text-xs">New secret</button>
                                         </div>
                                     </div>
                                 </div>
@@ -111,7 +111,7 @@
                                         <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)"><i data-feather="clock" class="w-4 h-4"></i> Releases</h3>
                                         <p class="text-xs mt-0.5" style="color:var(--text3)" id="rel-help">Versions you can go back to.</p>
                                     </div>
-                                    <button onclick="snapshotNow()" data-requires-operator class="btn-ghost px-3 py-1.5 text-xs shrink-0">Snapshot now</button>
+                                    <button data-on-click="snapshotNow()" data-requires-operator class="btn-ghost px-3 py-1.5 text-xs shrink-0">Snapshot now</button>
                                 </div>
                                 <div id="rel-list" class="divide-y" style="border-color:var(--border)">
                                     <p class="px-5 py-6 text-xs text-center" style="color:var(--text3)">No releases yet.</p>

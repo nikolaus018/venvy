@@ -73,6 +73,17 @@ class Client:
         return False
 
 
+# base URL -> data dir of each running server, so admin() can read its setup code.
+_DATA_DIRS = {}
+
+
+def setup_code(base):
+    try:
+        return (_DATA_DIRS[base] / ".setup-code").read_text().strip()
+    except (KeyError, OSError):
+        return ""
+
+
 @contextmanager
 def server(repo, port, entry="main.py", env=None, data=None, keep=False):
     data = Path(data or tempfile.mkdtemp(prefix="venvy-t-"))
@@ -81,6 +92,7 @@ def server(repo, port, entry="main.py", env=None, data=None, keep=False):
     srv = subprocess.Popen([PY, str(Path(repo) / entry), "--port", str(port)], cwd=data,
                            stdout=log, stderr=subprocess.STDOUT, env=e)
     base = f"http://127.0.0.1:{port}"
+    _DATA_DIRS[base] = data
     try:
         for _ in range(240):
             try:
@@ -111,7 +123,8 @@ def server(repo, port, entry="main.py", env=None, data=None, keep=False):
 def admin(base):
     cl = Client(base)
     cl.c.get("/")
-    r = cl.req("POST", "/api/auth/setup", json={"username": "admin", "password": "hunter2hunter2"})
+    r = cl.req("POST", "/api/auth/setup", json={"username": "admin", "password": "hunter2hunter2",
+                                                "setup_code": setup_code(base)})
     if r.status_code != 200:
         r = cl.req("POST", "/api/auth/login", json={"username": "admin", "password": "hunter2hunter2"})
     cl.key = r.json()["auth_key"]

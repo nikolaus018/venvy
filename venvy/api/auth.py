@@ -13,6 +13,8 @@ from venvy.audit import audit_log
 from venvy.auth import (
     _authenticate,
     check_ip_allowlist,
+    check_setup_code,
+    clear_setup_code,
     _check_login_rate,
     _clean_username,
     _clear_login_rate,
@@ -48,6 +50,12 @@ class UserReq(BaseModel):
     username: str
     password: str
     role: Optional[str] = None
+
+
+class SetupReq(BaseModel):
+    username: str
+    password: str
+    setup_code: str = ""
 
 
 class PwdReq(BaseModel):
@@ -87,20 +95,27 @@ _setup_lock = threading.Lock()
 
 
 @router.post("/setup")
-def auth_setup(payload: UserReq, request: Request, response: Response, session: Session = Depends(get_session)):
+def auth_setup(payload: SetupReq, request: Request, response: Response, session: Session = Depends(get_session)):
     username = _clean_username(payload.username)
     _validate_password_strength(payload.password)
+    # Wrong codes count like wrong passwords, so the code can't be guessed.
+    fail = _login_gate(_login_rate_key(request))
     password_hash = hash_password(payload.password)
     # Handlers run in a thread pool: without the lock, two first-run requests
     # could both see an empty user table and each create an admin account.
     with _setup_lock:
         if session.exec(select(User)).first():
             raise HTTPException(400, "Setup already completed.")
+        if not check_setup_code(session, payload.setup_code):
+            fail()
+            raise HTTPException(403, "Wrong setup code. It is in the server log and in the "
+                                     ".setup-code file in Venvy's data directory.")
         user = User(username=username, password_hash=password_hash, role="admin")
         session.add(user)
         session.commit()
+        clear_setup_code()
     session.refresh(user)
-    auth_key = _new_session(session, response, user)
+    auth_key = _new_session(session, request, response, user)
     audit_log(user.username, "user_setup", "initial admin account created")
     return {"ok": True, "username": user.username, "role": user.role, "auth_key": auth_key}
 
@@ -152,7 +167,7 @@ def login(
 
     _clear_login_rate(user_key)
     _clear_login_rate(rate_key)
-    auth_key = _new_session(session, response, user)
+    auth_key = _new_session(session, request, response, user)
     audit_log(user.username, "login", f"from {rate_key}")
     return {"ok": True, "username": user.username, "role": user.role, "auth_key": auth_key}
 

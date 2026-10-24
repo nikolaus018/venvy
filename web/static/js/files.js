@@ -65,8 +65,8 @@
             if (!currentBrowserPath) {
                 pathEl.innerHTML = '';
             } else {
-                // Built as DOM nodes — never put a path inside an inline
-                // onclick="…": HTML-escaping doesn't stop a folder named
+                // Built as DOM nodes — never put a path inside a
+                // data-on-click="…" call: HTML-escaping doesn't stop a folder named
                 // x');alert(1);// from breaking out of the JS string there.
                 pathEl.replaceChildren();
                 let accum = '';

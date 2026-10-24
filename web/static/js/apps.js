@@ -43,7 +43,7 @@
             _lastAppListHash = '';
             el.innerHTML = `<div class="text-center py-8 px-4">
                 <p class="text-xs font-medium mb-3" style="color:var(--red)">${escapeHtml(msg)}</p>
-                <button onclick="loadApps()" class="btn-ghost text-xs px-3 py-1.5 rounded-lg font-medium">Retry</button>
+                <button data-on-click="loadApps()" class="btn-ghost text-xs px-3 py-1.5 rounded-lg font-medium">Retry</button>
             </div>`;
         }
 
@@ -106,7 +106,7 @@
             if (!shown.length) {
                 listEl.innerHTML = `<div class="text-center py-8 px-4">
                 <p class="text-xs font-medium" style="color:var(--text3)">No match for &ldquo;${escapeHtml(_appFilter)}&rdquo;</p>
-                <button onclick="clearAppSearch()" class="btn-ghost text-xs px-3 py-1.5 rounded-lg font-medium mt-3">Clear filter</button>
+                <button data-on-click="clearAppSearch()" class="btn-ghost text-xs px-3 py-1.5 rounded-lg font-medium mt-3">Clear filter</button>
             </div>`;
                 return;
             }
@@ -115,7 +115,7 @@
                 const isActive = app.id === activeAppId;
                 const m = statusMeta(app.status);
                 return `
-                <button type="button" onclick="selectApp(${app.id})" data-app-id="${app.id}"
+                <button type="button" data-on-click="selectApp(${app.id})" data-app-id="${app.id}"
                      aria-current="${isActive ? 'true' : 'false'}"
                      title="${escapeHtml(app.name)} — ${m.label}"
                      class="nav-item app-row w-full text-left flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition active:scale-95 ${isActive ? 'active' : ''}"
@@ -251,7 +251,7 @@
                         <p class="text-sm mono font-semibold truncate select-all leading-snug" style="color:var(--green)">${escapeHtml(localUrl)}</p>
                     </div>
                     <div class="flex gap-1 shrink-0">
-                        <button onclick="copyAccessUrl()" title="Copy local URL" class="p-1.5 rounded-lg transition active:scale-95" style="color:var(--text3)">
+                        <button data-on-click="copyAccessUrl()" title="Copy local URL" class="p-1.5 rounded-lg transition active:scale-95" style="color:var(--text3)">
                             <i data-feather="copy" class="w-3.5 h-3.5"></i>
                         </button>
                         <a href="${escapeHtml(localUrl)}" target="_blank" rel="noopener" title="Open local" class="p-1.5 rounded-lg transition active:scale-95 flex items-center" style="color:var(--text3)">

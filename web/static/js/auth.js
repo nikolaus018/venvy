@@ -36,6 +36,7 @@
                     document.getElementById('auth-screen').classList.remove('hidden');
                     if (!data.user_exists) {
                         document.getElementById('setup-hint').classList.remove('hidden');
+                        document.getElementById('setup-code').classList.remove('hidden');
                         document.getElementById('login-form').dataset.mode = 'setup';
                         // A password being chosen, not recalled: lets a
                         // password manager offer to generate and save one.
@@ -104,8 +105,10 @@
                 if (mode === 'setup') {
                     const u = document.getElementById('username').value;
                     const p = document.getElementById('password').value;
+                    const setupCode = document.getElementById('setup-code').value.trim();
+                    if (!setupCode) { showToast('Enter the setup code.', 'warn'); return; }
                     submitBtn.disabled = true; submitBtn.textContent = 'Creating…';
-                    const res = await fetch(API + '/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
+                    const res = await fetch(API + '/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p, setup_code: setupCode }) });
                     if (res.ok) { setAuthKey((await res.json()).auth_key); await checkAuth(); }
                     else {
                         const err = await res.json().catch(() => ({ detail: 'Setup failed' }));
