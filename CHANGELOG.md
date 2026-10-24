@@ -5,6 +5,11 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.6.1
+
+- What's new showed "Could not reach the release server: ClientResponseError" instead of the release notes. GitHub now sends a 9 KB header with its release downloads, and Venvy's HTTP client refused any header over 8 KB. Updating itself was not affected.
+- For the same reason, an app served on its own domain answered 502 when it sent a header over 8 KB. Venvy's HTTP clients now accept headers up to 64 KB.
+
 ## v4.6.0
 
 Security hardening before going into production.

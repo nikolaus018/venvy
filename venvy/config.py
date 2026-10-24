@@ -48,6 +48,11 @@ _VENVY_KEY_FILE = DATA_DIR / ".venvy_key"
 # One-time code that first-run setup asks for (see venvy.auth.ensure_setup_code).
 SETUP_CODE_FILE = DATA_DIR / ".setup-code"
 
+# For every aiohttp client: its default refuses response headers over 8 KiB,
+# and real servers send more — GitHub's release downloads carry a 9 KiB
+# Content-Security-Policy, which failed every "What's new" fetch.
+HTTP_CLIENT_LIMITS = {"max_line_size": 65536, "max_field_size": 65536}
+
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days — keeps PWA users signed in
 
 # Default False so plain-HTTP LAN deployments work out of the box. Requests

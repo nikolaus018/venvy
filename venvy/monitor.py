@@ -15,7 +15,7 @@ import aiohttp
 from sqlmodel import Session, delete, select
 
 from venvy import notify
-from venvy.config import DATA_DIR, _make_tz_aware, psutil, utc_now
+from venvy.config import HTTP_CLIENT_LIMITS, DATA_DIR, _make_tz_aware, psutil, utc_now
 from venvy.db import engine
 from venvy.models import AlertRule, App, MetricSample
 
@@ -68,7 +68,7 @@ async def probe(port: int, path: str) -> dict:
     url = f"http://127.0.0.1:{port}{path}"
     try:
         timeout = aiohttp.ClientTimeout(total=_PROBE_TIMEOUT_SEC)
-        async with aiohttp.ClientSession(timeout=timeout) as http:
+        async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as http:
             async with http.get(url, allow_redirects=False) as resp:
                 ok = resp.status < 400
                 return {"ok": ok, "code": resp.status, "error": None if ok else f"HTTP {resp.status}"}

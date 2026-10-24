@@ -26,7 +26,7 @@ from typing import Optional, Tuple
 import aiohttp
 
 from venvy import __version__
-from venvy.config import ASSETS_DIR, DATA_DIR
+from venvy.config import HTTP_CLIENT_LIMITS, ASSETS_DIR, DATA_DIR
 
 REQUEST_FILE = DATA_DIR / ".update-request"
 # Written by update.sh (root) in a directory only root can write; Venvy reads it.
@@ -116,7 +116,7 @@ async def latest_version(force: bool = False) -> Tuple[Optional[str], Optional[s
         version, error = None, None
         try:
             timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(timeout=timeout) as http:
+            async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as http:
                 version = await _github_latest(http)
                 if version:
                     _checked.update(at=time.monotonic(), version=version, error=None,
@@ -187,7 +187,7 @@ async def release_notes(current: str, latest: Optional[str], force: bool = False
             sections, error = None, None
             try:
                 timeout = aiohttp.ClientTimeout(total=15)
-                async with aiohttp.ClientSession(timeout=timeout) as http:
+                async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as http:
                     async with http.get(_changelog_url(latest)) as resp:
                         if resp.status != 200:
                             error = f"The release server answered {resp.status}."

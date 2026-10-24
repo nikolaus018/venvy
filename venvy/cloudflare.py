@@ -10,6 +10,7 @@ import aiohttp
 from fastapi import HTTPException
 from sqlmodel import Session
 
+from venvy.config import HTTP_CLIENT_LIMITS
 from venvy.crypto import _decrypt_secret
 from venvy.models import SystemSetting
 
@@ -61,7 +62,7 @@ async def _cf_request(method: str, url: str, token: str, payload: Optional[dict]
     }
     timeout = aiohttp.ClientTimeout(total=10)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as session:
             async with session.request(method, url, headers=headers, json=payload) as resp:
                 data = await resp.json()
                 if not isinstance(data, dict):

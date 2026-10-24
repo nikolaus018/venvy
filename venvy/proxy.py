@@ -18,6 +18,7 @@ import aiohttp
 from sqlmodel import Session, select
 from starlette.requests import HTTPConnection
 
+from venvy.config import HTTP_CLIENT_LIMITS
 from venvy.db import engine
 from venvy.models import App
 
@@ -64,7 +65,7 @@ def _http() -> aiohttp.ClientSession:
     if _session is None or _session.closed:
         _session = aiohttp.ClientSession(
             auto_decompress=False, timeout=aiohttp.ClientTimeout(total=None, sock_connect=5, sock_read=300),
-            connector=aiohttp.TCPConnector(limit=200))
+            connector=aiohttp.TCPConnector(limit=200), **HTTP_CLIENT_LIMITS)
     return _session
 
 

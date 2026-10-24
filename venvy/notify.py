@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 import aiohttp
 from sqlmodel import Session, select
 
-from venvy.config import utc_now
+from venvy.config import HTTP_CLIENT_LIMITS, utc_now
 from venvy.crypto import _encrypt_secret, _try_decrypt_secret
 from venvy.db import engine
 from venvy.models import NotifyChannel
@@ -132,7 +132,7 @@ async def _send_one(kind: str, cfg: dict, payload: dict) -> None:
     if kind == "email":
         await asyncio.to_thread(_send_email, cfg, title, body)
         return
-    async with aiohttp.ClientSession(timeout=timeout) as http:
+    async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as http:
         if kind == "webhook":
             raw = json.dumps(payload).encode()
             headers = {"Content-Type": "application/json", "User-Agent": "Venvy"}

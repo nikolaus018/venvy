@@ -221,7 +221,10 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health" and os.path.exists("sick"):
             self.send_response(500); self.end_headers(); self.wfile.write(b"sick"); return
-        self.send_response(200); self.send_header("content-type", "text/plain"); self.end_headers()
+        self.send_response(200); self.send_header("content-type", "text/plain")
+        if self.path == "/bigheader":
+            self.send_header("x-big", "b" * 12000)   # over aiohttp's 8 KiB default, like GitHub's CSP
+        self.end_headers()
         self.wfile.write(("APP-OK " + os.environ.get("MARK", "") + " " + self.path).encode())
     def do_POST(self):
         n = int(self.headers.get("content-length") or 0)

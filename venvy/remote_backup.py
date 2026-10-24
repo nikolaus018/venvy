@@ -16,7 +16,7 @@ from typing import Dict, Optional
 import aiohttp
 from sqlmodel import Session
 
-from venvy.config import DATA_DIR
+from venvy.config import HTTP_CLIENT_LIMITS, DATA_DIR
 from venvy.crypto import _encrypt_secret, _try_decrypt_secret
 from venvy.db import engine
 from venvy.models import SystemSetting
@@ -197,7 +197,7 @@ async def _upload_s3(path: Path, size: int, cfg: dict, name: str) -> str:
                            h.hexdigest(), {}, datetime.datetime.now(datetime.timezone.utc))
     headers = {**signed, "Content-Type": "application/gzip", "Content-Length": str(size)}
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=600)
-    async with aiohttp.ClientSession(timeout=timeout) as http:
+    async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as http:
         async with http.put(url, data=_file_chunks(path), headers=headers) as resp:
             if resp.status >= 300:
                 raise RemoteError(f"S3 answered {resp.status}: {(await resp.text())[:300]}")
@@ -208,7 +208,7 @@ async def _upload_webdav(path: Path, size: int, cfg: dict, name: str) -> str:
     url = cfg["url"].rstrip("/") + "/" + urllib.parse.quote(name)
     auth = aiohttp.BasicAuth(cfg.get("username", ""), cfg.get("password", "")) if cfg.get("username") else None
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=600)
-    async with aiohttp.ClientSession(timeout=timeout, auth=auth) as http:
+    async with aiohttp.ClientSession(timeout=timeout, auth=auth, **HTTP_CLIENT_LIMITS) as http:
         async with http.put(url, data=_file_chunks(path), headers={"Content-Length": str(size)}) as resp:
             if resp.status >= 300:
                 raise RemoteError(f"The WebDAV server answered {resp.status}: {(await resp.text())[:300]}")
