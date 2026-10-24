@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml"><img src="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/nikolaus018/venvy/releases/latest"><img src="https://img.shields.io/github/v/release/nikolaus018/venvy" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue" alt="License: MIT + Commons Clause"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/nikolaus018/venvy" alt="MIT license"></a>
 </p>
 
 <p align="center">
@@ -241,7 +241,5 @@ targets; a frozen single-binary build is not.
 
 ## License
 
-[MIT with the Commons Clause](LICENSE): use it, change it and share it freely, including at work —
-but you may not sell Venvy, or a product or service (hosting and support included) whose value
-comes mainly from it, however much it was modified. Releases up to v4.6.1 were published under
-plain MIT.
+[MIT](LICENSE). The bundled Tailwind CSS runtime in `vendor/` is MIT-licensed by Tailwind Labs
+([vendor/LICENSE-tailwindcss](vendor/LICENSE-tailwindcss)).
