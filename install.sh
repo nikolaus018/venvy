@@ -19,7 +19,8 @@
 #   --with-ruby       also install Ruby and Bundler
 #   --with-java       also install a headless Java runtime
 #   --with-all        all of the runtimes above, and Rust
-#   --app-users       run Venvy as root with one Unix user per hosted app
+#   --shared-user     run every app as the one 'venvy' user, without per-app
+#                     users (the default for a new install is one user per app)
 #   --uninstall       remove the service and code (data and config are kept)
 #
 # Run it again at any time to update: it downloads the release, verifies its
@@ -79,7 +80,8 @@ Options go after `bash -s --`:
   --with-ruby       also install Ruby and Bundler
   --with-java       also install a headless Java runtime
   --with-all        all of the runtimes above, and Rust
-  --app-users       run Venvy as root with one Unix user per hosted app
+  --shared-user     run every app as the one 'venvy' user, without per-app
+                    users (a new install gets one Unix user per app)
   --uninstall       remove the service and code (data and config are kept)
 
 Run it again at any time to update. Settings are in /etc/venvy/venvy.env,
@@ -105,7 +107,8 @@ while [ $# -gt 0 ]; do
     --with-ruby) WITH_RUBY=1; shift ;;
     --with-java) WITH_JAVA=1; shift ;;
     --with-all)  WITH_RUST=1; WITH_NODE=1; WITH_GO=1; WITH_BUN=1; WITH_DENO=1; WITH_PHP=1; WITH_RUBY=1; WITH_JAVA=1; shift ;;
-    --app-users) APP_USERS=1; shift ;;
+    --app-users) APP_USERS=1; shift ;;     # the default for a new install; kept for scripts
+    --shared-user) APP_USERS=0; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)   usage; exit 0 ;;
     *)           die "Unknown option: $1 (see --help)" ;;
@@ -154,7 +157,13 @@ if [ -z "$DATA_DIR" ]; then DATA_DIR="$DEFAULT_DATA_DIR"; [ -f "$DATA_DIR/data.d
 env_get() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1 || true; }
 [ -n "$HOST" ]      || HOST="$(env_get HOST)";                   [ -n "$HOST" ]      || HOST="0.0.0.0"
 [ -n "$PORT" ]      || PORT="$(env_get PORT)";                   [ -n "$PORT" ]      || PORT="54783"
-[ -n "$APP_USERS" ] || APP_USERS="$(env_get VENVY_APP_USERS)";   [ -n "$APP_USERS" ] || APP_USERS="0"
+[ -n "$APP_USERS" ] || APP_USERS="$(env_get VENVY_APP_USERS)"
+# Per-app users unless asked otherwise: without them every app, terminal and
+# package install runs as Venvy's own user and can read data.db, the secrets
+# key and every other app. An existing install keeps the mode it has.
+if [ -z "$APP_USERS" ]; then
+  if [ "$EXISTING_DATA" -eq 1 ]; then APP_USERS="0"; else APP_USERS="1"; fi
+fi
 
 # Who the service runs as.
 if [ "$APP_USERS" = "1" ]; then
@@ -335,11 +344,12 @@ if [ ! -f "$ENV_FILE" ]; then
 HOST=$HOST
 PORT=$PORT
 
-# Set to 1 once Venvy is only reached over HTTPS (e.g. through the tunnel),
-# so the session cookie is never sent over plain HTTP.
+# Requests that arrive over HTTPS (directly, or through the tunnel) already
+# get Secure cookies and HSTS. Set to 1 to treat every request that way.
 SESSION_COOKIE_SECURE=0
 
-# One Unix user per hosted app (requires the service to run as root).
+# One Unix user per hosted app (the service then runs as root). With 0, all
+# apps share Venvy's own user and can read its database and each other.
 VENVY_APP_USERS=$APP_USERS
 
 # Origins allowed to call the API from a browser, comma separated.

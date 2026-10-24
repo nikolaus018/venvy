@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml"><img src="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/nikolaus018/venvy/releases/latest"><img src="https://img.shields.io/github/v/release/nikolaus018/venvy" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/nikolaus018/venvy" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue" alt="License: MIT + Commons Clause"></a>
 </p>
 
 <p align="center">
@@ -54,7 +54,7 @@ curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install
 | `--with-ruby` | Also install Ruby and Bundler. |
 | `--with-java` | Also install a headless Java runtime. |
 | `--with-all` | All of the above, and Rust. Python and static sites need nothing extra. |
-| `--app-users` | Run as root with one Unix user per hosted app (see [Isolation](#isolation)). |
+| `--shared-user` | Run every app as the one `venvy` user instead of one Unix user per app (see [Isolation](#isolation)). |
 | `--uninstall` | Remove the service and code. Data and config are kept. |
 
 Settings live in `/etc/venvy/venvy.env`, data in `/var/lib/venvy`, code in `/opt/venvy`.
@@ -178,10 +178,14 @@ The API is documented in [venvy-api-documentation.md](venvy-api-documentation.md
 
 ### Isolation
 
-By default every hosted app runs as the same `venvy` user. That keeps apps away from the rest
-of the system, but not from each other or from Venvy's own data. Installing with `--app-users`
-runs Venvy as root and gives each app its own locked Unix user that owns only its directory;
-its process, terminal and package installs run as that user.
+Each hosted app gets its own locked Unix user that owns only its directory; its process,
+terminal and package installs run as that user, so an app can't read Venvy's database, the key
+that decrypts every app's secrets, or another app. For that, the Venvy service runs as root.
+
+`--shared-user` runs everything as one `venvy` user instead: apps are kept away from the rest of
+the system, but not from each other or from Venvy's own data, and an operator's terminal can read
+the database. An existing install keeps the mode it was installed with; switch with
+`--app-users` or `--shared-user` (or `VENVY_APP_USERS` in `/etc/venvy/venvy.env`).
 
 ### Locked out?
 
@@ -190,11 +194,11 @@ on the server — it works whether or not Venvy is running, and signs that user 
 
 ```bash
 cd /var/lib/venvy
-sudo -u venvy /opt/venvy/current/.venv/bin/python /opt/venvy/current/main.py --reset-password admin
-sudo -u venvy /opt/venvy/current/.venv/bin/python /opt/venvy/current/main.py --disable-2fa admin
+sudo /opt/venvy/current/.venv/bin/python /opt/venvy/current/main.py --reset-password admin
+sudo /opt/venvy/current/.venv/bin/python /opt/venvy/current/main.py --disable-2fa admin
 ```
 
-(With `--app-users` the service runs as root: leave out `-u venvy`.)
+(With `--shared-user` the service runs as `venvy`: use `sudo -u venvy` instead.)
 
 ## Development
 
@@ -237,4 +241,7 @@ targets; a frozen single-binary build is not.
 
 ## License
 
-[MIT](LICENSE)
+[MIT with the Commons Clause](LICENSE): use it, change it and share it freely, including at work —
+but you may not sell Venvy, or a product or service (hosting and support included) whose value
+comes mainly from it, however much it was modified. Releases up to v4.6.1 were published under
+plain MIT.

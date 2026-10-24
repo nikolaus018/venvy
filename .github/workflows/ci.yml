@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [default, app-users]
+        mode: [default, shared-user]   # default: one Unix user per app
     env:
       VENVY_BASE_URL: http://127.0.0.1:8099
       BASE: http://127.0.0.1:54783
@@ -59,7 +59,7 @@ jobs:
           sleep 1
 
       - name: Fresh install
-        run: sudo VENVY_BASE_URL=$VENVY_BASE_URL bash install.sh ${{ matrix.mode == 'app-users' && '--app-users' || '' }}
+        run: sudo VENVY_BASE_URL=$VENVY_BASE_URL bash install.sh ${{ matrix.mode == 'shared-user' && '--shared-user' || '' }}
 
       - name: Python for the checks
         run: |
@@ -67,13 +67,13 @@ jobs:
           sudo /opt/checks/bin/pip install -q httpx websockets psutil
 
       - name: Check the installed service
-        run: cd tests && sudo /opt/checks/bin/python t_installed.py $BASE ${{ matrix.mode == 'app-users' && '--app-users' || '' }}
+        run: cd tests && sudo /opt/checks/bin/python t_installed.py $BASE ${{ matrix.mode == 'default' && '--app-users' || '' }}
 
       - name: Update by running the installer again
         run: |
           sudo VENVY_BASE_URL=$VENVY_BASE_URL bash install.sh
           sudo ls /var/lib/venvy/backups | grep -q '^data-.*\.db$'
-          cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'app-users' && '--app-users' || '' }}
+          cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'default' && '--app-users' || '' }}
 
       - name: Update from the UI
         run: |
@@ -86,16 +86,16 @@ jobs:
           # between real releases): rewriting it in place used to derail the running copy.
           sudo sed -i '2i # an older update.sh' /opt/venvy/update.sh
           printf '# Changelog\n\n## v0.0.0-ci2\n\n- Second CI release\n  for the update test.\n\n## v0.0.0-ci1\n\n- First.\n' > /tmp/rel/CHANGELOG.md
-          (cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing --ui-update v0.0.0-ci2 ${{ matrix.mode == 'app-users' && '--app-users' || '' }})
+          (cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing --ui-update v0.0.0-ci2 ${{ matrix.mode == 'default' && '--app-users' || '' }})
           test "$(basename "$(readlink -f /opt/venvy/current)")" = "v0.0.0-ci2"
-          cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'app-users' && '--app-users' || '' }}
+          cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'default' && '--app-users' || '' }}
 
       - name: A release that does not start is rolled back
         run: |
           if sudo VENVY_BASE_URL=http://127.0.0.1:8098 bash install.sh; then echo "installer accepted a broken release"; exit 1; fi
           test "$(basename "$(readlink -f /opt/venvy/current)")" = "v0.0.0-ci2"
           curl -fsS $BASE/api/health
-          cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'app-users' && '--app-users' || '' }}
+          cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'default' && '--app-users' || '' }}
 
       - name: A corrupted download changes nothing
         run: |

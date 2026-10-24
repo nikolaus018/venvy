@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from venvy import monitor
 from venvy.crypto import _try_decrypt_secret
+from venvy.isolation import _isolation_active
 from venvy.models import App
 from venvy.process import _app_metrics, _systemd_run_available, get_server_ipv4
 
@@ -56,6 +57,8 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
     d["local_url"] = local_url
     d["metrics"]   = _app_metrics.get(app_row.id, {"cpu": 0.0, "memory": 0})
     d["resource_limits_enforced"] = _systemd_run_available()
+    # Whether the app, its terminal and its tools run as its own Unix user.
+    d["isolated"] = _isolation_active()
     pref = app_row.url_source_pref
     if pref == "public" and app_row.external_url:
         d["access_url"] = app_row.external_url

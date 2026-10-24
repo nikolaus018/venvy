@@ -439,6 +439,7 @@
             if (_isSystemViewActive()) return;
             document.getElementById('empty-state').classList.add('hidden');
             document.getElementById('dashboard').classList.remove('hidden');
+            termSetIsolation(!!app.isolated);
             const titleEl = document.getElementById('dash-title');
             titleEl.innerText = app.name;
             titleEl.title = app.name;

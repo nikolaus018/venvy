@@ -455,7 +455,7 @@
                     </div>`;
                 const dismiss = `<button data-on-click="dismissBackupOp()" class="btn-ghost shrink-0 px-2.5 py-1 text-[11px] font-bold rounded-lg">Dismiss</button>`;
                 if (up) {
-                    panel.innerHTML = head(`Uploading ${up.name}`) + `
+                    panel.innerHTML = head(`Uploading ${escapeHtml(up.name)}`) + `
                         <div class="op-bar"><div class="op-bar-fill" data-op-fill></div></div>
                         <p class="text-[11px] mt-2" data-op-detail style="color:var(--text3)"></p>
                         <div class="flex items-center justify-between gap-3 mt-2">
@@ -463,7 +463,7 @@
                             <button data-on-click="cancelBackupUpload()" class="shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-lg" style="color:var(--red)">Cancel</button>
                         </div>`;
                 } else if (running) {
-                    panel.innerHTML = head(op.kind === 'restore' ? `Restoring ${op.filename}` : 'Creating backup…') + `
+                    panel.innerHTML = head(op.kind === 'restore' ? `Restoring ${escapeHtml(op.filename || '')}` : 'Creating backup…') + `
                         <div data-op-steps></div>
                         <p class="text-[11px] mt-2" style="color:var(--text3)">Started by ${escapeHtml(op.started_by)}. This runs
                             on the server: you can close this window or the browser and come back — the progress will be here.</p>`;

@@ -5,6 +5,15 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.7.0
+
+- Venvy's license is now MIT with the Commons Clause: it may be used, changed and shared freely, but not sold, nor offered as a paid product or service whose value comes mainly from it. Releases up to v4.6.1 stay under plain MIT.
+- A new install gives every hosted app its own Unix user. Before, that needed `--app-users`, and by default every app, terminal and package install ran as Venvy's own user: it could read Venvy's database, the key that decrypts every app's secrets, and every other app, so an operator could make themselves admin from a terminal. `--shared-user` keeps the old way. An existing install keeps the mode it has; `--app-users` switches it over.
+- The terminal no longer claims to be "JAILED" and unable to reach the host. It now says ISOLATED when the shell runs as the app's own user, and SHARED USER (in amber) when it runs as Venvy's, with what that means.
+- Logs on a phone: the filter has a row of its own instead of two characters' room beside the buttons, and the clear button is no longer cut off.
+- Bigger tap targets for "Open Menu" and System → Refresh on a phone.
+- File names in the backup panel are escaped, and a push webhook with a garbled signature header answers 401 instead of 500.
+
 ## v4.6.1
 
 - What's new showed "Could not reach the release server: ClientResponseError" instead of the release notes. GitHub now sends a 9 KB header with its release downloads, and Venvy's HTTP client refused any header over 8 KB. Updating itself was not affected.

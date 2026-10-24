@@ -27,6 +27,24 @@
             dot.title = s.title;
         }
 
+        // The badge says what the shell can reach — honestly: per-app users keep
+        // it out of Venvy's data and other apps, not off the host.
+        function termSetIsolation(isolated) {
+            const el = document.getElementById('term-isolation');
+            if (!el) return;
+            const color = isolated ? 'var(--green)' : 'var(--amber, #d97706)';
+            el.style.color = color;
+            el.style.background = isolated ? 'rgba(48,209,88,0.08)' : 'rgba(217,119,6,0.08)';
+            el.style.border = `1px solid ${isolated ? 'rgba(48,209,88,0.2)' : 'rgba(217,119,6,0.25)'}`;
+            document.getElementById('term-isolation-text').textContent = isolated ? 'ISOLATED' : 'SHARED USER';
+            el.title = isolated
+                ? "This shell runs as the app's own Unix user: it can't read Venvy's data or other apps."
+                : "This shell runs as Venvy's own user: it can read Venvy's database and every other app. "
+                  + "Install Venvy with per-app users (the default) to keep apps apart.";
+            el.classList.remove('hidden');
+            el.classList.add('flex');
+        }
+
         // Update the path label in the toolbar
         function _termSetLabel(appName) {
             const lbl = document.getElementById('term-app-label');

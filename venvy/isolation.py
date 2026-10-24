@@ -1,4 +1,4 @@
-"""Per-app Unix users (opt-in: VENVY_APP_USERS=1, Linux, Venvy running as root)."""
+"""Per-app Unix users (VENVY_APP_USERS=1 — the installer's default — Linux, Venvy running as root)."""
 import contextlib
 import logging
 import os
@@ -14,7 +14,9 @@ from venvy.models import App
 
 
 # ---------------------------------------------------------------------------
-# Per-app Unix users (opt-in: VENVY_APP_USERS=1, Linux, Venvy running as root)
+# Per-app Unix users (VENVY_APP_USERS=1, Linux, Venvy running as root). install.sh
+# turns this on for a new install; --shared-user leaves it off. Off when unset,
+# so `python main.py` from a checkout keeps working without root.
 # ---------------------------------------------------------------------------
 # Without this, every hosted app, terminal and pip run shares Venvy's own OS
 # user and can read data.db, .venvy_key and every other app. With it, each

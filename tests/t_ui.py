@@ -40,6 +40,7 @@ with server(repo, 55010) as (base, data, srv):
 
         pg.click(f"#app-list .app-row[data-app-id='{a}']"); pg.wait_for_timeout(1500)
         check("dashboard", pg.inner_text("#dash-title") == "Alpha" and "RUNNING" in pg.inner_text("#dash-status").upper())
+        check("terminal badge shows the real mode", pg.inner_text("#term-isolation-text") == "SHARED USER", pg.inner_text("#term-isolation-text"))
         check("terminal connected", pg.evaluate("!!window.term && termSocket && termSocket.readyState === 1"))
         pg.keyboard.type("echo ui-$((20+3))\n"); pg.wait_for_timeout(1200)
         check("terminal echoes", "ui-23" in pg.evaluate("(() => { const b = window.term.buffer.active; let s = ''; for (let i = 0; i < b.length; i++) s += b.getLine(i).translateToString(true) + '\\n'; return s; })()"))

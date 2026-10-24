@@ -621,7 +621,9 @@ def verify_webhook(headers, body: bytes, secret: str) -> bool:
     if sig:
         sig = sig.split("=", 1)[1] if sig.startswith("sha256=") else sig
         want = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(sig.lower(), want)
+        # Compared as bytes: compare_digest() raises on a str that isn't ASCII,
+        # which turned a garbled header into a 500 instead of a 401.
+        return hmac.compare_digest(sig.lower().encode("utf-8"), want.encode("ascii"))
     for candidate in (headers.get("x-gitlab-token"), headers.get("x-venvy-secret"),
                       (headers.get("authorization") or "").removeprefix("Bearer ").strip() or None):
         if candidate and hmac.compare_digest(candidate.encode(), secret.encode()):
