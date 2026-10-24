@@ -813,11 +813,13 @@ web/
                         on the server (venvy/webui.py), so the browser gets one document
   partials/             markup per view: sidebar, dashboard, tabs/*, system-view, modals/*
   static/css/app.css    styles
+  static/css/tailwind.css  Tailwind, built by scripts/build-css.sh from tailwind.config.js
+                        and committed (run it after changing class names; CI checks it)
   static/js/*.js        one script per feature, plus api.js (API client + shared state);
                         classic scripts sharing one global scope, loaded in the order
-                        index.html lists them — there is no build step
+                        index.html lists them — no build step for scripts
   sw.js                 service worker (served at /sw.js)
-vendor/                 third-party scripts shipped with Venvy (served at /vendor)
+scripts/build-css.sh    rebuilds web/static/css/tailwind.css (needs Node.js; Venvy does not)
 emulator.py             fake backend for UI development; serves the same web/ tree
 tests/                  end-to-end suite: `tests/run_all.sh`
 install.sh              installer / updater (see "Installing and Updating")
@@ -825,7 +827,7 @@ requirements.txt        Venvy's own Python dependencies, pinned
 .github/workflows/      release.yml builds and publishes a release on a v* tag
 ```
 
-A frozen build must bundle `web/` and `vendor/` next to the executable's code.
+A frozen build must bundle `web/` next to the executable's code.
 
 ## 9. Quick Reference Table
 

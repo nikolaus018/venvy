@@ -22,6 +22,11 @@ jobs:
         run: |
           pip install -r requirements.txt
           grep -v '^playwright' tests/requirements.txt | pip install -r /dev/stdin
+      - name: The committed Tailwind CSS matches the class names in web/
+        run: |
+          scripts/build-css.sh
+          git diff --exit-code web/static/css/tailwind.css \
+            || { echo "::error::web/static/css/tailwind.css is out of date: run scripts/build-css.sh and commit it"; exit 1; }
       - name: Run the end-to-end suite
         run: PYTHON=python tests/run_all.sh
       - name: Show logs of failed scripts
@@ -45,13 +50,13 @@ jobs:
         run: |
           mkdir -p /tmp/rel /tmp/bad
           echo "v0.0.0-ci1" > VERSION
-          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web vendor
+          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web
           (cd /tmp/rel && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
           cp VERSION /tmp/rel/VERSION
           # A second version that cannot start, to exercise the rollback.
           cp main.py /tmp/main.good && printf 'import sys\nsys.exit("broken on purpose")\n' > main.py
           echo "v0.0.0-broken" > VERSION
-          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/bad/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web vendor
+          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/bad/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web
           (cd /tmp/bad && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
           cp /tmp/main.good main.py && rm VERSION
           python3 -m http.server 8099 --directory /tmp/rel >/dev/null 2>&1 &
@@ -79,7 +84,7 @@ jobs:
         run: |
           # Publish a newer release on the local release server, then let Venvy install it.
           echo "v0.0.0-ci2" > VERSION
-          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web vendor
+          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web
           (cd /tmp/rel && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
           cp VERSION /tmp/rel/VERSION && rm VERSION
           # The running update.sh must differ from the one the new installer writes (as it does

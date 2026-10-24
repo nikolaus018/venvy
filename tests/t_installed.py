@@ -103,7 +103,7 @@ check("service enabled at boot", subprocess.run(["systemctl", "is-enabled", "--q
 check("service user", unit_user == ("root" if APP_USERS else "venvy"), unit_user)
 check("env file is root-only", (os.stat("/etc/venvy/venvy.env").st_mode & 0o777) == 0o600)
 check("page and static files served", cl.c.get("/").status_code == 200 and cl.c.get("/static/js/api.js").status_code == 200
-      and cl.c.get("/vendor/tailwindcss-3.4.17.js").status_code == 200 and cl.c.get("/sw.js").status_code == 200)
+      and cl.c.get("/static/css/tailwind.css").status_code == 200 and cl.c.get("/sw.js").status_code == 200)
 
 if not EXISTING:
     r = cl.req("POST", "/api/apps/upload", data={"name": "Installed App", "runtime": "python", "entrypoint": "main.py"})

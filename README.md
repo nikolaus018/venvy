@@ -241,5 +241,5 @@ targets; a frozen single-binary build is not.
 
 ## License
 
-[MIT](LICENSE). The bundled Tailwind CSS runtime in `vendor/` is MIT-licensed by Tailwind Labs
-([vendor/LICENSE-tailwindcss](vendor/LICENSE-tailwindcss)).
+[MIT](LICENSE). The bundled Tailwind CSS (`web/static/css/tailwind.css`) is MIT-licensed by
+Tailwind Labs ([tailwind.LICENSE](web/static/css/tailwind.LICENSE)).

@@ -453,20 +453,6 @@ def health_check():
     )
 
 
-_VENDOR_FILE_RE = re.compile(r"\A[A-Za-z0-9_.\-]+\.js\Z")
-
-
-@app.get("/vendor/{name}")
-async def serve_vendor(name: str):
-    """Third-party scripts shipped with Venvy (see vendor/) — served from
-    here instead of a CDN, so nobody else can change them."""
-    path = ASSETS_DIR / "vendor" / name
-    if not _VENDOR_FILE_RE.match(name) or not path.is_file():
-        raise HTTPException(404)
-    return FileResponse(path, media_type="text/javascript",
-                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
-
-
 class _RevalidatedStaticFiles(StaticFiles):
     """The UI's own CSS and JS. Always revalidated (ETag / Last-Modified make
     that cheap), so a browser never runs a stale script against a newer

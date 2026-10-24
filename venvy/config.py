@@ -27,8 +27,7 @@ logging.basicConfig(
 )
 
 # Where the shipped, read-only files live: the repository root (or the
-# unpacked bundle of a frozen build). The UI is under web/, third-party
-# scripts under vendor/.
+# unpacked bundle of a frozen build). The UI is under web/.
 if getattr(sys, 'frozen', False):
     ASSETS_DIR = Path(sys._MEIPASS)
 else:

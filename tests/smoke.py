@@ -107,7 +107,7 @@ def main():
         cl = Client()
         r = cl.c.get("/")
         check("index served", r.status_code == 200 and "Venvy" in r.text)
-        check("vendor served", cl.c.get("/vendor/tailwindcss-3.4.17.js").status_code == 200)
+        check("built CSS served", cl.c.get("/static/css/tailwind.css").status_code == 200 and ".hidden{display:none}" in cl.c.get("/static/css/tailwind.css").text)
         st = cl.req("GET", "/api/auth/status").json()
         check("fresh instance has no user", st["user_exists"] is False)
         check("setup code file is 0600", (os.stat(data / ".setup-code").st_mode & 0o777) == 0o600)

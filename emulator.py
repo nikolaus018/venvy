@@ -9,7 +9,7 @@ Usage:
     python emulator.py
 
 Then open http://localhost:54783 in your browser.
-Run it from a checkout: it serves web/ and vendor/ next to this script.
+Run it from a checkout: it serves web/ next to this script.
 """
 
 import json
@@ -289,13 +289,6 @@ def _now_iso():
 # ---------------------------------------------------------------------------
 # Static — serve index.html
 # ---------------------------------------------------------------------------
-
-@app.get("/vendor/{name}")
-def serve_vendor(name: str):
-    path = ASSETS_DIR / "vendor" / Path(name).name
-    if not path.is_file():
-        raise HTTPException(404)
-    return FileResponse(path, media_type="text/javascript")
 
 from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static", check_dir=False), name="static")

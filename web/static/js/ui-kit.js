@@ -80,7 +80,10 @@
                 el = document.createElement('div');
                 el.id = id;
                 el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-labelledby', `${id}-title`);
-                el.className = `fixed inset-0 z-[${zIndex}] modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0`;
+                el.className = 'fixed inset-0 modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0';
+                // A style, not a z-[…] class: Tailwind is built ahead of time and only
+                // knows class names written out in full in the source.
+                el.style.zIndex = String(zIndex);
                 el.innerHTML = `
                     <div class="modal-panel p-5 w-full ${width} shadow-lg flex flex-col" style="max-height:88vh">
                         <div class="flex justify-between items-center mb-4 shrink-0">

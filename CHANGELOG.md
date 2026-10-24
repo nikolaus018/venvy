@@ -5,6 +5,11 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.7.1
+
+- The UI loads faster: its Tailwind CSS is now built ahead of time (24 KB) instead of being generated in the browser on every visit by a 400 KB script. It looks exactly the same.
+- The System view on a phone: the disk usage no longer runs into the uptime.
+
 ## v4.7.0
 
 - The bundled Tailwind CSS runtime now ships with its license notice (vendor/LICENSE-tailwindcss).
