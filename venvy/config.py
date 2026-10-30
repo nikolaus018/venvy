@@ -79,9 +79,11 @@ TRUSTED_PROXY_IPS: Set[str] = {
 
 # Optional proof that a request really came through the tunnel. An address
 # can't provide it: with the default TRUSTED_PROXY_IPS, cloudflared and every
-# hosted app both connect from 127.0.0.1, so an app can send its own
-# CF-Connecting-IP and be taken for any client it likes — past the IP
-# allowlist, and past the per-IP login lockout. When this is set, the header
+# hosted app both connect from 127.0.0.1. Hosted apps are told apart by who
+# owns their socket (see auth._from_hosted_app, Linux), but any other software
+# on the host could still send its own CF-Connecting-IP and be taken for any
+# client it likes — past the IP allowlist, and past the per-IP login
+# lockout. When this is set, the header
 # is only believed on requests that also carry X-Venvy-Proxy-Secret with the
 # same value (add it at the Cloudflare edge with a request-header transform
 # rule). Hosted apps never see it: it is stripped from their environment.
@@ -108,8 +110,8 @@ def child_base_env() -> dict:
 if IP_ALLOWLIST is not None and not PROXY_SECRET and TRUSTED_PROXY_IPS & {"127.0.0.1", "::1"}:
     logging.warning(
         "IP_ALLOWLIST is set, but CF-Connecting-IP is trusted from loopback without "
-        "VENVY_PROXY_SECRET: software running on this host (including hosted apps) "
-        "can claim any client IP. Set VENVY_PROXY_SECRET to close that.")
+        "VENVY_PROXY_SECRET: software running on this host (other than the hosted apps, "
+        "which are recognised) can claim any client IP. Set VENVY_PROXY_SECRET to close that.")
 
 _ALLOWED_ORIGINS_RAW = os.getenv("ALLOWED_ORIGINS", "").strip()
 _ALLOWED_ORIGINS: List[str] = [o.strip() for o in _ALLOWED_ORIGINS_RAW.split(",") if o.strip()]

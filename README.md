@@ -27,8 +27,8 @@ That installs the system packages it needs, creates a `venvy` service user, sets
 service that starts at boot, and prints the URL and a one-time setup code. The first visit creates the admin account, with that code
 (it is also in the server log and in `.setup-code` in the data directory).
 
-Run the same command again to update. The new version is downloaded, checksum-verified and
-prepared next to the running one; the database is snapshotted; and if the new version does not
+Run the same command again to update. The new version is downloaded, checked against its
+checksum and its signature (see [Releases](#releases)) and prepared next to the running one; the database is snapshotted; and if the new version does not
 come up healthy, the installer switches back on its own.
 
 Once installed, an admin can also update from the UI: System shows the running version and,
@@ -187,6 +187,11 @@ the system, but not from each other or from Venvy's own data, and an operator's 
 the database. An existing install keeps the mode it was installed with; switch with
 `--app-users` or `--shared-user` (or `VENVY_APP_USERS` in `/etc/venvy/venvy.env`).
 
+Apps share the host's network. They can reach Venvy on its port like anyone else, but can't pass
+for another client there: a connection from loopback is only taken to be cloudflared's (and its
+`CF-Connecting-IP` believed) when no hosted app owns it. Other software on the host can still
+claim any address; `VENVY_PROXY_SECRET` closes that too.
+
 ### Locked out?
 
 If the only admin forgets the password or loses the authenticator, fix the account from a shell
@@ -225,12 +230,19 @@ tests/run_all.sh
 
 ### Releases
 
-Pushing a `v*` tag runs the smoke test and publishes `venvy.tar.gz`, its SHA-256 and
-`install.sh` as a GitHub release, which is what the install command downloads.
+Pushing a `v*` tag runs the smoke test and puts `venvy.tar.gz`, its SHA-256 and `install.sh`
+up as a draft GitHub release. It is published by `scripts/sign-release.sh <tag>`, run on the
+maintainer's machine: it unpacks the archive, checks it is the tag file for file, signs the
+checksum with an Ed25519 key that is never on GitHub, uploads the signature and publishes.
+The installer and the updater install nothing whose signature doesn't match the key in
+`install.sh` (the updater: the key the server was installed with), so someone who got into the
+GitHub account could not ship an update. The first `curl | sudo bash` still trusts what it
+downloads, as any such install does.
 
 CI runs on every push: the full suite on Ubuntu, and the installer itself on a real host in
 both modes — fresh install, checks against the running service, update, automatic rollback of
-a release that does not start, rejection of a bad checksum, and uninstall.
+a release that does not start, rejection of a bad checksum and of a signature by another key
+(by the installer and by the updater), and uninstall.
 
 ## Status
 

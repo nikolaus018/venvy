@@ -119,9 +119,85 @@ def _from_trusted_proxy(request: Union[Request, HTTPConnection]) -> bool:
     peer = (request.client.host if request.client else "") or ""
     if peer not in TRUSTED_PROXY_IPS:
         return False
-    return not PROXY_SECRET or secrets.compare_digest(
-        (request.headers.get("x-venvy-proxy-secret", "") or "").encode("utf-8"),
-        PROXY_SECRET.encode("utf-8"))
+    if PROXY_SECRET:
+        return secrets.compare_digest(
+            (request.headers.get("x-venvy-proxy-secret", "") or "").encode("utf-8"),
+            PROXY_SECRET.encode("utf-8"))
+    # (Once per request: every middleware asks.)
+    known = request.scope.get("venvy.from_hosted_app")
+    if known is None:
+        known = request.scope["venvy.from_hosted_app"] = _from_hosted_app(request)
+    return not known
+
+
+def _from_hosted_app(request: Union[Request, HTTPConnection]) -> bool:
+    """Whether a loopback connection was opened by a hosted app rather than
+    by cloudflared. Both connect from 127.0.0.1, so without VENVY_PROXY_SECRET
+    an app could send its own CF-Connecting-IP and be taken for any client:
+    past the IP allowlist and the per-IP login lockout. The socket's owner
+    tells them apart: Linux keeps it in /proc/net/tcp. An app runs as its
+    own venvy-app-<id> user, or, installed with --shared-user, as Venvy's
+    own (which the installed cloudflared never is). A checkout run by hand
+    says neither, and there cloudflared may well be the same user: no
+    telling. Unknown (not Linux, no such socket): False."""
+    if request.client is None or not request.client.port or not request.scope.get("server"):
+        return False
+    uid = _socket_owner(request.client.host, request.client.port, *request.scope["server"][:2])
+    if uid is None:
+        return False
+    from venvy.isolation import _isolation_active
+    if not _isolation_active():
+        return os.getenv("VENVY_APP_USERS") == "0" and uid == os.geteuid() != 0
+    import pwd
+    try:
+        return pwd.getpwuid(uid).pw_name.startswith("venvy-app-")
+    except KeyError:
+        return False
+
+
+def _proc_address(text: str) -> tuple:
+    """("127.0.0.1", 54783) from /proc/net/tcp's "0100007F:D5EF": the address
+    in 32-bit words of host byte order (little-endian here), the port in hex.
+    A v4-mapped IPv6 address reads as its IPv4 one."""
+    import ipaddress
+    host, port = text.split(":")
+    raw = bytes.fromhex(host)
+    ip = ipaddress.ip_address(b"".join(raw[i:i + 4][::-1] for i in range(0, len(raw), 4)))
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return str(ip), int(port, 16)
+
+
+def _socket_owner(client_host: str, client_port: int, server_host: str, server_port: int,
+                  tables: tuple = ("/proc/net/tcp", "/proc/net/tcp6")) -> Optional[int]:
+    """The uid that owns the client end of the TCP connection from
+    client_host:client_port to server_host:server_port, or None."""
+    import ipaddress
+
+    def norm(h: str) -> str:
+        try:
+            ip = ipaddress.ip_address(h)
+        except ValueError:
+            return h
+        return str(ip.ipv4_mapped if ip.version == 6 and ip.ipv4_mapped else ip)
+
+    want = ((norm(client_host), int(client_port)), (norm(server_host), int(server_port)))
+    for table in tables:
+        try:
+            with open(table) as f:
+                next(f, None)   # the header
+                for line in f:
+                    fields = line.split()
+                    if len(fields) < 8:
+                        continue
+                    try:
+                        if (_proc_address(fields[1]), _proc_address(fields[2])) == want:
+                            return int(fields[7])
+                    except ValueError:
+                        continue
+        except OSError:
+            continue
+    return None
 
 
 def request_is_https(request: Union[Request, HTTPConnection]) -> bool:
@@ -478,6 +554,18 @@ _LOGIN_MAX_TRIES_PER_USER = 20
 _LOGIN_MAX_TRACKED = 50_000
 
 
+# Each lockout of the same address or username lasts twice as long as the
+# one before, up to an hour, and that is remembered for a day of quiet. At
+# a flat five minutes a client willing to wait could try a username 20
+# times every five minutes, ~5,700 guesses a day; now ~480 at most. (An
+# hour is also as long as someone guessing at the admin's name can keep the
+# admin out; a correct login clears the count.)
+_LOGIN_LOCKOUT_MAX_SEC = 3600
+
+
+_LOGIN_STRIKE_MEMORY_SEC = 24 * 3600
+
+
 def _login_rate_key(request: Request) -> str:
     return _resolve_client_ip(request)
 
@@ -509,7 +597,9 @@ def _record_login_failure(key: str, max_tries: int = _LOGIN_MAX_TRIES) -> None:
         entry['count'] += 1
         entry['last'] = time.time()
         if entry['count'] >= max_tries:
-            entry['locked_until'] = time.time() + _LOGIN_LOCKOUT_SEC
+            entry['strikes'] = entry.get('strikes', 0) + 1
+            lockout = min(_LOGIN_LOCKOUT_MAX_SEC, _LOGIN_LOCKOUT_SEC * 2 ** (entry['strikes'] - 1))
+            entry['locked_until'] = time.time() + lockout
             entry['count'] = 0
 
 
@@ -537,13 +627,13 @@ def _purge_login_attempts() -> None:
     count is only forgotten once it has been quiet for a full lockout period:
     this used to drop every not-yet-locked entry on each sweep, which reset
     the count every two minutes and let a client guess indefinitely at four
-    tries per sweep without ever being locked out."""
+    tries per sweep without ever being locked out. One that has been locked
+    out before is kept for a day of quiet, so the next lockout is longer."""
     now = time.time()
     with _login_lock:
         for key, entry in list(_login_attempts.items()):
-            locked_until = entry.get('locked_until')
-            if locked_until:
-                expired = now > locked_until + _LOGIN_LOCKOUT_SEC
+            if entry.get('strikes'):
+                expired = now > max(entry.get('locked_until') or 0, entry.get('last', 0)) + _LOGIN_STRIKE_MEMORY_SEC
             else:
                 expired = now > entry.get('last', 0) + _LOGIN_LOCKOUT_SEC
             if expired:

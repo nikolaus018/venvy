@@ -24,7 +24,7 @@
 #   --uninstall       remove the service and code (data and config are kept)
 #
 # Run it again at any time to update: it downloads the release, verifies its
-# checksum, prepares it next to the running one, snapshots the database,
+# checksum and its signature, prepares it next to the running one, snapshots the database,
 # switches over, and switches back by itself if the new version does not
 # come up healthy.
 #
@@ -55,6 +55,17 @@ UPDATE_SCRIPT="$CODE_DIR/update.sh"
 UPDATE_DIR="$CODE_DIR/update"       # the update's status and log: root writes, Venvy reads
 DEFAULT_DATA_DIR="/var/lib/venvy"
 KEEP_DB_SNAPSHOTS=5
+RELEASE_KEY_FILE="$CODE_DIR/release-key.pem"   # the key updates are checked against
+
+# Releases are signed (Ed25519, over venvy.tar.gz.sha256) with a key that
+# never leaves the maintainer's machine: a checksum from the same release
+# only shows the download isn't corrupt, while someone who took over the
+# GitHub account could publish whatever they liked with a matching one.
+# VENVY_SIGNING_KEY_FILE names another public key, for releases you build
+# and sign yourself; updates keep using the key the install was made with.
+RELEASE_PUBKEY='-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAajX9BBDJMsBY6qPPyBa9/svuCnIenVQIx7WhO2tGpUM=
+-----END PUBLIC KEY-----'
 
 VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; WITH_NODE=0; WITH_GO=0; WITH_BUN=0; WITH_DENO=0; WITH_PHP=0; WITH_RUBY=0; WITH_JAVA=0; APP_USERS=""; UNINSTALL=0
 
@@ -130,7 +141,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
   DATA_DIR="$(systemctl show -p WorkingDirectory --value venvy.service 2>/dev/null || true)"
   say "Stopping and removing the Venvy service..."
   systemctl disable --now venvy.service venvy-update.path >/dev/null 2>&1 || true
-  rm -f "$UNIT_FILE" "$UPDATE_UNIT" "$UPDATE_PATH_UNIT" "$UPDATE_SCRIPT"
+  rm -f "$UNIT_FILE" "$UPDATE_UNIT" "$UPDATE_PATH_UNIT" "$UPDATE_SCRIPT" "$RELEASE_KEY_FILE"
   rm -rf "$UPDATE_DIR"
   systemctl daemon-reload
   rm -rf "$CODE_DIR/releases" "$CODE_DIR/current"
@@ -186,7 +197,7 @@ fi
 say "Installing Venvy ($VERSION) — data in $DATA_DIR, service user $RUN_USER, http://$HOST:$PORT"
 
 # ── 1. System packages (apt only runs if something is missing) ───────────────
-PKGS="python3 python3-venv curl ca-certificates git tar openssh-client"
+PKGS="python3 python3-venv curl ca-certificates openssl git tar openssh-client"
 [ "$WITH_RUST" -eq 1 ] && PKGS="$PKGS cargo rustc build-essential"
 [ "$WITH_NODE" -eq 1 ] && PKGS="$PKGS nodejs npm"
 [ "$WITH_PHP" -eq 1 ]  && PKGS="$PKGS php-cli composer unzip"
@@ -289,6 +300,16 @@ curl -fsSL --retry 3 -o "$TMP/venvy.tar.gz.sha256" "$BASE_URL/venvy.tar.gz.sha25
   || die "Could not download the checksum file."
 ( cd "$TMP" && sha256sum -c --status venvy.tar.gz.sha256 ) \
   || die "Checksum mismatch — the download is corrupt or was tampered with. Nothing was changed."
+curl -fsSL --retry 3 -o "$TMP/venvy.tar.gz.sha256.sig" "$BASE_URL/venvy.tar.gz.sha256.sig" \
+  || die "Could not download the release's signature. Nothing was changed."
+if [ -n "${VENVY_SIGNING_KEY_FILE:-}" ]; then
+  cp "$VENVY_SIGNING_KEY_FILE" "$TMP/release-key.pem" || die "Can't read $VENVY_SIGNING_KEY_FILE."
+else
+  printf '%s\n' "$RELEASE_PUBKEY" > "$TMP/release-key.pem"
+fi
+openssl pkeyutl -verify -pubin -inkey "$TMP/release-key.pem" -rawin \
+    -in "$TMP/venvy.tar.gz.sha256" -sigfile "$TMP/venvy.tar.gz.sha256.sig" >/dev/null 2>&1 \
+  || die "The release's signature doesn't match its key — it was not published by Venvy's maintainer. Nothing was changed."
 
 mkdir "$TMP/src"
 tar -xzf "$TMP/venvy.tar.gz" -C "$TMP/src"
@@ -434,10 +455,12 @@ EOF
 # Updating from the UI. Venvy (unprivileged) can only create an empty request
 # file in its data directory; this path unit notices it and runs the script
 # below as root. The script takes nothing from Venvy: it always installs the
-# latest release, checksum-verified, with the installer that came with it.
+# latest release, checksum- and signature-verified (against the key this
+# install was made with), with the installer that came with it.
 # Its status and log go to a directory only root can write — never into the
 # data directory, where the service user could swap a file for a symlink.
 install -d -m 750 -o root -g "$RUN_GROUP" "$UPDATE_DIR"
+install -m 644 -o root -g root "$TMP/release-key.pem" "$RELEASE_KEY_FILE"
 # Written beside it and moved into place, never over it: an update from the UI runs
 # this installer from inside update.sh, and bash reads a running script as it goes —
 # rewritten in place, the old script would carry on in the middle of the new one.
@@ -451,6 +474,7 @@ umask 022
 DATA_DIR="$DATA_DIR"
 UPDATE_DIR="$UPDATE_DIR"
 BASE_URL="$LATEST_URL"
+KEY_FILE="$RELEASE_KEY_FILE"
 EOF
 cat >> "$UPDATE_SCRIPT_NEW" <<'EOF'
 # One function, called on the last line: bash has read all of it before anything runs.
@@ -484,9 +508,14 @@ if [ -n "$TAG" ]; then FETCH_URL="https://github.com/$REPO_PATH/releases/downloa
   echo "Fetching ${TAG:-the latest release} from $FETCH_URL"
   curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz" "$FETCH_URL/venvy.tar.gz" \
     && curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz.sha256" "$FETCH_URL/venvy.tar.gz.sha256" \
+    && curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz.sha256.sig" "$FETCH_URL/venvy.tar.gz.sha256.sig" \
     && ( cd "$WORK" && sha256sum -c --status venvy.tar.gz.sha256 ) \
+    && { openssl pkeyutl -verify -pubin -inkey "$KEY_FILE" -rawin -in "$WORK/venvy.tar.gz.sha256" \
+           -sigfile "$WORK/venvy.tar.gz.sha256.sig" >/dev/null 2>&1 \
+         || { echo "The release's signature doesn't match the key this server was installed with. Not installed."; false; }; } \
     && tar -xzf "$WORK/venvy.tar.gz" -C "$WORK" install.sh \
-    && VENVY_LATEST_URL="$BASE_URL" VENVY_BASE_URL="$FETCH_URL" bash "$WORK/install.sh" --version "${TAG:-latest}"
+    && VENVY_SIGNING_KEY_FILE="$KEY_FILE" VENVY_LATEST_URL="$BASE_URL" VENVY_BASE_URL="$FETCH_URL" \
+         bash "$WORK/install.sh" --version "${TAG:-latest}"
 } >> "$LOG" 2>&1
 rc=$?
 [ "$rc" -eq 0 ] || echo "The update failed (exit code $rc). Venvy keeps running the version it had." >> "$LOG"

@@ -128,6 +128,16 @@ def _open_app_dir(root: Path, parts: tuple, create: bool = False, owner: Optiona
         os.close(fd)
 
 
+def foreign_hardlink(st: os.stat_result, folder: os.stat_result) -> bool:
+    """Whether a file is a hard link to someone else's file: more links than
+    one, and not owned by whoever owns the folder it is in. An app's user
+    could otherwise link a root-only file into its own directory and have
+    root (the file manager, a copy, a backup) read it out for it. Linux's
+    fs.protected_hardlinks (on by default) already refuses such links; this
+    doesn't depend on it being set."""
+    return st.st_nlink > 1 and st.st_uid != folder.st_uid
+
+
 def _fs_lstat(dir_fd: int, name: str) -> Optional[os.stat_result]:
     try:
         return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
@@ -295,6 +305,8 @@ def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner
     elif _stat.S_ISREG(st.st_mode):
         fd = os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW | _O_CLOEXEC, dir_fd=src_fd)
         with os.fdopen(fd, "rb") as f:
+            if foreign_hardlink(os.fstat(fd), os.fstat(src_fd)):
+                return
             out = os.open(dst_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, 0o600, dir_fd=dst_fd)
             with os.fdopen(out, "wb") as o:
                 shutil.copyfileobj(f, o, _FS_COPY_BUF)
@@ -337,8 +349,9 @@ def _fs_open_file(root: Path, parts: tuple):
             fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _O_CLOEXEC, dir_fd=dfd)
         except OSError:
             raise AppPathError(404, "File not found.")
+        folder = os.fstat(dfd)
     st = os.fstat(fd)
-    if not _stat.S_ISREG(st.st_mode):
+    if not _stat.S_ISREG(st.st_mode) or foreign_hardlink(st, folder):
         os.close(fd)
         raise AppPathError(404, "File not found.")
     os.set_blocking(fd, True)

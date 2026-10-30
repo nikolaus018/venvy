@@ -33,7 +33,7 @@ from venvy.config import APPS_BASE_DIR, BACKUP_DIR, DATA_DIR, DB_FILE, _VENVY_KE
 from venvy.db import engine
 from venvy.models import App, User
 from venvy.process import set_restore_in_progress, stop_app_process_logic
-from venvy.safefs import is_safe_path
+from venvy.safefs import foreign_hardlink, is_safe_path
 from venvy.terminal import terminal_manager
 from venvy.uploads import _UPLOAD_ID_RE, _UPLOAD_STALE_SEC
 
@@ -231,19 +231,43 @@ def _add_tree_to_tar(tar: tarfile.TarFile, path: str, arcname: str, track: Calla
     first of those — which made a backup of a busy server a matter of luck.
     Here such an entry is skipped (or, if it shrank, padded) and the backup
     carries on. Symlinks are stored as links, never followed. Returns how
-    many entries had to be skipped."""
-    skipped = 0
+    many entries had to be skipped.
+
+    The tree belongs to the apps, which can rearrange it while root reads
+    it. By path, a folder swapped for a link to /etc between being listed
+    and being read had root copy what's there into the backup, and a
+    restore then handed it to the app. So, as in safefs, every entry is
+    reached from its folder's open descriptor, never by its path."""
+    parent, name = os.path.split(os.path.normpath(path))
     try:
-        st = os.lstat(path)
+        parent_fd = os.open(parent or ".", os.O_RDONLY | os.O_DIRECTORY | _O_CLOEXEC)
+    except OSError:
+        return 1
+    try:
+        return _add_entry_to_tar(tar, parent_fd, name, arcname, track)
+    finally:
+        os.close(parent_fd)
+
+
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+
+
+def _add_entry_to_tar(tar: tarfile.TarFile, dir_fd: int, name: str, arcname: str, track: Callable) -> int:
+    """`_add_tree_to_tar` for the entry *name* of the open folder *dir_fd*."""
+    try:
+        st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
     except OSError:
         return 1
     try:
         if stat.S_ISREG(st.st_mode):
             # O_NOFOLLOW/O_NONBLOCK: it was a plain file a moment ago; if it has
             # been swapped for a link or a FIFO since, don't follow or hang.
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _O_CLOEXEC, dir_fd=dir_fd)
             with os.fdopen(fd, "rb") as f:
-                info = tar.gettarinfo(name=path, arcname=arcname, fileobj=f)
+                here = os.fstat(fd)
+                if not stat.S_ISREG(here.st_mode) or foreign_hardlink(here, os.fstat(dir_fd)):
+                    return 1
+                info = tar.gettarinfo(arcname=arcname, fileobj=f)
                 if info is None:
                     return 1
                 info = track(info)
@@ -252,22 +276,58 @@ def _add_tree_to_tar(tar: tarfile.TarFile, path: str, arcname: str, track: Calla
                 else:
                     tar.addfile(info)   # a hard link to a file already in the archive
             return 0
-        info = tar.gettarinfo(name=path, arcname=arcname)
-        if info is None:
-            return 1   # a socket: nothing to restore
-        tar.addfile(track(info))
+        if not stat.S_ISDIR(st.st_mode):
+            link = os.readlink(name, dir_fd=dir_fd) if stat.S_ISLNK(st.st_mode) else ""
+            info = _tarinfo(arcname, st, link)
+            if info is None:
+                return 1   # a socket: nothing to restore
+            tar.addfile(track(info))
+            return 0
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | _O_CLOEXEC, dir_fd=dir_fd)
     except OSError as e:
         logging.info(f"Backup: skipped {arcname} ({e.strerror or e})")
         return 1
-    if stat.S_ISDIR(st.st_mode):
+    try:
+        here = os.fstat(sub)
+        if (here.st_dev, here.st_ino) != (st.st_dev, st.st_ino):
+            return 1   # replaced since it was looked at
+        tar.addfile(track(_tarinfo(arcname, here)))
         try:
-            names = sorted(os.listdir(path))
+            names = sorted(os.listdir(sub))
         except OSError as e:
             logging.info(f"Backup: could not list {arcname} ({e.strerror or e})")
             return 1
-        for name in names:
-            skipped += _add_tree_to_tar(tar, os.path.join(path, name), f"{arcname}/{name}", track)
-    return skipped
+        return sum(_add_entry_to_tar(tar, sub, n, f"{arcname}/{n}", track) for n in names)
+    finally:
+        os.close(sub)
+
+
+def _tarinfo(arcname: str, st: os.stat_result, linkname: str = "") -> Optional[tarfile.TarInfo]:
+    """What tar.gettarinfo() makes of a folder, link, pipe or device, from a
+    stat it has already made (gettarinfo would look the path up again)."""
+    import grp
+    import pwd
+    info = tarfile.TarInfo(arcname)
+    mode = st.st_mode
+    if stat.S_ISDIR(mode):
+        info.type = tarfile.DIRTYPE
+    elif stat.S_ISLNK(mode):
+        info.type, info.linkname = tarfile.SYMTYPE, linkname
+    elif stat.S_ISFIFO(mode):
+        info.type = tarfile.FIFOTYPE
+    elif stat.S_ISCHR(mode) or stat.S_ISBLK(mode):
+        info.type = tarfile.CHRTYPE if stat.S_ISCHR(mode) else tarfile.BLKTYPE
+        info.devmajor, info.devminor = os.major(st.st_rdev), os.minor(st.st_rdev)
+    else:
+        return None
+    info.mode = stat.S_IMODE(mode)
+    info.uid, info.gid = st.st_uid, st.st_gid
+    info.mtime = st.st_mtime
+    with contextlib.suppress(KeyError):
+        info.uname = pwd.getpwuid(st.st_uid).pw_name
+    with contextlib.suppress(KeyError):
+        info.gname = grp.getgrgid(st.st_gid).gr_name
+    return info
 
 
 def _app_dir_labels() -> Dict[str, str]:

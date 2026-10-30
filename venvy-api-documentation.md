@@ -663,7 +663,7 @@ Search runs over the app's current and rotated log files, oldest first, in a sep
 `{ "current", "latest", "newer", "releases": [{ "version", "items": [...] }], "error" }`: the sections of the latest release's `CHANGELOG.md` for every release newer than the running one, newest first (`newer: true`); when it is up to date, the latest release's own section (`newer: false`). Fetched again whenever the latest version changes, otherwise at most once an hour.
 
 #### `POST /api/system/update`
-Needs a browser session, not an API token. Starts an update to the latest release and answers at once (`400` if this Venvy was not set up by the installer of 4.5.0 or later, `409` while one is under way). Venvy itself only creates the empty file `.update-request` in its data directory; the installer's `venvy-update.path` unit sees it and runs `/opt/venvy/update.sh` as root, which downloads the release, checks its checksum and runs the installer that came with it — the same switch-over and automatic rollback as running the install command by hand. Nothing Venvy writes is passed to that script, so through this a compromised Venvy can at most ask for the official latest release. Venvy restarts during the update: follow it with `GET /api/health`, then this endpoint. Its status and log are in `/opt/venvy/update/`, which only root can write.
+Needs a browser session, not an API token. Starts an update to the latest release and answers at once (`400` if this Venvy was not set up by the installer of 4.5.0 or later, `409` while one is under way). Venvy itself only creates the empty file `.update-request` in its data directory; the installer's `venvy-update.path` unit sees it and runs `/opt/venvy/update.sh` as root, which downloads the release, checks its checksum and its signature (against the key the server was installed with) and runs the installer that came with it — the same switch-over and automatic rollback as running the install command by hand. Nothing Venvy writes is passed to that script, so through this a compromised Venvy can at most ask for the official latest release. Venvy restarts during the update: follow it with `GET /api/health`, then this endpoint. Its status and log are in `/opt/venvy/update/`, which only root can write.
 
 ## 6. Data Model Reference
 
@@ -785,7 +785,7 @@ missing system packages, runs the service as root with one Unix user per app (`-
 `/opt/venvy/releases/<version>/` (with its own Python venv), data in `/var/lib/venvy/`,
 settings in `/etc/venvy/venvy.env`, and a `venvy` systemd service that starts at boot.
 
-Running the same command again updates: the release is downloaded, checksum-verified and
+Running the same command again updates: the release is downloaded, checked against its checksum and signature and
 prepared beside the running one, the database is snapshotted into `backups/`, the service is
 switched over, and it is switched back automatically if `/api/health` does not answer.
 From 4.5.0 on, an admin can also start this from the UI (System → Venvy → Update; see §5.16).

@@ -144,4 +144,40 @@ check("a file that shrank is padded to its header size", len(shrunk) == 100_000 
 check("the rest of the tree is intact", kept == b"kept" and names["apps/link"].issym() and names["apps/link"].linkname == "/etc/hostname"
       and names["apps/pipe"].isfifo(), str(sorted(names)))
 
+# A folder swapped for a link to somewhere else between being looked at and
+# being read: what's read is still the folder, never where the link points.
+outside = work / "outside"; outside.mkdir(); (outside / "secret.txt").write_text("root only")
+tree2 = work / "apps2"; (tree2 / "sub").mkdir(parents=True); (tree2 / "sub" / "own.txt").write_text("own")
+def swap(info):
+    if info.name == "apps/sub":
+        os.rename(tree2 / "sub", tree2 / "sub-was"); os.symlink(outside, tree2 / "sub")
+    return info
+with tarfile.open(work / "out2.tar.gz", "w:gz") as tar:
+    _add_tree_to_tar(tar, str(tree2), "apps", swap)
+with tarfile.open(work / "out2.tar.gz") as tar:
+    names2 = {m.name for m in tar.getmembers()}
+check("a folder swapped for a link mid-backup is not followed",
+      "apps/sub/secret.txt" not in names2 and "apps/sub/own.txt" in names2, str(sorted(names2)))
+
+# Lockouts of the same key double, up to an hour, and outlive the sweep.
+import venvy.auth as A   # noqa: E402
+lengths = []
+for _ in range(6):
+    A._login_attempts.get("probe", {})["locked_until"] = None
+    for _ in range(A._LOGIN_MAX_TRIES):
+        A._record_login_failure("probe")
+    lengths.append(round(A._login_attempts["probe"]["locked_until"] - time.time()))
+A._purge_login_attempts()
+check("repeated lockouts grow: 5, 10, 20, 40 minutes, then an hour",
+      lengths == [300, 600, 1200, 2400, 3600, 3600] and "probe" in A._login_attempts, str(lengths))
+
+# A hard link to someone else's file is never read as root; the app's own are.
+from venvy.safefs import foreign_hardlink   # noqa: E402
+def st(nlink, uid):   # mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime
+    return os.stat_result((0o100644, 1, 1, nlink, uid, uid, 10, 0, 0, 0))
+folder = st(2, 1001)
+check("hard links: someone else's refused, the app's own and plain files kept",
+      foreign_hardlink(st(2, 0), folder) and not foreign_hardlink(st(2, 1001), folder)
+      and not foreign_hardlink(st(1, 0), folder))
+
 print("FAILED" if fails else "ALL OK", fails); sys.exit(1 if fails else 0)

@@ -40,6 +40,27 @@ APP = (
     "    open('/var/lib/venvy/data.db', 'rb').read(16); print('DB_READABLE=yes', flush=True)\n"
     "except Exception as e:\n"
     "    print('DB_READABLE=no', flush=True)\n"
+    # Posing as other clients: wrong logins from loopback, each claiming
+    # another CF-Connecting-IP. Believed, only the per-username limit (20)
+    # stops them; seen as the app's own, the per-address one (5) does.
+    "import json, re, urllib.request, urllib.error\n"
+    "locked = None\n"
+    "try:\n"
+    "    page = urllib.request.urlopen('http://127.0.0.1:54783/', timeout=10)\n"
+    "    csrf = re.search(r'csrf_token=([^;]+)', page.headers.get('set-cookie', '')).group(1)\n"
+    "    for i in range(25):\n"
+    "        req = urllib.request.Request('http://127.0.0.1:54783/api/auth/login',\n"
+    "            data=json.dumps({'username': 'spoof-probe', 'password': 'wrong%d' % i}).encode(),\n"
+    "            headers={'content-type': 'application/json', 'cookie': 'csrf_token=' + csrf, 'x-csrf-token': csrf,\n"
+    "                     'cf-connecting-ip': '10.7.0.%d' % (i + 1)})\n"
+    "        try:\n"
+    "            urllib.request.urlopen(req, timeout=10)\n"
+    "        except urllib.error.HTTPError as e:\n"
+    "            if e.code == 429:\n"
+    "                locked = i + 1; break\n"
+    "except Exception as e:\n"
+    "    print('SPOOF_PROBE_ERROR=' + repr(e), flush=True)\n"
+    "print('SPOOF_LOCKED_AT=' + str(locked), flush=True)\n"
     "while True: time.sleep(0.5)\n"
 )
 
@@ -130,6 +151,7 @@ if not EXISTING:
     expect_user = f"venvy-app-{app_id}" if APP_USERS else "venvy"
     check("app runs as the expected user", f"WHOAMI={expect_user}" in logs, logs[-300:])
     check("app does not inherit Venvy's PORT", "PORT_SEEN=unset" in logs, logs[-300:])
+    check("an app can't pose as other clients over loopback", "SPOOF_LOCKED_AT=5" in logs, logs[-400:])
     proc_user = psutil.Process(st["pid"]).username() if st.get("pid") else None
     app_dir = st["app_dir"]
     owner = pwd.getpwuid(os.stat(os.path.join(app_dir, "main.py")).st_uid).pw_name

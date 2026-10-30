@@ -5,6 +5,12 @@
 #   VERSION               the release's tag: how a running Venvy learns there is a newer one
 #   CHANGELOG.md          what changed, shown in Venvy's "What's new"; the tag's section is the release text
 # Asset names are fixed so /releases/latest/download/<name> always works.
+#
+# The release is left as a draft, unsigned: scripts/sign-release.sh, run on
+# the maintainer's machine, checks the archive is the tag, signs its checksum
+# (venvy.tar.gz.sha256.sig) and publishes it. The key is never on GitHub, so
+# nobody who gets into the account (or this workflow) can make a release
+# that installs.
 name: Release
 
 on:
@@ -69,4 +75,5 @@ jobs:
             echo "Release ${GITHUB_REF_NAME} already exists; nothing to publish."
             exit 0
           fi
-          gh release create "${GITHUB_REF_NAME}" venvy.tar.gz venvy.tar.gz.sha256 install.sh VERSION CHANGELOG.md --title "Venvy ${GITHUB_REF_NAME}" --notes-file notes.md
+          gh release create "${GITHUB_REF_NAME}" venvy.tar.gz venvy.tar.gz.sha256 install.sh VERSION CHANGELOG.md --title "Venvy ${GITHUB_REF_NAME}" --notes-file notes.md --draft
+          echo "::notice::Draft release ${GITHUB_REF_NAME} is up. Sign and publish it: scripts/sign-release.sh ${GITHUB_REF_NAME}"

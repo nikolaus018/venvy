@@ -5,6 +5,14 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.8.0
+
+- Releases are signed, and nothing unsigned is installed. A release is signed on the maintainer's machine with a key that is never on GitHub; the installer and the updater check the signature before they unpack anything (the updater against the key the server was installed with). Before, the only check was a checksum published beside the release, which proved the download wasn't corrupt, but someone who got into the GitHub account could have shipped any update with a matching one. Servers on 4.7.1 and earlier take this update as before, and every update after it is checked.
+- A hosted app can no longer pass for another client. Apps reach Venvy over loopback like cloudflared does, so an app could send its own `CF-Connecting-IP` and get past the IP allowlist and the per-address login lockout. Venvy now looks at who owns the connection (Linux): one opened by a hosted app is taken to come from the app itself.
+- A backup reads the apps' folders without following anything an app changes under it. An app that swapped one of its folders for a link at the right moment could have had root copy files from elsewhere into the backup, which a restore would then have handed to the app.
+- Repeated login lockouts get longer: 5, 10, 20, 40 minutes, then an hour, remembered for a day. At a flat five minutes, someone patient could try about 5,700 passwords a day against one account; now about 480. A correct login clears it.
+- The file manager, copies and backups never read a file that is a hard link to someone else's (more than one link, not owned by the folder's owner). Linux refuses to make such links by default; this no longer depends on that setting.
+
 ## v4.7.1
 
 - The UI loads faster: its Tailwind CSS is now built ahead of time (24 KB) instead of being generated in the browser on every visit by a 400 KB script. It looks exactly the same.

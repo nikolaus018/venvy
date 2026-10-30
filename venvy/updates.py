@@ -5,7 +5,7 @@ service, which takes root, and Venvy usually runs as an unprivileged user. The
 installer sets up the privileged half instead — a systemd path unit that waits
 for REQUEST_FILE to appear in the data directory and then runs
 /opt/venvy/update.sh as root. That script downloads the latest release, checks
-its checksum and runs the installer that came with it, which switches over and
+its checksum and signature and runs the installer that came with it, which switches over and
 goes back to the previous version by itself if the new one does not come up.
 
 Venvy only ever creates the (empty) request file. Nothing it writes reaches

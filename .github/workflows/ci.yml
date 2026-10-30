@@ -42,6 +42,7 @@ jobs:
         mode: [default, shared-user]   # default: one Unix user per app
     env:
       VENVY_BASE_URL: http://127.0.0.1:8099
+      VENVY_SIGNING_KEY_FILE: /tmp/ci-release-pub.pem
       BASE: http://127.0.0.1:54783
     steps:
       - uses: actions/checkout@v7
@@ -49,22 +50,28 @@ jobs:
       - name: Build a release archive and serve it locally
         run: |
           mkdir -p /tmp/rel /tmp/bad
+          # Releases here are signed with a throwaway key, which the installer is
+          # told to trust (VENVY_SIGNING_KEY_FILE) instead of the real one.
+          openssl genpkey -algorithm ed25519 -out /tmp/ci-release-key.pem
+          openssl pkey -in /tmp/ci-release-key.pem -pubout > /tmp/ci-release-pub.pem
           echo "v0.0.0-ci1" > VERSION
           tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web
           (cd /tmp/rel && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
+          openssl pkeyutl -sign -inkey /tmp/ci-release-key.pem -rawin -in /tmp/rel/venvy.tar.gz.sha256 -out /tmp/rel/venvy.tar.gz.sha256.sig
           cp VERSION /tmp/rel/VERSION
           # A second version that cannot start, to exercise the rollback.
           cp main.py /tmp/main.good && printf 'import sys\nsys.exit("broken on purpose")\n' > main.py
           echo "v0.0.0-broken" > VERSION
           tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/bad/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web
           (cd /tmp/bad && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
+          openssl pkeyutl -sign -inkey /tmp/ci-release-key.pem -rawin -in /tmp/bad/venvy.tar.gz.sha256 -out /tmp/bad/venvy.tar.gz.sha256.sig
           cp /tmp/main.good main.py && rm VERSION
           python3 -m http.server 8099 --directory /tmp/rel >/dev/null 2>&1 &
           python3 -m http.server 8098 --directory /tmp/bad >/dev/null 2>&1 &
           sleep 1
 
       - name: Fresh install
-        run: sudo VENVY_BASE_URL=$VENVY_BASE_URL bash install.sh ${{ matrix.mode == 'shared-user' && '--shared-user' || '' }}
+        run: sudo VENVY_BASE_URL=$VENVY_BASE_URL VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh ${{ matrix.mode == 'shared-user' && '--shared-user' || '' }}
 
       - name: Python for the checks
         run: |
@@ -76,7 +83,7 @@ jobs:
 
       - name: Update by running the installer again
         run: |
-          sudo VENVY_BASE_URL=$VENVY_BASE_URL bash install.sh
+          sudo VENVY_BASE_URL=$VENVY_BASE_URL VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh
           sudo ls /var/lib/venvy/backups | grep -q '^data-.*\.db$'
           cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'default' && '--app-users' || '' }}
 
@@ -86,6 +93,7 @@ jobs:
           echo "v0.0.0-ci2" > VERSION
           tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web
           (cd /tmp/rel && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
+          openssl pkeyutl -sign -inkey /tmp/ci-release-key.pem -rawin -in /tmp/rel/venvy.tar.gz.sha256 -out /tmp/rel/venvy.tar.gz.sha256.sig
           cp VERSION /tmp/rel/VERSION && rm VERSION
           # The running update.sh must differ from the one the new installer writes (as it does
           # between real releases): rewriting it in place used to derail the running copy.
@@ -97,15 +105,32 @@ jobs:
 
       - name: A release that does not start is rolled back
         run: |
-          if sudo VENVY_BASE_URL=http://127.0.0.1:8098 bash install.sh; then echo "installer accepted a broken release"; exit 1; fi
+          if sudo VENVY_BASE_URL=http://127.0.0.1:8098 VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh; then echo "installer accepted a broken release"; exit 1; fi
           test "$(basename "$(readlink -f /opt/venvy/current)")" = "v0.0.0-ci2"
           curl -fsS $BASE/api/health
           cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'default' && '--app-users' || '' }}
 
+      - name: A release signed with another key changes nothing
+        run: |
+          cp /tmp/rel/venvy.tar.gz.sha256.sig /tmp/good.sig
+          openssl genpkey -algorithm ed25519 -out /tmp/other-key.pem
+          openssl pkeyutl -sign -inkey /tmp/other-key.pem -rawin -in /tmp/rel/venvy.tar.gz.sha256 -out /tmp/rel/venvy.tar.gz.sha256.sig
+          if sudo VENVY_BASE_URL=$VENVY_BASE_URL VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh; then echo "installer accepted a bad signature"; exit 1; fi
+          # The updater checks it too, against the key the install was made with,
+          # before it runs anything from the release.
+          sudo rm -f /opt/venvy/update/status.json
+          sudo touch /var/lib/venvy/.update-request
+          for _ in $(seq 1 60); do sudo grep -q '"failed"' /opt/venvy/update/status.json 2>/dev/null && break; sleep 1; done
+          sudo cat /opt/venvy/update/update.log
+          sudo grep -q "signature doesn't match" /opt/venvy/update/update.log
+          test "$(basename "$(readlink -f /opt/venvy/current)")" = "v0.0.0-ci2"
+          curl -fsS $BASE/api/health
+          cp /tmp/good.sig /tmp/rel/venvy.tar.gz.sha256.sig
+
       - name: A corrupted download changes nothing
         run: |
           echo "0000000000000000000000000000000000000000000000000000000000000000  venvy.tar.gz" > /tmp/rel/venvy.tar.gz.sha256
-          if sudo VENVY_BASE_URL=$VENVY_BASE_URL bash install.sh; then echo "installer accepted a bad checksum"; exit 1; fi
+          if sudo VENVY_BASE_URL=$VENVY_BASE_URL VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh; then echo "installer accepted a bad checksum"; exit 1; fi
           curl -fsS $BASE/api/health
 
       - name: Uninstall keeps data
