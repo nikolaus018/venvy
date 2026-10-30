@@ -112,20 +112,24 @@ jobs:
 
       - name: A release signed with another key changes nothing
         run: |
-          cp /tmp/rel/venvy.tar.gz.sha256.sig /tmp/good.sig
+          # Both release servers: the rollback step above left update.sh fetching from 8098.
           openssl genpkey -algorithm ed25519 -out /tmp/other-key.pem
-          openssl pkeyutl -sign -inkey /tmp/other-key.pem -rawin -in /tmp/rel/venvy.tar.gz.sha256 -out /tmp/rel/venvy.tar.gz.sha256.sig
+          for d in /tmp/rel /tmp/bad; do
+            cp $d/venvy.tar.gz.sha256.sig $d/good.sig
+            openssl pkeyutl -sign -inkey /tmp/other-key.pem -rawin -in $d/venvy.tar.gz.sha256 -out $d/venvy.tar.gz.sha256.sig
+          done
           if sudo VENVY_BASE_URL=$VENVY_BASE_URL VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh; then echo "installer accepted a bad signature"; exit 1; fi
           # The updater checks it too, against the key the install was made with,
           # before it runs anything from the release.
           sudo rm -f /opt/venvy/update/status.json
           sudo touch /var/lib/venvy/.update-request
-          for _ in $(seq 1 60); do sudo grep -q '"failed"' /opt/venvy/update/status.json 2>/dev/null && break; sleep 1; done
+          for _ in $(seq 1 180); do sudo grep -q '"failed"\|"ok"' /opt/venvy/update/status.json 2>/dev/null && break; sleep 1; done
           sudo cat /opt/venvy/update/update.log
+          sudo grep -q '"failed"' /opt/venvy/update/status.json
           sudo grep -q "signature doesn't match" /opt/venvy/update/update.log
           test "$(basename "$(readlink -f /opt/venvy/current)")" = "v0.0.0-ci2"
           curl -fsS $BASE/api/health
-          cp /tmp/good.sig /tmp/rel/venvy.tar.gz.sha256.sig
+          for d in /tmp/rel /tmp/bad; do cp $d/good.sig $d/venvy.tar.gz.sha256.sig; done
 
       - name: A corrupted download changes nothing
         run: |
