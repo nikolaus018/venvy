@@ -1486,6 +1486,12 @@
             white-space: nowrap;
         }
 
+        /* A finger needs more than the 26 px a mouse pointer does. */
+        @media (pointer: coarse) {
+            .log-tool-btn { height: 34px; min-width: 34px; justify-content: center; }
+            .files-toolbar button { min-width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; }
+        }
+
         .log-tool-btn:hover {
             color: var(--text);
             background: var(--surface3);

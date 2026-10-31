@@ -336,6 +336,8 @@
                 termSocket.onopen = () => {
                     // First message authenticates: WebSockets can't carry headers.
                     termSocket.send('\x01' + (getAuthKey() || ''));
+                    // The size right behind it, so the shell starts at it (see terminal_ws).
+                    _termFit();
                     _termAttempt = 0;
                     _termSetStatus('connected');
                     // Send current dimensions immediately so PTY initialises at the right size

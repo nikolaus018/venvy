@@ -321,6 +321,11 @@ def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner
 
 def _fs_move_or_copy(root: Path, src: tuple, dst: tuple, copy: bool, owner: Optional[tuple], dst_label: str) -> None:
     """Rename (copy=False) or copy the entry root/src to root/dst."""
+    if copy and dst[:len(src)] == src:
+        # The copy would land in what is being copied, and keep finding
+        # itself there until the disk is full. (A rename is refused by the
+        # kernel itself.)
+        raise AppPathError(400, "A folder cannot be copied into itself.")
     with _open_app_dir(root, src[:-1]) as sfd, _open_app_dir(root, dst[:-1], create=True, owner=owner) as dfd:
         s_st = _fs_lstat(sfd, src[-1])
         if s_st is None:
@@ -359,18 +364,27 @@ def _fs_open_file(root: Path, parts: tuple):
 
 
 def _fs_listdir(root: Path, parts: tuple) -> List[dict]:
-    """[{name, is_dir, size}] for the directory root/parts ([] if it isn't one)."""
+    """[{name, is_dir, size}] for the directory root/parts ([] if it isn't one).
+    A symlink is described by what it points to only when that is inside the
+    app directory: otherwise the listing would tell whoever can plant a link
+    the size of any file on the host, and whether any folder exists."""
+    root_r = root.resolve()
+    here = root_r.joinpath(*parts)
     try:
         with _open_app_dir(root, parts) as dfd:
             out = []
             with os.scandir(dfd) as it:
                 for entry in it:
+                    follow = True
+                    with contextlib.suppress(OSError):
+                        if entry.is_symlink():
+                            follow = is_safe_path(root_r, here / entry.name)
                     try:
-                        size = entry.stat().st_size
+                        size = entry.stat(follow_symlinks=follow).st_size
                     except OSError:
                         size = 0
                     try:
-                        is_dir = entry.is_dir()
+                        is_dir = entry.is_dir(follow_symlinks=follow)
                     except OSError:
                         is_dir = False
                     out.append({"name": entry.name, "is_dir": is_dir, "size": size})

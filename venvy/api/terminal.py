@@ -1,5 +1,6 @@
 """The terminal WebSocket endpoint."""
 import asyncio
+import json
 import logging
 import urllib.parse
 
@@ -67,6 +68,25 @@ async def terminal_ws(
 
     cookie_token = websocket.cookies.get("session")
 
+    # The page sends its size straight after the key. Waiting a moment for it
+    # lets the shell start at that size: started at the default 220 columns
+    # and resized a moment later, a phone got its first prompt garbled.
+    size, first_input = None, None
+    try:
+        nxt = await asyncio.wait_for(websocket.receive_text(), timeout=0.5)
+    except asyncio.TimeoutError:
+        nxt = None
+    except Exception:
+        return
+    if nxt and nxt.startswith("\x00"):
+        try:
+            msg = json.loads(nxt[1:])
+            size = (int(msg["rows"]), int(msg["cols"]))
+        except (ValueError, KeyError, TypeError):
+            pass
+    elif nxt:
+        first_input = nxt
+
     def _still_allowed() -> bool:
         with Session(engine) as s:
             u = _authenticate(s, cookie_token, auth_key)
@@ -74,7 +94,7 @@ async def terminal_ws(
 
     try:
         await terminal_manager.start_terminal(
-            websocket, app_id, ws_user_id, ws_user_role, _still_allowed
+            websocket, app_id, ws_user_id, ws_user_role, _still_allowed, size=size, first_input=first_input
         )
     except Exception as exc:
         logging.error(f"WS terminal error: {exc}")

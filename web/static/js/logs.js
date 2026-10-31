@@ -171,7 +171,7 @@
             const text = document.getElementById('log-live-text');
             const label = document.getElementById('log-live-label');
             if (!dot || !text) return;
-            const m = statusMeta(activeApp?.status);
+            const m = statusMeta(appStatus(activeApp));
             if (activeApp?.status === 'running') {
                 dot.style.background = 'var(--green)';
                 dot.classList.add('pulse-dot');

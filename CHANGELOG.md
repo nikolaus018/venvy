@@ -5,6 +5,27 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.8.1
+
+- Publishing an app through the Cloudflare tunnel only publishes that app's own port. Before, any port on the server could be put on the internet from an app's Tunnel tab: another app's (one the operator might not even have access to), Venvy's own, or a database listening on localhost because it trusts the machine. A port that is also another app's, or that something other than the app is listening on, is refused too.
+- An app can no longer take over Venvy's own address. Venvy now remembers the names it is signed in to under; such a name can't become an app's domain, isn't handed to an app even if one already has it, and can't be published for an app through the tunnel, nor can a tunnel hostname that points at Venvy. Before, an operator reaching Venvy by its LAN address could give an app Venvy's public name, and the next admin to sign in there would have typed their password into the app.
+- A hostname in the tunnel that wasn't published from Venvy (another service on this server, or elsewhere) can only be taken over by an admin, and a hostname another app published only by someone with access to that app.
+- An app served on its own domain no longer receives `X-Venvy-Proxy-Secret`: with it, the app could have passed for the tunnel and claimed any client address. Forwarding headers the client made up are dropped as well.
+- Making a deploy key could hand a root-owned file to the app: the key's folder belongs to the app, which could swap the new key for a link at the right moment and have Venvy (running as root) change the owner of whatever it pointed at, `/etc/shadow` included. The key is now made where only root can reach it and moved into place whole. Showing the public key no longer follows a link the app put there.
+- Deleting an app now also ends whatever it left running as its own user (a daemon, a `nohup` from the terminal). Those kept the user from being removed, and a new app that got the same id later would have had them running with its files.
+- Copying a folder into itself in the file manager is refused. It used to copy itself into the copy until the disk was full.
+- The file list no longer shows the size of a file outside the app that a link points to, nor whether a folder outside it exists.
+- Viewers can't run the import scan on the Packages tab any more: it reads the app's source, which a viewer doesn't get to see.
+- With the login limiter's table full (tens of thousands of made-up usernames), new failed logins were no longer counted at all. Now the stalest entry makes room.
+- Download links that were asked for and never used are cleaned up, and there can be 200 at a time per user.
+- An app that crashed shows as crashed (red dot, CRASHED in the list, the "stopped unexpectedly" notice with View logs) instead of just "Stopped": a crashed process is recorded as stopped, so the crash display never came up for the most common crash. The API marks such an app `crashed`. Starting an app that crashes at once now says the start failed instead of waiting half a minute for nothing.
+- The terminal on a phone starts at the screen's width; it used to start at 220 columns and garble the first prompt when it was resized a moment later. The prompt shows the path inside the app (`~/static`) instead of the whole data directory.
+- The charts in System no longer squash their time labels and end dot to fit the card.
+- The CPU and memory bars in System have a light track in the light theme, not a dark one.
+- With System open, the sidebar no longer also highlights the app that was open before.
+- Uptime over a day reads in days ("27d 8h 26m"), not "656h 17m 10s".
+- Logs on a phone: "All logs" has its own icon instead of a second download arrow, and the log and file toolbar buttons are big enough for a finger on touch screens.
+
 ## v4.8.0
 
 - Releases are signed, and nothing unsigned is installed. A release is signed on the maintainer's machine with a key that is never on GitHub; the installer and the updater check the signature before they unpack anything (the updater against the key the server was installed with). Before, the only check was a checksum published beside the release, which proved the download wasn't corrupt, but someone who got into the GitHub account could have shipped any update with a matching one. Servers on 4.7.1 and earlier take this update as before, and every update after it is checked.

@@ -7,7 +7,12 @@ at this server (or a Cloudflare tunnel / a TLS-terminating proxy in front of
 it); Venvy does not speak TLS itself.
 
 Only exact matches of an app's domain are proxied, so Venvy's own UI is never
-reachable under an app's name and the reverse."""
+reachable under an app's name and the reverse — nor is a name Venvy itself has
+been signed in to under (own_hosts.py), whatever domain an app was given.
+
+X-Venvy-Proxy-Secret and the forwarding headers a client sent are not passed
+on: the secret would let the app pass for the tunnel, and the X-Forwarded-*
+it gets are Venvy's own."""
 import asyncio
 import contextlib
 import logging
@@ -18,6 +23,7 @@ import aiohttp
 from sqlmodel import Session, select
 from starlette.requests import HTTPConnection
 
+from venvy import own_hosts
 from venvy.config import HTTP_CLIENT_LIMITS
 from venvy.db import engine
 from venvy.models import App
@@ -29,6 +35,9 @@ _session: Optional[aiohttp.ClientSession] = None
 
 _HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
         "transfer-encoding", "upgrade", "proxy-connection"}
+
+# Request headers that never reach the app (see the module docstring).
+_DROP = {"x-venvy-proxy-secret", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto"}
 
 
 def invalidate() -> None:
@@ -52,8 +61,8 @@ def lookup(host: str) -> tuple:
     age = time.monotonic() - _cache_at
     if age > _TTL_SEC:
         _refresh()
-    name = host.split(":")[0].strip().lower().rstrip(".")
-    if name in _cache:
+    name = own_hosts.host_name(host)
+    if name in _cache and not own_hosts.is_own(name):
         if _cache[name] is None and age > 0.5:
             _refresh()          # not running a moment ago: look again, it may have started
         return True, _cache[name]
@@ -81,6 +90,16 @@ async def _plain(send, status: int, text: str) -> None:
         (b"content-type", b"text/html; charset=utf-8"), (b"content-length", str(len(body)).encode()),
         (b"cache-control", b"no-store")]})
     await send({"type": "http.response.body", "body": body})
+
+
+def _proto(scope) -> str:
+    """How the browser reached us: through the tunnel that is HTTPS, though
+    cloudflared talks plain HTTP to Venvy (see auth.request_is_https)."""
+    from venvy.auth import request_is_https
+    try:
+        return "https" if request_is_https(HTTPConnection(scope)) else "http"
+    except Exception:
+        return scope.get("scheme", "http")
 
 
 def _client_ip(scope) -> str:
@@ -117,10 +136,10 @@ class DomainProxyMiddleware:
         if not port:
             await _plain(send, 503, "This app is not running right now.")
             return
-        headers = [(k.decode("latin-1"), v.decode("latin-1")) for k, v in scope["headers"] if k.decode("latin-1") not in _HOP]
-        headers = [(k, v) for k, v in headers if k != "x-forwarded-for"]
+        headers = [(k.decode("latin-1"), v.decode("latin-1")) for k, v in scope["headers"]
+                   if k.decode("latin-1") not in _HOP and k.decode("latin-1") not in _DROP]
         headers += [("X-Forwarded-For", _client_ip(scope)), ("X-Forwarded-Host", host),
-                    ("X-Forwarded-Proto", scope.get("scheme", "http"))]
+                    ("X-Forwarded-Proto", _proto(scope))]
         path = scope.get("raw_path", scope["path"].encode()).decode("latin-1") or "/"
         qs = scope.get("query_string", b"").decode("latin-1")
         url = f"http://127.0.0.1:{port}{path}" + (f"?{qs}" if qs else "")

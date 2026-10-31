@@ -79,8 +79,8 @@
         const _lastKnownStatus = {};
         function _noticeCrash(app) {
             const prev = _lastKnownStatus[app.id];
-            const nowCrashed = statusMeta(app.status).crashed;
-            _lastKnownStatus[app.id] = app.status;
+            const nowCrashed = statusMeta(appStatus(app)).crashed;
+            _lastKnownStatus[app.id] = appStatus(app);
             if (prev === undefined || !nowCrashed || statusMeta(prev).crashed) return;
             showToast(`"${app.name}" stopped unexpectedly.`, 'error', 0, {
                 actionLabel: 'View logs',

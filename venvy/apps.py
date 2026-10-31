@@ -62,6 +62,10 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
         d["env_redacted"] = bool(app_row.env_json)
     local_url = f"http://{get_server_ipv4()}:{app_row.port}" if app_row.port else None
     d["local_url"] = local_url
+    # Exited by itself with an error, or was killed by something other than
+    # Stop (which records -15): the process is gone, but "stopped" alone
+    # would not tell anyone that it crashed.
+    d["crashed"] = app_row.status == "stopped" and app_row.last_exit_code not in (None, 0, -15)
     d["metrics"]   = _app_metrics.get(app_row.id, {"cpu": 0.0, "memory": 0})
     d["resource_limits_enforced"] = _systemd_run_available()
     # Whether the app, its terminal and its tools run as its own Unix user.

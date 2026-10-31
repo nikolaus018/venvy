@@ -49,7 +49,7 @@
             const items = [];
 
             _cachedApps.forEach(app => {
-                const m = statusMeta(app.status);
+                const m = statusMeta(appStatus(app));
                 items.push({
                     kind: 'app',
                     icon: null,

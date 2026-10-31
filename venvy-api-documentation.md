@@ -420,7 +420,7 @@ Package specifiers are validated against a strict allow-list regex (and may not 
 `require_operator`, rate-limited. Installs everything the app's manifest lists (`npm install`, `bun install`, `deno install`, `go mod download`, `composer install --no-dev`, `bundle install`) as a **background job** (§4.4a). `400` for runtimes without a manifest or an app that has none yet.
 
 #### `GET /api/apps/{app_id}/scan-imports`
-Any role. Python-only static analysis: walks the app's `.py` files via `ast`, collects top-level imports, and diffs them against stdlib + the venv's installed packages + the app's own top-level modules. `venv`, `node_modules`, `.git` and similar directories are not searched; at most 5000 files of up to 2 MB each are read.
+`require_operator` (it reads the app's source). Python-only static analysis: walks the app's `.py` files via `ast`, collects top-level imports, and diffs them against stdlib + the venv's installed packages + the app's own top-level modules. `venv`, `node_modules`, `.git` and similar directories are not searched; at most 5000 files of up to 2 MB each are read.
 ```json
 { "missing": ["requests", "numpy"], "installed_count": 24 }
 ```
@@ -493,11 +493,21 @@ Steps 1–5 run as a **background job** (§4.4a); its `result` is `{ "ok": true,
 Any role. Returns the server's LAN IPv4 address: `{ "ipv4": "192.168.1.20" }`.
 
 #### `GET /api/system/ports`
-`require_operator`. Lists currently listening TCP ports plus recommended free ports for new apps.
+`require_operator`. Every TCP port something on the host is listening on, and up to 12 free ones in common ranges (3000–3009, 4000–4009, 5000–5009, 8000–8019, 8080–8089, 8888–8897, 9000–9009, 9090–9099) to suggest for a new app.
+```json
+{
+  "listening": [
+    { "port": 22, "pid": null, "app_name": null },
+    { "port": 8001, "pid": 4242, "app_name": "My App" }
+  ],
+  "free": [3000, 3001, 3002, 4000, 4001, 4002, 5000, 5001, 5002, 8000, 8002, 8003]
+}
+```
+`listening` is sorted by port, one entry per port. `pid` is the listening process when psutil can tell (often `null` for processes of other users); `app_name` is the app whose `port` it is, among the apps the caller has access to, else `null`.
 
 #### `GET /api/system/settings/{key}` / `PUT /api/system/settings/{key}` — admin only
-Generic key-value store for instance settings. Keys prefixed `cf_` (Cloudflare credentials) and `gh_token` are transparently encrypted at rest with a local Fernet key (`.venvy_key`).
-Secrets are write-only: `GET` for `cf_api_token` or `gh_token` answers `{ "key", "value": "", "is_set": true|false }` and never the stored value. Other keys (including `cf_account_id` / `cf_tunnel_id`) are returned decrypted.
+Generic key-value store for instance settings. Keys prefixed `cf_` (Cloudflare credentials) are transparently encrypted at rest with a local Fernet key (`.venvy_key`).
+Secrets are write-only: `GET` for `cf_api_token` answers `{ "key", "value": "", "is_set": true|false }` and never the stored value. Other keys (including `cf_account_id` / `cf_tunnel_id`) are returned decrypted. Keys Venvy keeps its own state under (`global_env`, `backup_remote`, `venvy_hosts`, `totp_pending_*`) answer `400` to `PUT`.
 **PUT body:** `{ "value": "string" }`
 
 #### `POST /api/system/settings/batch` — admin only
@@ -522,11 +532,12 @@ Lists active zones (domains) available on the configured Cloudflare account.
 Any role. Lists the app's current Cloudflare route mappings (hostname ↔ local port).
 
 #### `GET /api/apps/{app_id}/tunnel/check?hostname=&local_port=`
-`require_operator`. Pre-flight validation before publishing (hostname format, zone ownership, port availability).
+`require_operator`. Pre-flight check before publishing: `{ "conflict": false }`, or `{ "conflict": true, "conflict_type": "local" | "remote" | "venvy", "reason", "owned_by", "blocked"? }`. `local`: another app has published the hostname (publishing moves it here); `remote`: the tunnel already sends it somewhere else (publishing overwrites it). With `"blocked": true` publishing would be refused (see below), so there is nothing to overwrite.
 
 #### `POST /api/apps/{app_id}/tunnel/publish`
 `require_operator`, rate-limited. **Body:** `{ "hostname": "app.example.com", "local_port": 8001 }`
 Updates the Cloudflare Tunnel's ingress config and upserts a DNS `CNAME` record; releases the hostname from any other app that previously held it. Sets the app's `external_url`.
+Refused: a `local_port` that is not one of the app's ports (`port`, `manual_ports`, the ports it listens on) — `400`; Venvy's own port — `400`; a port that is also another app's, or that something other than this app is listening on — `409`; a hostname Venvy itself has been signed in to under, or one the tunnel sends to Venvy's port — `409`; a hostname published by an app the caller has no access to — `403`; a hostname already in the tunnel that no Venvy app published, unless the caller is an admin — `403`.
 ```json
 { "ok": true, "hostname": "app.example.com", "url": "https://app.example.com", "dns_record_id": "..." }
 ```
@@ -617,7 +628,7 @@ One sample a minute, kept 7 days (`VENVY_METRICS_RETENTION_DAYS`), averaged into
 `{ "app_id": 0, "metric": "cpu|memory|disk", "threshold", "minutes", "enabled" }`. `app_id` 0 is the host (threshold in percent); for an app, CPU is percent of one core and memory and disk are MB. Fires (`alert_fired`) when the minute averages stay above the threshold for `minutes`, clears (`alert_cleared`) when back under. Each app's `disk_limit_mb` alerts the same way.
 
 #### Domains
-An app with a `domain` is served for requests that reach Venvy's own port with that name in the `Host` header (HTTP and WebSocket), without Venvy's login; `503` while the app is not running, `502` if it does not answer. `X-Forwarded-For/Host/Proto` are set. Only exact matches are proxied. Venvy does not do TLS: point the name at this server, or at a tunnel or TLS proxy in front of it.
+An app with a `domain` is served for requests that reach Venvy's own port with that name in the `Host` header (HTTP and WebSocket), without Venvy's login; `503` while the app is not running, `502` if it does not answer. `X-Forwarded-For/Host/Proto` are set by Venvy (any the client sent are dropped), and `X-Venvy-Proxy-Secret` is never passed on. Only exact matches are proxied, and never a name Venvy itself has been signed in to under: such a name can't be set as an app's `domain` (`400`). Venvy does not do TLS: point the name at this server, or at a tunnel or TLS proxy in front of it.
 
 ### 5.13 Scheduled jobs — `/api/apps/{app_id}/jobs`
 
@@ -720,7 +731,8 @@ This is the exact shape returned by `GET /api/apps` (array of these), `POST /api
 | `venv_path`, `app_dir`, `entrypoint` | string | filesystem locations |
 | `start_on_boot` | bool | |
 | `restart_policy` | string | `never` \| `on-failure` \| `always` |
-| `last_exit_code` | int \| null | |
+| `last_exit_code` | int \| null | `-15` after Stop |
+| `crashed` | bool | `status` is `stopped` because the process exited with an error or was killed by something other than Stop |
 | `last_start_time`, `last_stop_time`, `last_manually_stopped_at` | string (ISO‑8601) \| null | |
 | `port` | int \| null | primary port |
 | `manual_ports`, `detected_ports` | **string** | ⚠️ JSON-encoded array **as a string**, e.g. `"[8001, 8002]"` — the client must `JSON.parse()` it, it is not a native JSON array. |
@@ -864,12 +876,12 @@ A frozen build must bundle `web/` next to the executable's code.
 | DELETE | `/api/apps/{id}/packages/{name}` | operator |
 | GET | `/api/apps/{id}/logs` | viewer |
 | DELETE | `/api/apps/{id}/logs` | operator |
-| GET | `/api/apps/{id}/scan-imports` | viewer |
+| GET | `/api/apps/{id}/scan-imports` | operator |
 | GET | `/api/system/info` | viewer |
 | GET | `/api/system/update` | admin |
 | GET | `/api/system/update/notes` | admin |
 | POST | `/api/system/update` | admin (browser session) |
-| GET | `/api/system/ports` | viewer |
+| GET | `/api/system/ports` | operator |
 | GET | `/api/system/metrics` | admin |
 | POST | `/api/system/backup` | admin |
 | GET | `/api/system/backup/status` | admin |

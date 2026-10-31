@@ -3,7 +3,7 @@ permissions, log search and download, Python versions, duplicating an app, and
 serving an app on its own domain (HTTP and WebSocket)."""
 import hashlib, hmac, json, sqlite3, sys, time
 import httpx
-from harness import (Sink, SERVER_APP, WS_APP, admin, free_port, login_as, make_app, server)
+from harness import (Client, Sink, SERVER_APP, WS_APP, admin, free_port, login_as, make_app, server)
 repo = sys.argv[1]; fails = []
 def check(n, c, x=""):
     print(("  ok   " if c else "  FAIL ") + n, x if not c else "")
@@ -232,12 +232,25 @@ with server(repo, 55021, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv)
     check("an app cannot take over the address Venvy is reached on", r.status_code == 400 and "Venvy itself" in r.text, r.text)
     other = make_app(cl, name="Other")
     check("a domain belongs to one app", cl.req("PUT", f"/api/apps/{other}", json={"domain": dom}).status_code == 409)
+    panel = Client(base); panel.c.get("/")
+    r = panel.c.post("/api/auth/login", headers={**panel._h("POST"), "Host": "panel.example.test"},
+                     json={"username": "admin", "password": "hunter2hunter2"})
+    check("signed in under another name", r.status_code == 200, r.text)
+    r = cl.req("PUT", f"/api/apps/{other}", json={"domain": "panel.example.test"})
+    check("a name Venvy was signed in to under cannot become an app's domain", r.status_code == 400 and "Venvy itself" in r.text, r.text)
     hc = lambda path="/", **kw: httpx.request(kw.pop("method", "GET"), base + path, headers={"Host": dom}, timeout=10, **kw)
     check("stopped app: 503, not the Venvy UI", hc().status_code == 503 and "not running" in hc().text)
     cl.req("POST", f"/api/apps/{web}/control?action=start"); cl.wait_status(web, "running"); time.sleep(2)
     r = hc("/hello?x=1")
     check("app is served on its domain", r.status_code == 200 and r.text == "APP-OK m1 /hello?x=1", r.text)
     check("domain with a port in Host", httpx.get(base + "/", headers={"Host": f"{dom}:80"}, timeout=10).text.startswith("APP-OK"))
+    seen = httpx.get(base + "/headers", headers={"Host": dom, "X-Venvy-Proxy-Secret": "s3kr1t", "X-Forwarded-Host": "evil.test",
+                                                 "X-Forwarded-For": "6.6.6.6"}, timeout=10).text
+    check("the app never sees the proxy secret or forged forwarding headers",
+          "s3kr1t" not in seen and "evil.test" not in seen and "6.6.6.6" not in seen and f"x-forwarded-host: {dom}" in seen, seen)
+    seen = httpx.get(base + "/headers", headers={"Host": dom, "X-Forwarded-Proto": "https"}, timeout=10).text
+    check("through the tunnel the app is told it was HTTPS", "x-forwarded-proto: https" in seen
+          and seen.count("x-forwarded-proto") == 1, seen)
     r = hc("/bigheader")
     check("a response header over 8 KiB passes through", r.status_code == 200 and len(r.headers.get("x-big", "")) == 12000, f"{r.status_code} {r.text[:120]}")
     r = hc("/post", method="POST", content=b"hello body")

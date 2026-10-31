@@ -3,8 +3,10 @@ import contextlib
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -112,11 +114,63 @@ def _ensure_app_user(app_row: "App") -> Optional[tuple]:
     return ids
 
 
+def _user_pids(uid: int) -> list:
+    """PIDs of the processes running as *uid* — by any of their real,
+    effective, saved or filesystem ids, from /proc/<pid>/status (the owner of
+    /proc/<pid> itself turns into root for a process that made itself
+    non-dumpable)."""
+    pids = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            for line in (entry / "status").read_text().splitlines():
+                if line.startswith("Uid:"):
+                    if str(uid) in line.split()[1:]:
+                        pids.append(int(entry.name))
+                    break
+        except (OSError, ValueError):
+            continue
+    return pids
+
+
+def _kill_user_processes(uid: int) -> None:
+    """SIGKILL everything running as *uid*. Blocking, a second at most."""
+    for _ in range(10):
+        pids = _user_pids(uid)
+        if not pids:
+            return
+        for pid in pids:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+        time.sleep(0.1)
+
+
 def _delete_app_user(app_id: int) -> None:
+    """Remove the app's user — and first whatever still runs as it. Stopping
+    the app and closing its terminals ends what Venvy started, but not what
+    those started on their own (a daemon, a `nohup … &` from the terminal).
+    Left running, it would also keep userdel from removing the user; and app
+    ids are handed out again, so the next app with this id would get the same
+    user, and those processes would have its files."""
     if not _isolation_active():
         return
+    import pwd
+    name = _app_username(app_id)
+    try:
+        uid = pwd.getpwnam(name).pw_uid
+    except KeyError:
+        return
+    if uid == 0:
+        return
     with contextlib.suppress(Exception):
-        subprocess.run(["userdel", _app_username(app_id)], capture_output=True, timeout=30)
+        _kill_user_processes(uid)
+    try:
+        r = subprocess.run(["userdel", name], capture_output=True, timeout=30)
+        if r.returncode != 0:
+            logging.error(f"Could not remove user {name}: {r.stderr.decode(errors='replace').strip()}")
+    except Exception as exc:
+        logging.error(f"Could not remove user {name}: {exc}")
 
 
 def _chown_app_dir(app_row: "App") -> None:

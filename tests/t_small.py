@@ -38,8 +38,23 @@ with server(repo, 55007) as (base, d, srv):
     for bad in ["foo.com&type=A", "foo.com/path", "no-dot", "a b.com", "-x.com", "x..com", ""]:
         r = cl.req("POST", f"/api/apps/{app_id}/tunnel/publish", json={"hostname": bad, "local_port": 8000})
         check(f"hostname {bad!r} refused", r.status_code == 400 and "hostname" in r.text.lower(), r.text)
+    pub = lambda port: cl.req("POST", f"/api/apps/{app_id}/tunnel/publish", json={"hostname": "app.example.com", "local_port": port})
+    r = pub(8000)
+    check("a port that is not the app's is not published", r.status_code == 400 and "not one of this app's ports" in r.text, r.text)
+    up(manual_ports=[8000])
     r = cl.req("POST", f"/api/apps/{app_id}/tunnel/publish", json={"hostname": "https://App.Example.com/", "local_port": 8000})
     check("valid hostname passes validation", r.status_code == 400 and "not configured" in r.text, r.text)
+    up(manual_ports=[55007])
+    r = pub(55007)
+    check("Venvy's own port is not published", r.status_code == 400 and "Venvy's own port" in r.text, r.text)
+    import socket as _socket
+    with _socket.socket() as other:
+        other.bind(("127.0.0.1", 0)); other.listen()
+        foreign = other.getsockname()[1]
+        up(manual_ports=[foreign])
+        r = pub(foreign)
+        check("a port something else listens on is not published", r.status_code == 409 and "Something other" in r.text, r.text)
+    up(manual_ports=[])
     r = cl.req("POST", f"/api/apps/{app_id}/tunnel/publish", json={"hostname": "app.example.com", "local_port": 70000})
     check("bad port refused", r.status_code == 400 and "port" in r.text.lower(), r.text)
     # Node.js runtime (only where node/npm exist)
@@ -63,4 +78,9 @@ with server(repo, 55007) as (base, d, srv):
         cl.req("POST", f"/api/apps/{node_id}/control?action=stop"); cl.wait_status(node_id, "stopped")
         check("blank entrypoint allowed for node", cl.req("PUT", f"/api/apps/{node_id}", json={"entrypoint": ""}).status_code == 200)
     check("sw.js served", httpx.get(base + "/sw.js").status_code == 200)
+    crash_id = make_app(cl, name="Crashes", code="raise SystemExit(3)\n")
+    cl.req("POST", f"/api/apps/{crash_id}/control?action=start"); time.sleep(4)
+    st = cl.status(crash_id)
+    check("an app that exits with an error is marked crashed", st["status"] == "stopped" and st["crashed"] is True, str(st.get("status")))
+    check("an app stopped by hand is not", cl.status(app_id)["crashed"] is False)
 print("FAILED" if fails else "ALL OK", fails); sys.exit(1 if fails else 0)

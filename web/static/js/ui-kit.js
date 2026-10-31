@@ -125,7 +125,11 @@
         // points: [{ts, <key>: number}], returns an SVG string. Auto-scales to
         // the data (or to opts.max); marks the latest value.
         function chartSvg(points, key, { height = 90, color = 'var(--accent)', max = null, fmt = v => String(Math.round(v * 10) / 10), min = 0 } = {}) {
-            const W = 600, H = height, padL = 4, padR = 4, padT = 8, padB = 14;
+            // The SVG is stretched to the card's width (preserveAspectRatio="none"),
+            // so it holds only lines: text and the end dot would be squashed with
+            // it. The times sit in the row below instead, and the dot is a
+            // zero-length line with a round cap, which keeps its shape.
+            const W = 600, H = height, padL = 4, padR = 4, padT = 8, padB = 4;
             if (!points || points.length < 2) {
                 return `<div class="text-xs flex items-center justify-center" style="height:${H}px;color:var(--text3)">Collecting data — a point is recorded every minute.</div>`;
             }
@@ -139,13 +143,13 @@
             const pts = points.map((p, i) => `${x(p).toFixed(1)},${y(vals[i]).toFixed(1)}`);
             const area = `${padL},${H - padB} ${pts.join(' ')} ${(W - padR)},${H - padB}`;
             const last = vals[vals.length - 1], peak = Math.max(...vals);
+            const ex = x(points[points.length - 1]).toFixed(1), ey = y(last).toFixed(1);
             return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="w-full" style="height:${H}px;display:block" role="img" aria-label="${escapeHtml(key)} over time">
                 <line x1="${padL}" y1="${y(0)}" x2="${W - padR}" y2="${y(0)}" stroke="var(--border2)" stroke-width="1" vector-effect="non-scaling-stroke"/>
                 <polygon points="${area}" fill="${color}" opacity="0.12"/>
                 <polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-                <circle cx="${x(points[points.length - 1]).toFixed(1)}" cy="${y(last).toFixed(1)}" r="2.6" fill="${color}"/>
-                <text x="${padL}" y="${H - 2}" font-size="10" fill="var(--text3)">${escapeHtml(fmtWhen(points[0].ts))}</text>
-                <text x="${W - padR}" y="${H - 2}" font-size="10" fill="var(--text3)" text-anchor="end">${escapeHtml(fmtWhen(points[points.length - 1].ts))}</text>
+                <line x1="${ex}" y1="${ey}" x2="${ex}" y2="${ey}" stroke="${color}" stroke-width="5.2" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
             </svg>
+            <div class="flex justify-between gap-2 text-[10px] mt-0.5" style="color:var(--text3)"><span>${escapeHtml(fmtWhen(points[0].ts))}</span><span>${escapeHtml(fmtWhen(points[points.length - 1].ts))}</span></div>
             <div class="flex justify-between text-[11px] mono mt-0.5" style="color:var(--text3)"><span>peak ${escapeHtml(fmt(peak))}</span><span style="color:var(--text2)">now ${escapeHtml(fmt(last))}</span></div>`;
         }

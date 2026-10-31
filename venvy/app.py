@@ -253,9 +253,8 @@ _HOST_RE = re.compile(r"\A[A-Za-z0-9.\-]+(?::\d{1,5})?\Z|\A\[[0-9A-Fa-f:.]+\](?:
 def _content_security_policy(host: str) -> str:
     # No 'unsafe-inline' for scripts: the UI has no inline script and no
     # onclick="…" handlers (see web/static/js/head/actions.js), so markup
-    # that slips into a page can't run any. Styles keep it — the Tailwind
-    # runtime writes its CSS into a <style> element, and the markup is full
-    # of style="…"; CSS can't run script.
+    # that slips into a page can't run any. Styles keep it — the markup is
+    # full of style="…", and scripts set element styles; CSS can't run script.
     # WebSockets only back to this host (the terminal), not to anywhere:
     # "ws: wss:" would let a script talk to any server on the internet.
     sockets = f" ws://{host} wss://{host}" if _HOST_RE.match(host or "") else ""

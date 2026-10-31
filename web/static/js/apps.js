@@ -30,7 +30,7 @@
                 renderAppList(apps);
                 // Seed crash tracking so we don't alert on apps that were already
                 // down before this session started.
-                apps.forEach(a => { if (!(a.id in _lastKnownStatus)) _lastKnownStatus[a.id] = a.status; });
+                apps.forEach(a => { if (!(a.id in _lastKnownStatus)) _lastKnownStatus[a.id] = appStatus(a); });
                 if (!_routeApplied) { _routeApplied = true; applyRoute(); }
             } catch (e) {
                 if (!_appsEverLoaded) renderAppListError('Network error — is the server running?');
@@ -74,7 +74,7 @@
             const countEl = document.getElementById('app-count');
             if (countEl) {
                 countEl.textContent = needle ? `${shown.length}/${apps.length}` : String(apps.length);
-                const crashed = apps.filter(a => statusMeta(a.status).crashed).length;
+                const crashed = apps.filter(a => statusMeta(appStatus(a)).crashed).length;
                 countEl.title = crashed ? `${crashed} application(s) crashed` : '';
                 countEl.style.color = crashed ? 'var(--red)' : '';
                 countEl.style.borderColor = crashed ? 'rgba(var(--red-rgb),0.35)' : '';
@@ -112,8 +112,9 @@
             }
 
             listEl.innerHTML = shown.map(app => {
-                const isActive = app.id === activeAppId;
-                const m = statusMeta(app.status);
+                // Not while System is open: that is what the sidebar has selected then.
+                const isActive = app.id === activeAppId && !_isSystemViewActive();
+                const m = statusMeta(appStatus(app));
                 return `
                 <button type="button" data-on-click="selectApp(${app.id})" data-app-id="${app.id}"
                      aria-current="${isActive ? 'true' : 'false'}"
@@ -366,7 +367,7 @@
             // a row of failed reconnects.
             if (tabAllowed('terminal')) initTerminal(id); else _termDestroy();
             syncHash();
-            if (found) announce(`${found.name} selected, ${statusMeta(found.status).label}`);
+            if (found) announce(`${found.name} selected, ${statusMeta(appStatus(found)).label}`);
 
             // Fetch authoritative data in background to ensure we are up to date
             try {
@@ -444,7 +445,7 @@
             titleEl.innerText = app.name;
             titleEl.title = app.name;
             document.title = `${app.name} · Venvy`;
-            applyStatusBadge(document.getElementById('dash-status'), app.status);
+            applyStatusBadge(document.getElementById('dash-status'), appStatus(app));
             updateHealthPill(app);
             updateControlButtons(app);
             updateLogLiveIndicator();
@@ -505,7 +506,7 @@
         function updateControlButtons(app) {
             if (_controlsBusy) return;
             const running = app?.status === 'running';
-            const crashed = statusMeta(app?.status).crashed;
+            const crashed = statusMeta(appStatus(app)).crashed;
             const set = (id, disabled, title) => {
                 const b = document.getElementById(id);
                 if (!b) return;
@@ -592,13 +593,14 @@
                     activeApp = updated;
                     _renderDashboard(activeApp);
 
-                    const settled = updated.status === expectedFinal || updated.status === 'error';
+                    const settled = updated.status === expectedFinal || updated.status === 'error'
+                        || (action !== 'stop' && appStatus(updated) === 'crashed');
                     if (settled) {
                         clearInterval(pollTimer);
                         showToast(
-                            updated.status === 'error' ? 'Action failed — check logs.' :
+                            updated.status === 'error' || appStatus(updated) === 'crashed' ? 'Action failed — check logs.' :
                                 { start: 'Started ✓', stop: 'Stopped ✓', restart: 'Restarted ✓' }[action] || action,
-                            updated.status === 'error' ? 'error' : 'success', 1500
+                            updated.status === 'error' || appStatus(updated) === 'crashed' ? 'error' : 'success', 1500
                         );
                         // Also kick off port-detection poll on start/restart
                         if ((action === 'start' || action === 'restart') && updated.status === 'running') {

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_, update
 from sqlmodel import select, Session
 
+from venvy import own_hosts
 from venvy.audit import audit_log
 from venvy.auth import (
     _authenticate,
@@ -116,6 +117,7 @@ def auth_setup(payload: SetupReq, request: Request, response: Response, session:
         clear_setup_code()
     session.refresh(user)
     auth_key = _new_session(session, request, response, user)
+    own_hosts.remember(request.headers.get("host", ""))
     audit_log(user.username, "user_setup", "initial admin account created")
     return {"ok": True, "username": user.username, "role": user.role, "auth_key": auth_key}
 
@@ -168,6 +170,7 @@ def login(
     _clear_login_rate(user_key)
     _clear_login_rate(rate_key)
     auth_key = _new_session(session, request, response, user)
+    own_hosts.remember(request.headers.get("host", ""))
     audit_log(user.username, "login", f"from {rate_key}")
     return {"ok": True, "username": user.username, "role": user.role, "auth_key": auth_key}
 
@@ -216,13 +219,23 @@ def change_own_password(
     return {"ok": True}
 
 
+_MAX_TICKETS_PER_USER = 200
+
+
 @router.post("/download-ticket")
 def create_download_ticket(user: User = Depends(get_session_user)):
     """Trade the X-Venvy-Key header for a one-time, 60-second ticket usable as
     ?ticket= on a download URL (see get_download_user)."""
     ticket = secrets.token_urlsafe(24)
+    now = time.monotonic()
     with _download_tickets_lock:
-        _download_tickets[_hash_token(ticket)] = (user.id, time.monotonic() + _DOWNLOAD_TICKET_TTL)
+        # Expired ones were only dropped when a ticket was used, so a page
+        # asking for tickets and never using them grew this without end.
+        for k in [k for k, (_, exp) in _download_tickets.items() if exp < now]:
+            _download_tickets.pop(k, None)
+        if sum(1 for uid, _ in _download_tickets.values() if uid == user.id) >= _MAX_TICKETS_PER_USER:
+            raise HTTPException(429, "Too many download links at once — try again in a minute.")
+        _download_tickets[_hash_token(ticket)] = (user.id, now + _DOWNLOAD_TICKET_TTL)
     return {"ticket": ticket}
 
 

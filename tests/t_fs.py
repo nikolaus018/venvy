@@ -44,6 +44,14 @@ with server(repo, 54999) as (base, data, srv):
     tree = cl.req("GET", f"/api/apps/{app_id}/files/tree", params={"path": "link_in"}).json()
     check("tree via inside link", any(f["name"] == "f.txt" and f["path"] == "sub/f.txt" for f in tree), str(tree))
     check("tree of outside link refused", cl.req("GET", f"/api/apps/{app_id}/files/tree", params={"path": "link_out"}).status_code == 403)
+    os.symlink(outside / "secret.txt", app_dir / "peek")
+    top = {f["name"]: f for f in cl.req("GET", f"/api/apps/{app_id}/files/tree").json()}
+    check("tree does not stat through an outside link", top["peek"]["size"] != len("TOP SECRET")
+          and not top["link_out"]["is_dir"], str(top.get("peek")))
+    check("tree still follows an inside link", top["link_in"]["is_dir"], str(top.get("link_in")))
+    os.unlink(app_dir / "peek")
+    check("copy a folder into itself refused", op(operation="copy", path="sub", new_path="sub/again").status_code == 400
+          and not (app_dir / "sub/again").exists())
 
     check("copy file", op(operation="copy", path="sub/f.txt", new_path="sub/f2.txt").status_code == 200 and (app_dir / "sub/f2.txt").read_text() == "two")
     check("copy onto existing -> 409", op(operation="copy", path="sub/f.txt", new_path="sub/f2.txt").status_code == 409)

@@ -150,6 +150,12 @@
         // ── App status presentation ──────────────────────────────────────────────
         // The backend reports running / stopped / error. A crashed app must never
         // look like one the user deliberately stopped.
+        // What an app's status should read as: an app that exited with an error
+        // is "stopped" in the database, and the API marks it crashed.
+        function appStatus(app) {
+            return app && app.crashed && app.status === 'stopped' ? 'crashed' : app?.status;
+        }
+
         function statusMeta(status) {
             switch (status) {
                 case 'running':

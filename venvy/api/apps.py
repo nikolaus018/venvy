@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from pydantic import BaseModel
 from sqlmodel import delete as sql_delete, select, Session
 
-from venvy import deploy, monitor, proxy, runtimes
+from venvy import deploy, monitor, own_hosts, proxy, runtimes
 from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
 from venvy.auth import (
@@ -550,8 +550,9 @@ async def update_app(
         app_row.health_restart = req.health_restart
     if req.domain is not None:
         new_domain = _clean_domain(req.domain)
-        if new_domain and new_domain == request.headers.get("host", "").split(":")[0].strip().lower():
-            raise HTTPException(400, "That is the address you are using to reach Venvy itself; an app cannot take it over.")
+        if new_domain and (new_domain == own_hosts.host_name(request.headers.get("host", ""))
+                           or own_hosts.is_own(new_domain)):
+            raise HTTPException(400, "That is an address Venvy itself is reached under; an app cannot take it over.")
         if new_domain:
             other = session.exec(select(App).where(App.domain == new_domain, App.id != app_id)).first()
             if other:
@@ -1136,7 +1137,8 @@ def _scan_imported_modules(root: Path) -> Set[str]:
 async def scan_imports(
     app_id: int,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    # Reads every .py file in the app: file contents, which a viewer doesn't get.
+    user: User = Depends(require_operator),
 ):
     """Scan imported packages to discover dependencies missing from the active venv."""
     app_row = session.get(App, app_id)

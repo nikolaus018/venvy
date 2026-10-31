@@ -472,11 +472,12 @@ def require_app_access(request: Request, session: Session = Depends(get_session)
             user = session.get(User, entry[0])
             if user:
                 _check_path_app_access(request, session, user)
-                return
+        # And whoever the request is signed in as, if anyone: a route that
+        # doesn't take tickets acts as that user, not as the ticket's.
         try:
             user = get_current_user(request, session)
         except HTTPException:
-            return        # not signed in either: the route's own check answers
+            return        # not signed in: a download route checks the ticket itself
         _check_path_app_access(request, session, user)
         return
     _check_path_app_access(request, session, get_current_user(request, session))
@@ -589,10 +590,27 @@ def _login_user_key(username: str) -> str:
     return "user:" + username.strip().lower()[:128]
 
 
+def _make_room_for_login_entry() -> None:
+    """With the table full, drop the entry that matters least: one that is not
+    locked out and has no lockouts behind it, the stalest of those. Simply
+    not recording new keys any more (as before) let anyone who filled the
+    table with made-up usernames guess every other one without a limit.
+    Caller holds _login_lock."""
+    now = time.time()
+
+    def weight(item):
+        entry = item[1]
+        locked = (entry.get('locked_until') or 0) > now
+        return (locked, bool(entry.get('strikes')), entry.get('last', 0))
+
+    key, _ = min(_login_attempts.items(), key=weight)
+    _login_attempts.pop(key, None)
+
+
 def _record_login_failure(key: str, max_tries: int = _LOGIN_MAX_TRIES) -> None:
     with _login_lock:
         if key not in _login_attempts and len(_login_attempts) >= _LOGIN_MAX_TRACKED:
-            return
+            _make_room_for_login_entry()
         entry = _login_attempts.setdefault(key, {'count': 0, 'locked_until': None})
         entry['count'] += 1
         entry['last'] = time.time()

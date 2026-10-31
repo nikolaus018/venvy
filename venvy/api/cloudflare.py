@@ -2,17 +2,20 @@
 import asyncio
 import json
 import logging
-from typing import Dict, List, Optional
+import urllib.parse
+from typing import Dict, List, Optional, Set
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import select, Session
 
+from venvy import own_hosts
 from venvy.audit import audit_log
 from venvy.auth import (
     check_admin,
     check_ip_allowlist,
     get_current_user,
+    has_app_access,
     rate_limit_mutations,
     require_app_access,
     require_operator,
@@ -32,7 +35,7 @@ from venvy.cloudflare import (
 from venvy.crypto import _decrypt_secret
 from venvy.db import get_session
 from venvy.models import App, CfRoute, SystemSetting, User
-from venvy.process import get_server_ipv4
+from venvy.process import _app_pid_alive, _detect_ports_sync, _verify_port_free, get_server_ipv4
 
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist), Depends(require_app_access)]
@@ -258,9 +261,89 @@ class CfPublishReq(BaseModel):
     local_port: int
 
 
+def _app_ports(app_row: App, seen: bool = True) -> Set[int]:
+    """The ports that are this app's: its port, the ones set by hand and (with
+    *seen*) the ones it was seen listening on."""
+    ports = {app_row.port} if app_row.port else set()
+    for raw in (app_row.manual_ports, app_row.detected_ports if seen else None):
+        try:
+            ports |= {p for p in json.loads(raw or "[]") if isinstance(p, int)}
+        except ValueError:
+            pass
+    return ports
+
+
+def _venvy_port(request: Request) -> Optional[int]:
+    """The port Venvy itself is listening on (the one this request came in on)."""
+    server = request.scope.get("server")
+    return server[1] if server and len(server) > 1 else None
+
+
+def _service_port(service: str) -> Optional[int]:
+    try:
+        return urllib.parse.urlsplit(service or "").port
+    except ValueError:
+        return None
+
+
+def _publish_refusal(rule: Optional[dict], hostname: str, published: Set[str], user: User,
+                     own_port: Optional[int]) -> Optional[tuple]:
+    """(status, reason) when *hostname* must not be (re)pointed at an app, else None.
+    *rule* is the tunnel's current rule for it, *published* the hostnames Venvy's
+    apps have published. Never Venvy's own address; and a hostname the tunnel
+    sends somewhere Venvy did not set up (another service on this host or
+    elsewhere) is only an admin's to take over."""
+    if own_hosts.is_own(hostname) or (rule and own_port and _service_port(rule.get("service", "")) == own_port):
+        return 409, f"{hostname} is an address Venvy itself is reached under; an app cannot take it over."
+    if rule and hostname not in published and user.role != "admin":
+        return 403, (f"{hostname} is already in the tunnel, pointing to '{rule.get('service', 'unknown')}', "
+                     "and was not published from Venvy. Only an admin can take it over.")
+    return None
+
+
+async def _check_publish_port(session: Session, app_row: App, port: int, request: Request) -> None:
+    """Only a port that is this app's goes on the internet from here. Otherwise
+    any port on the host could: another app's (one this user may not even have
+    access to), or a database that listens on localhost only because it trusts
+    this host. The app's port is a setting anyone who can publish can change,
+    so it also must not be another app's, nor something else's that is
+    listening on it now."""
+    if not (1 <= port <= 65535):
+        raise HTTPException(400, "Local port must be between 1 and 65535.")
+    if port == _venvy_port(request):
+        raise HTTPException(400, "That is Venvy's own port; an app cannot publish it.")
+    if port not in _app_ports(app_row):
+        raise HTTPException(400, f"Port {port} is not one of this app's ports. Set it as the app's port first.")
+    for other in session.exec(select(App).where(App.id != app_row.id)).all():
+        # What a stopped app was last seen listening on is history, not its port.
+        if port in _app_ports(other, seen=other.status == "running"):
+            raise HTTPException(409, f"Port {port} is also another app's port.")
+    if await asyncio.to_thread(_verify_port_free, port):
+        return          # nothing listens there yet
+    # (Not the stored detected_ports: with ports set by hand, those are what it holds.)
+    listening = (await asyncio.to_thread(_detect_ports_sync, app_row.pid)
+                 if app_row.pid and await asyncio.to_thread(_app_pid_alive, app_row) else [])
+    if port not in listening:
+        raise HTTPException(409, f"Something other than this app is listening on port {port}.")
+
+
+def _check_route_owner(session: Session, hostname: str, app_id: int, user: User) -> None:
+    """A hostname another app has published moves to this one only for a user
+    who may use that other app too."""
+    for r in session.exec(select(CfRoute).where(CfRoute.hostname == hostname, CfRoute.app_id != app_id)).all():
+        if r.cf_route_id and not has_app_access(session, user, r.app_id):
+            raise HTTPException(403, f"{hostname} is published by an app you do not have access to.")
+
+
+def _published_hostnames(session: Session) -> Set[str]:
+    return {r.hostname for r in session.exec(select(CfRoute).where(CfRoute.cf_route_id != None)).all()  # noqa: E711
+            if r.hostname}
+
+
 @router.get("/apps/{app_id}/tunnel/check")
 async def check_cf_hostname(
     app_id: int,
+    request: Request,
     hostname: str = Query(...),
     local_port: Optional[int] = Query(None),
     session: Session = Depends(get_session),
@@ -272,6 +355,14 @@ async def check_cf_hostname(
         raise HTTPException(404)
 
     clean = _clean_cf_hostname(hostname)
+    if own_hosts.is_own(clean):
+        return {"conflict": True, "conflict_type": "venvy", "blocked": True,
+                "reason": f"{clean} is an address Venvy itself is reached under; an app cannot take it over."}
+
+    try:
+        _check_route_owner(session, clean, app_id, user)
+    except HTTPException as exc:
+        return {"conflict": True, "conflict_type": "local", "blocked": True, "reason": exc.detail, "owned_by": None}
 
     existing_route = session.exec(
         select(CfRoute).where(CfRoute.hostname == clean)
@@ -294,6 +385,10 @@ async def check_cf_hostname(
 
         for rule in ingress:
             if rule.get("hostname") == clean:
+                refusal = _publish_refusal(rule, clean, _published_hostnames(session), user, _venvy_port(request))
+                if refusal:
+                    return {"conflict": True, "conflict_type": "remote", "blocked": True,
+                            "reason": refusal[1], "owned_by": None}
                 current_service = rule.get("service", "unknown")
                 server_ip = get_server_ipv4()
                 check_port = local_port or app_row.port
@@ -317,6 +412,7 @@ async def check_cf_hostname(
 async def publish_cf_route(
     app_id: int,
     req: CfPublishReq,
+    request: Request,
     session: Session = Depends(get_session),
     user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
@@ -331,6 +427,11 @@ async def publish_cf_route(
         raise HTTPException(400, "Local port must be between 1 and 65535.")
 
     new_hostname = _clean_cf_hostname(req.hostname)
+    refusal = _publish_refusal(None, new_hostname, set(), user, None)
+    if refusal:
+        raise HTTPException(*refusal)
+    _check_route_owner(session, new_hostname, app_id, user)
+    await _check_publish_port(session, app_row, req.local_port, request)
 
     creds      = _get_cf_creds(session)
     account_id = creds["cf_account_id"]
@@ -364,11 +465,19 @@ async def publish_cf_route(
     if is_hostname_change:
         hostnames_to_strip.add(old_hostname)
     service = f"http://{get_server_ipv4()}:{req.local_port}"
-    previous_ingress = await _cf_update_ingress(
-        creds,
-        lambda named: [r for r in named if r["hostname"] not in hostnames_to_strip]
-        + [{"hostname": new_hostname, "service": service}],
-    )
+    published = _published_hostnames(session)
+    own_port = _venvy_port(request)
+
+    def change(named: List[dict]) -> List[dict]:
+        # Checked against the tunnel as it is now, under the ingress lock:
+        # raising here leaves it untouched.
+        current = next((r for r in named if r["hostname"] == new_hostname), None)
+        refused = _publish_refusal(current, new_hostname, published, user, own_port)
+        if refused:
+            raise HTTPException(*refused)
+        return [r for r in named if r["hostname"] not in hostnames_to_strip] + [{"hostname": new_hostname, "service": service}]
+
+    previous_ingress = await _cf_update_ingress(creds, change)
 
     try:
         dns_record_id = await _cf_upsert_dns_cname(new_zone_id, new_hostname, tunnel_id, api_token)

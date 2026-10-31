@@ -84,7 +84,7 @@
                         deselectApp(`"${activeApp?.name || 'This application'}" no longer exists — it was deleted.`);
                     }
                     apps.forEach(app => {
-                        const m = statusMeta(app.status);
+                        const m = statusMeta(appStatus(app));
                         const dot = document.getElementById(`status-dot-${app.id}`);
                         if (dot) {
                             dot.className = `w-2 h-2 rounded-full flex-shrink-0 nav-dot ${m.dotCls}`;
@@ -101,7 +101,7 @@
                             if (titleEl && titleEl.innerText !== app.name) titleEl.innerText = app.name;
                             // Status badge
                             if (!prev || prev.status !== app.status) {
-                                applyStatusBadge(document.getElementById('dash-status'), app.status);
+                                applyStatusBadge(document.getElementById('dash-status'), appStatus(app));
                                 updateLogLiveIndicator();
                                 updateControlButtons(app);
                             }
@@ -129,7 +129,7 @@
                     // just dropping the class would leave the old label behind.
                     const badge = document.getElementById('dash-status');
                     if (badge && badge.classList.contains('status-stale')) {
-                        applyStatusBadge(badge, activeApp?.status);
+                        applyStatusBadge(badge, appStatus(activeApp));
                     }
 
                     // If system view is active, update system metrics. Every

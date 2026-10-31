@@ -7,6 +7,7 @@ The package is laid out by concern, lowest layer first:
     models      database tables
     db          engine, sessions, schema migrations
     audit       the audit trail (database + log)
+    own_hosts   the hostnames Venvy itself is reached under
     runtimes    what each runtime runs, its entrypoint rules and package managers
     shared_env  environment variables every app gets
     notify      notification channels (webhook, Slack, Discord, ntfy, Telegram, email)
@@ -39,4 +40,4 @@ A module only imports from modules above it. `main.py` at the repository
 root is the entry point (`python main.py`).
 """
 
-__version__ = "4.7.1"
+__version__ = "4.8.1"

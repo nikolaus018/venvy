@@ -229,23 +229,45 @@ async def _run(app: App, argv: List[str], log: _Log, env: Dict[str, str], cwd: s
 # ---------------------------------------------------------------------------
 
 async def generate_deploy_key(app: App) -> str:
-    """Make (or replace) the app's SSH deploy key; returns the public half."""
+    """Make (or replace) the app's SSH deploy key; returns the public half.
+
+    The key folder belongs to the app's user, who could swap the files in it
+    for symlinks at any moment — and ssh-keygen and chown, run as root, would
+    follow them (chown /etc/shadow over to the app, say). So the key is made
+    in a new folder only root can enter, handed over there, and then put in
+    place of the old folder with one rename."""
+    import shutil
+    import tempfile
     d = DEPLOY_KEY_DIR / str(app.id)
     DEPLOY_KEY_DIR.mkdir(mode=0o711, parents=True, exist_ok=True)
-    d.mkdir(mode=0o700, exist_ok=True)
-    for name in ("id_ed25519", "id_ed25519.pub"):
-        (d / name).unlink(missing_ok=True)
-    proc = await asyncio.create_subprocess_exec(
-        "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"venvy-app-{app.id}", "-f", str(d / "id_ed25519"),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    out, _ = await proc.communicate()
-    if proc.returncode != 0:
-        raise DeployError(f"ssh-keygen failed: {out.decode(errors='replace')[:300]}")
     ids = await asyncio.to_thread(_ensure_app_user, app)
-    if ids:
-        for p in (d, d / "id_ed25519", d / "id_ed25519.pub"):
-            os.chown(p, ids[0], ids[1])
-    return (d / "id_ed25519.pub").read_text().strip()
+    work = Path(tempfile.mkdtemp(prefix=f".new-{app.id}-", dir=DEPLOY_KEY_DIR))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"venvy-app-{app.id}", "-f", str(work / "id_ed25519"),
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await proc.communicate()
+        if proc.returncode != 0:
+            raise DeployError(f"ssh-keygen failed: {out.decode(errors='replace')[:300]}")
+        public = (work / "id_ed25519.pub").read_text().strip()
+        # The hosts already trusted stay trusted (read without following links).
+        from venvy.safefs import AppPathError, _fs_open_file
+        with contextlib.suppress(AppPathError, OSError):
+            f, st = _fs_open_file(d, ("known_hosts",))
+            with f:
+                if st.st_size <= 1024 * 1024:
+                    (work / "known_hosts").write_bytes(f.read())
+        if ids:
+            for p in (work / "id_ed25519", work / "id_ed25519.pub", work / "known_hosts", work):
+                with contextlib.suppress(FileNotFoundError):
+                    os.lchown(p, ids[0], ids[1])
+        # DEPLOY_KEY_DIR is root's: once the old folder is gone, nothing but
+        # this rename can put one there.
+        await asyncio.to_thread(shutil.rmtree, d, True)
+        os.rename(work, d)
+    finally:
+        await asyncio.to_thread(shutil.rmtree, work, True)
+    return public
 
 
 def _own_keys(app: App) -> None:
@@ -261,9 +283,17 @@ def _own_keys(app: App) -> None:
 
 
 def public_key(app_id: int) -> Optional[str]:
-    with contextlib.suppress(OSError):
-        return (DEPLOY_KEY_DIR / str(app_id) / "id_ed25519.pub").read_text().strip()
-    return None
+    # The folder is the app's: read without following a link it may have put
+    # there (a public key that is really /etc/shadow).
+    from venvy.safefs import AppPathError, _fs_open_file
+    try:
+        f, st = _fs_open_file(DEPLOY_KEY_DIR / str(app_id), ("id_ed25519.pub",))
+    except (AppPathError, OSError):
+        return None
+    with f:
+        if st.st_size > 16 * 1024:
+            return None
+        return f.read().decode("utf-8", errors="replace").strip() or None
 
 
 def forget_keys(app_id: int) -> None:

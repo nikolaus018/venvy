@@ -10,6 +10,7 @@
             document.getElementById('dashboard').classList.add('hidden');
             document.getElementById('system-view').classList.remove('hidden');
             document.getElementById('system-nav-btn').classList.add('active');
+            if (_cachedApps) renderAppList(_cachedApps);
             if (userTriggered && window.innerWidth < 768) closeSidebar();
             document.title = 'System · Venvy';
             if (userTriggered) syncHash();
@@ -25,6 +26,7 @@
         function closeSystemView() {
             document.getElementById('system-view').classList.add('hidden');
             document.getElementById('system-nav-btn').classList.remove('active');
+            if (_cachedApps) renderAppList(_cachedApps);
             if (activeAppId) {
                 document.getElementById('dashboard').classList.remove('hidden');
                 document.title = `${activeApp?.name || 'App'} · Venvy`;
@@ -93,9 +95,11 @@
                     document.getElementById('sys-disk-text').textContent = `${diskUsed} GB / ${diskTotal} GB (${mData.disk.percent}%)`;
 
                     const uptime = mData.uptime;
-                    const h = Math.floor(uptime / 3600);
+                    const d = Math.floor(uptime / 86400);
+                    const h = Math.floor((uptime % 86400) / 3600);
                     const m = Math.floor((uptime % 3600) / 60);
-                    document.getElementById('sys-uptime-text').textContent = `${h}h ${m}m ${uptime % 60}s`;
+                    document.getElementById('sys-uptime-text').textContent =
+                        d ? `${d}d ${h}h ${m}m` : `${h}h ${m}m ${uptime % 60}s`;
                     _featherReplace();
                 }
 

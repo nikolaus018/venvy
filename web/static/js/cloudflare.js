@@ -499,6 +499,11 @@
                         // Restore button, show conflict modal
                         activeBtn.disabled = false;
                         activeBtn.innerHTML = originalHTML;
+                        if (chkData.blocked) {
+                            // Nothing to overwrite: the server would refuse it.
+                            showToast(chkData.reason || 'This hostname cannot be published here.', 'error');
+                            return;
+                        }
                         document.getElementById('tunnel-conflict-msg').textContent = chkData.reason || 'This hostname is already in use.';
                         document.getElementById('tunnel-conflict-modal').dataset.hostname = hostname;
                         openModal('tunnel-conflict-modal');

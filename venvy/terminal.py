@@ -74,10 +74,18 @@ function _venvy_jail_guard() {{
         echo -e "\\e[33m⚠ Returned to app directory (outside access blocked).\\e[0m"
     fi
 }}
-PROMPT_COMMAND="_venvy_jail_guard"
+# The path inside the app's folder, "~" being the folder itself, for the
+# prompt: \\w would spell out the whole data directory, half a phone screen.
+function _venvy_where() {{
+    _venvy_jail_guard
+    local rest="${{PWD#"$JAIL_DIR"}}"
+    [[ "$rest" == "$PWD" ]] && rest="$PWD" || rest="~$rest"
+    VENVY_WHERE="$rest"
+}}
+PROMPT_COMMAND="_venvy_where"
 # ─────────────────────────────────────────────────────────────────────────────
 
-export PS1='\\[\\e[0;32m\\]{app_name_safe}\\[\\e[0m\\] \\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ '
+export PS1='\\[\\e[0;32m\\]{app_name_safe}\\[\\e[0m\\] \\[\\e[1;34m\\]${{VENVY_WHERE}}\\[\\e[0m\\]\\$ '
 alias ls='ls --color=auto'
 alias ll='ls -la'
 """
@@ -128,6 +136,8 @@ class TerminalManager:
         user_id: int,
         user_role: str,
         still_allowed=None,
+        size: Optional[tuple] = None,
+        first_input: Optional[str] = None,
     ) -> None:
         """Run a shell for *app_id* on *websocket* until either side closes.
         still_allowed() is polled while it is open; when it turns False the
@@ -190,9 +200,10 @@ class TerminalManager:
         try:
             master_fd, slave_fd = pty.openpty()
 
+            rows, cols = size if size and 0 < size[0] < 1000 and 0 < size[1] < 1000 else (50, 220)
             try:
                 fcntl.ioctl(master_fd, termios.TIOCSWINSZ,
-                            struct.pack("HHHH", 50, 220, 0, 0))
+                            struct.pack("HHHH", rows, cols, 0, 0))
             except OSError:
                 pass
 
@@ -350,6 +361,9 @@ class TerminalManager:
                         return
                 await stop.wait()
 
+            if first_input:
+                # Typed before the size arrived (see terminal_ws): not lost.
+                await _pty_write(first_input.encode("utf-8"))
             t1 = asyncio.create_task(reader())
             t2 = asyncio.create_task(writer())
             t3 = asyncio.create_task(watchdog())

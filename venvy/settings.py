@@ -7,7 +7,7 @@ from venvy.crypto import _encrypt_secret
 
 
 # Kept by their own API (encrypted JSON), never through the generic one.
-_INTERNAL_KEYS = ("global_env", "backup_remote")
+_INTERNAL_KEYS = ("global_env", "backup_remote", "venvy_hosts")
 
 
 def _is_secret_setting(key: str) -> bool:

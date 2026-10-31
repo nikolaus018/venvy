@@ -27,7 +27,7 @@ ANY_ROLE = {
     ("GET", "/api/apps/{app_id}/jobs"), ("GET", "/api/apps/{app_id}/logs"),
     ("GET", "/api/apps/{app_id}/logs/download"), ("GET", "/api/apps/{app_id}/logs/search"),
     ("GET", "/api/apps/{app_id}/metrics/history"), ("GET", "/api/apps/{app_id}/packages"),
-    ("GET", "/api/apps/{app_id}/releases"), ("GET", "/api/apps/{app_id}/scan-imports"),
+    ("GET", "/api/apps/{app_id}/releases"),
     ("GET", "/api/apps/{app_id}/stats"), ("GET", "/api/apps/{app_id}/tunnel"),
     ("GET", "/api/jobs/{job_id}"), ("GET", "/api/runtimes"), ("GET", "/api/system/info"),
     # One's own account.
@@ -39,6 +39,7 @@ ANY_ROLE = {
 OPERATOR = {
     ("GET", "/api/apps/{app_id}/env-history"), ("GET", "/api/apps/{app_id}/files/tree"),
     ("GET", "/api/apps/{app_id}/files/download"), ("GET", "/api/apps/{app_id}/tunnel/check"),
+    ("GET", "/api/apps/{app_id}/scan-imports"),
     ("GET", "/api/system/cloudflare/status"), ("GET", "/api/system/cloudflare/zones"),
     ("GET", "/api/system/ports"),
 }
