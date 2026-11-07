@@ -4,3 +4,10 @@ updates:
     directory: /
     schedule:
       interval: monthly
+  # Venvy's own dependencies (requirements.txt pins exact versions, which
+  # install.sh installs): a pull request when one has a newer release,
+  # which CI then tests.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly

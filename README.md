@@ -8,6 +8,8 @@
 <p align="center">
   <a href="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml"><img src="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/nikolaus018/venvy/releases/latest"><img src="https://img.shields.io/github/v/release/nikolaus018/venvy" alt="Latest release"></a>
+  <a href="https://github.com/nikolaus018/venvy/actions/workflows/codeql.yml"><img src="https://github.com/nikolaus018/venvy/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+  <a href="https://securityscorecards.dev/viewer/?uri=github.com/nikolaus018/venvy"><img src="https://api.securityscorecards.dev/projects/github.com/nikolaus018/venvy/badge" alt="OpenSSF Scorecard"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/nikolaus018/venvy" alt="MIT license"></a>
 </p>
 
@@ -23,9 +25,12 @@ On a fresh Debian 12+ or Ubuntu 22.04+ machine:
 curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install.sh | sudo bash
 ```
 
-That installs the system packages it needs, creates a `venvy` service user, sets up a systemd
-service that starts at boot, and prints the URL and a one-time setup code. The first visit creates the admin account, with that code
+That installs the system packages it needs, sets up a systemd service that starts at boot (with
+one Unix user per hosted app, see [Isolation](#isolation)), and prints the URL and a one-time setup code. The first visit creates the admin account, with that code
 (it is also in the server log and in `.setup-code` in the data directory).
+
+Rather not pipe a script into `sudo bash` unseen? [SECURITY.md](SECURITY.md#checking-a-release-yourself)
+shows how to check a release's signature and read the installer before running it.
 
 Run the same command again to update. The new version is downloaded, checked against its
 checksum and its signature (see [Releases](#releases)) and prepared next to the running one; the database is snapshotted; and if the new version does not
@@ -192,6 +197,13 @@ for another client there: a connection from loopback is only taken to be cloudfl
 `CF-Connecting-IP` believed) when no hosted app owns it. Other software on the host can still
 claim any address; `VENVY_PROXY_SECRET` closes that too.
 
+### Security
+
+What Venvy protects against, what it deliberately doesn't (admins and operators are trusted with
+the apps they manage; it is not a container sandbox), how to verify a release yourself and how
+the protections are tested is in [SECURITY.md](SECURITY.md). Found a problem? Please
+[report it privately](https://github.com/nikolaus018/venvy/security/advisories/new).
+
 ### Locked out?
 
 If the only admin forgets the password or loses the authenticator, fix the account from a shell
@@ -242,11 +254,15 @@ downloads, as any such install does.
 CI runs on every push: the full suite on Ubuntu, and the installer itself on a real host in
 both modes — fresh install, checks against the running service, update, automatic rollback of
 a release that does not start, rejection of a bad checksum and of a signature by another key
-(by the installer and by the updater), and uninstall.
+(by the installer and by the updater), and uninstall. Also on every push: the smoke test on
+Python 3.10 (the oldest supported), CodeQL over the backend, the UI's JavaScript and the
+workflows, and `pip-audit` against the pinned dependencies; Dependabot keeps those and the
+(commit-pinned) actions current.
 
 ## Status
 
-Venvy is a personal project that I run on my own servers. Everything described above is
+Venvy is a personal project that I run on my own servers, maintained by one person and not
+independently audited (see [SECURITY.md](SECURITY.md#status)). Everything described above is
 covered by the automated suite, including per-app-user mode and systemd resource limits, which
 CI exercises as root on a real Ubuntu host. Debian 12+ and Ubuntu 22.04+ are the supported
 targets; a frozen single-binary build is not.
