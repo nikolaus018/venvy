@@ -61,6 +61,7 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
         try: dp.clean_git_url(u); return False
         except ValueError: return True
     check("local paths are refused unless the operator allows them", not dp.ALLOW_LOCAL_GIT and refused("/etc/passwd") and refused("file:///etc/passwd"))
+    check("an over-long repository URL refused", put(git_url="https://github.com/" + "a" * 3000).status_code == 400)
     check("branch validated", put(git_branch="-x").status_code == 400 and put(git_branch="a..b").status_code == 400 and put(git_branch="x y").status_code == 400)
     check("token only for https", put(git_url=str(bare), token="abc").status_code == 400)
     check("ssh and https urls accepted", put(git_url="git@github.com:owner/repo.git").status_code == 200 and put(git_url="https://github.com/o/r.git", token="ghp_secrettoken").status_code == 200)

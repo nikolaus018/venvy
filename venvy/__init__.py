@@ -40,4 +40,4 @@ A module only imports from modules above it. `main.py` at the repository
 root is the entry point (`python main.py`).
 """
 
-__version__ = "4.8.2"
+__version__ = "4.8.3"

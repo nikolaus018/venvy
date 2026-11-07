@@ -5,6 +5,7 @@ import contextvars
 import datetime
 import logging
 import os
+import re
 
 from sqlmodel import Session, delete
 
@@ -15,6 +16,9 @@ AUDIT_RETENTION_DAYS = int(os.getenv("VENVY_AUDIT_RETENTION_DAYS", "180"))
 _client_ip: contextvars.ContextVar = contextvars.ContextVar("venvy_client_ip", default="")
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def set_client_ip(ip: str):
     return _client_ip.set(ip)
 
@@ -23,7 +27,11 @@ def audit_log(username: str, action: str, detail: str = "") -> None:
     """Record an action. Never raises: the audit trail failing must not undo
     what it describes."""
     suffix = f" — {detail}" if detail else ""
-    logging.info(f"AUDIT: user={username!r} action={action}{suffix}")
+    # One entry, one log line: a newline in a name someone typed (a job, a
+    # token, a hostname) must not start a line of its own that reads like
+    # another entry. The database keeps the text as it was.
+    line = _CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", f"AUDIT: user={username!r} action={action}{suffix}")
+    logging.info(line)
     try:
         from venvy.db import engine
         from venvy.models import AuditEntry

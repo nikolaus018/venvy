@@ -18,6 +18,10 @@ def _clean_app_name(name: str) -> str:
         raise HTTPException(status_code=400, detail="App name cannot be empty.")
     if len(name_clean) > 50:
         raise HTTPException(status_code=400, detail="App name must be 50 characters or less.")
+    # A name goes into the server log and the audit trail: a newline in it
+    # would let whoever names an app write lines of their own there.
+    if any(ord(c) < 32 or ord(c) == 127 for c in name_clean):
+        raise HTTPException(status_code=400, detail="App name must not contain control characters.")
     return name_clean
 
 

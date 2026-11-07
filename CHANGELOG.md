@@ -5,6 +5,11 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.8.3
+
+- An app's name can no longer contain control characters (a newline, say). Names go into the server log and the audit trail, where one with a newline could write a line that looked like an entry of its own. The audit trail's log line now escapes control characters in whatever it quotes, such as the names of jobs, tokens and hostnames.
+- A repository URL longer than 2000 characters is refused before it is checked, as an app's domain over 253 is: neither pattern ever runs on a megabyte of input.
+
 ## v4.8.2
 
 - Venvy starts again on Python 3.10 and 3.11 (Ubuntu 22.04, Debian 12), which the installer accepts. Since the runtimes came in, one line used syntax that only Python 3.12 understands, and Venvy stopped at startup with a SyntaxError on anything older. CI now also checks the oldest supported Python.

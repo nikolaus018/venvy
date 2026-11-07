@@ -21,6 +21,7 @@ with server(repo, 55007) as (base, d, srv):
           and "bob" in [u["username"] for u in cl.req("GET", "/api/users").json()])
     check("blank app name refused", cl.req("POST", "/api/apps/upload", data={"name": "  ", "runtime": "python"}).status_code == 400)
     check("long app name refused", cl.req("POST", "/api/apps/upload", data={"name": "x" * 51, "runtime": "python"}).status_code == 400)
+    check("app name with a newline refused", cl.req("POST", "/api/apps/upload", data={"name": "ok\nAUDIT: forged", "runtime": "python"}).status_code == 400)
     app_id = make_app(cl, code="import time\nwhile True:\n    sum(range(200000)); time.sleep(0.01)\n")
     up = lambda **b: cl.req("PUT", f"/api/apps/{app_id}", json=b)
     check("bad env name refused", up(env_vars={"A=B": "x"}).status_code == 400 and up(env_vars={"": "x"}).status_code == 400)

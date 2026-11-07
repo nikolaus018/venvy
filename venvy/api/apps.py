@@ -110,7 +110,7 @@ def _clean_domain(value: str) -> Optional[str]:
     d = (value or "").strip().lower().rstrip(".")
     if not d:
         return None
-    if not _HOST_RE.match(d):
+    if len(d) > 253 or not _HOST_RE.match(d):
         raise HTTPException(400, "The domain must be a hostname like app.example.com.")
     return d
 

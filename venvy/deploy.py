@@ -62,6 +62,8 @@ def clean_git_url(url: str) -> str:
     u = (url or "").strip()
     if not u:
         return ""
+    if len(u) > 2000:         # (and a regular expression never gets a megabyte to chew on)
+        raise ValueError("The repository URL is too long.")
     if u.startswith("-") or any(c in u for c in " \t\r\n\0'\"`$;|&<>\\"):
         raise ValueError("The repository must be an https:// or ssh:// URL, or user@host:path.")
     if ALLOW_LOCAL_GIT and (u.startswith("/") or u.startswith("file:///")):
