@@ -177,10 +177,17 @@ if [ -z "$APP_USERS" ]; then
 fi
 
 # Who the service runs as.
+HAND_OVER=0
 if [ "$APP_USERS" = "1" ]; then
   RUN_USER="root"; RUN_GROUP="root"
 elif [ "$EXISTING_DATA" -eq 1 ]; then
   RUN_USER="$(stat -c %U "$DATA_DIR/data.db")"; RUN_GROUP="$(stat -c %G "$DATA_DIR/data.db")"
+  if [ "$RUN_USER" = "root" ]; then
+    # Per-app users until now, so the service ran as root and root owns the
+    # data. Taken from there, --shared-user would have run every app as root;
+    # the data goes over to the 'venvy' user instead (step 5, once stopped).
+    RUN_USER="venvy"; RUN_GROUP="venvy"; HAND_OVER=1
+  fi
 else
   RUN_USER="venvy"; RUN_GROUP="venvy"
 fi
@@ -403,6 +410,17 @@ chmod 600 "$ENV_FILE"
 if systemctl is-active --quiet venvy.service; then
   say "Stopping the running Venvy..."
   systemctl stop venvy.service
+fi
+
+if [ "$HAND_OVER" -eq 1 ]; then
+  say "Switching to one shared user: handing $DATA_DIR over to 'venvy'..."
+  # Whatever the apps' own users still run (a daemon started from a terminal)
+  # would keep writing into the folders that are changing hands.
+  getent passwd | cut -d: -f1 | grep '^venvy-app-' | while read -r u; do pkill -KILL -u "$u" 2>/dev/null || true; done
+  # -h -R: links are changed themselves and never followed. The apps' folders
+  # held whatever their users put there, a link to /etc/shadow included.
+  chown -hR venvy:venvy "$DATA_DIR"
+  chmod 750 "$DATA_DIR"
 fi
 
 if [ -f "$DATA_DIR/data.db" ]; then

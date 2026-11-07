@@ -52,6 +52,9 @@ with server(repo, 54999) as (base, data, srv):
     os.unlink(app_dir / "peek")
     check("copy a folder into itself refused", op(operation="copy", path="sub", new_path="sub/again").status_code == 400
           and not (app_dir / "sub/again").exists())
+    r = op(operation="rename", path="sub", new_path="sub/deep/inside")
+    check("moving a folder into itself: 400, not a 500", r.status_code == 400 and "into itself" in r.text
+          and (app_dir / "sub/deep").is_dir(), r.text)
 
     check("copy file", op(operation="copy", path="sub/f.txt", new_path="sub/f2.txt").status_code == 200 and (app_dir / "sub/f2.txt").read_text() == "two")
     check("copy onto existing -> 409", op(operation="copy", path="sub/f.txt", new_path="sub/f2.txt").status_code == 409)

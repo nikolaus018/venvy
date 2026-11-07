@@ -5,6 +5,16 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.8.2
+
+- Venvy starts again on Python 3.10 and 3.11 (Ubuntu 22.04, Debian 12), which the installer accepts. Since the runtimes came in, one line used syntax that only Python 3.12 understands, and Venvy stopped at startup with a SyntaxError on anything older. CI now also checks the oldest supported Python.
+- An app with the "on failure" restart policy that exits cleanly is no longer started again. When the supervisor noticed the exit a moment before Venvy had collected the process, it took it for a crash: exit code 1 instead of the real one, an "app crashed" notification, and a restart.
+- Scheduled backups keep as many as the schedule says. Every backup also pruned all full backups down to `VENVY_BACKUP_KEEP` (10), scheduled ones included, so "keep the last 30" kept 10. The schedule's own backups now only follow its setting, and only names of backups are ever pruned from its list.
+- The terminal gets the shared environment variables, like the app, its jobs and its build already did.
+- Moving a folder into itself in the file manager says so (400) instead of failing with a server error.
+- A push webhook whose body is JSON but not an object no longer answers 500.
+- Switching an existing install from one user per app to `--shared-user` ran the service, and so every app, as root: the installer took the service user from the owner of the database, which under per-app users is root. It now hands the data directory over to the `venvy` user and runs as that.
+
 ## v4.8.1
 
 - Publishing an app through the Cloudflare tunnel only publishes that app's own port. Before, any port on the server could be put on the internet from an app's Tunnel tab: another app's (one the operator might not even have access to), Venvy's own, or a database listening on localhost because it trusts the machine. A port that is also another app's, or that something other than the app is listening on, is refused too.

@@ -675,9 +675,12 @@ def webhook_event(headers) -> Optional[str]:
 def webhook_branch(headers, body: bytes) -> Optional[str]:
     """The branch a push webhook is about, or None when the payload does not say."""
     try:
-        ref = json.loads(body or b"{}").get("ref")
+        payload = json.loads(body or b"{}")
     except ValueError:
         return None
+    # A body that is JSON but not an object (a list, a string) says nothing
+    # about a branch; .get() on it used to answer the hook with a 500.
+    ref = payload.get("ref") if isinstance(payload, dict) else None
     if isinstance(ref, str) and ref.startswith("refs/heads/"):
         return ref[len("refs/heads/"):]
     return None

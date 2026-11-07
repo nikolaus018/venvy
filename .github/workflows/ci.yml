@@ -33,6 +33,25 @@ jobs:
         if: failure()
         run: for f in tests/.out/*.log; do echo "::group::$f"; tail -60 "$f"; echo "::endgroup::"; done
 
+  oldest-python:
+    # install.sh accepts Python 3.10 (Ubuntu 22.04, Debian 12 has 3.11); the
+    # suite above runs on 3.12, where syntax that is new in 3.12 goes unnoticed.
+    name: Python 3.10 (oldest supported)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          grep -v '^playwright' tests/requirements.txt | pip install -r /dev/stdin
+      - name: Every file compiles
+        run: python -m compileall -q main.py emulator.py venvy tests
+      - name: The server starts, serves and shuts down
+        run: cd tests && SMOKE_EXPECT_SHUTDOWN_LOG=1 python smoke.py "$GITHUB_WORKSPACE"
+
   installer:
     name: Installer (${{ matrix.mode }})
     runs-on: ubuntu-latest
@@ -86,6 +105,19 @@ jobs:
           sudo VENVY_BASE_URL=$VENVY_BASE_URL VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh
           sudo ls /var/lib/venvy/backups | grep -q '^data-.*\.db$'
           cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'default' && '--app-users' || '' }}
+
+      - name: Switch to one shared user and back
+        if: matrix.mode == 'default'
+        run: |
+          sudo VENVY_BASE_URL=$VENVY_BASE_URL VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh --shared-user
+          # Not root: the data was root's under per-app users, and must change hands.
+          test "$(systemctl show -p User --value venvy.service)" = "venvy"
+          test "$(sudo stat -c %U /var/lib/venvy/data.db)" = "venvy"
+          test -z "$(sudo find /var/lib/venvy ! -user venvy -print -quit)"
+          (cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing)
+          sudo VENVY_BASE_URL=$VENVY_BASE_URL VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh --app-users
+          test "$(systemctl show -p User --value venvy.service)" = "root"
+          cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing --app-users
 
       - name: Update from the UI
         run: |

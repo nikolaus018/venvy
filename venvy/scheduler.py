@@ -29,7 +29,7 @@ from venvy.models import App, ScheduledJob, SystemSetting
 OUTPUT_KEEP = 8000
 SCHEDULE_KEY = "backup_schedule"       # cron expression; empty = off
 KEEP_KEY = "backup_keep"               # how many scheduled backups to keep
-NAMES_KEY = "backup_scheduled_names"   # JSON list: the files the schedule made
+NAMES_KEY = "backup_scheduled_names"   # JSON list: the files the schedule made (backup.SCHEDULED_NAMES_KEY)
 LAST_KEY = "backup_last_scheduled"     # JSON: how the last scheduled run went
 
 _running: Dict[int, asyncio.Task] = {}
@@ -185,7 +185,7 @@ class _Who:
 
 
 async def run_scheduled_backup() -> None:
-    from venvy.backup import _backup_job, _begin_operation
+    from venvy.backup import _FULL_BACKUP_FILENAME_RE, _backup_job, _begin_operation
     from fastapi import HTTPException
     result = {"at": utc_now().isoformat(), "ok": False, "file": None, "size": 0, "remote": None, "error": None}
     try:
@@ -194,12 +194,16 @@ async def run_scheduled_backup() -> None:
         logging.info(f"Scheduled backup skipped: {exc.detail}")
         return
     try:
-        out = await _backup_job(_Who())           # type: ignore[arg-type]
+        out = await _backup_job(_Who(), scheduled=True)           # type: ignore[arg-type]
         path = Path(out["path"])
         result.update(ok=True, file=path.name, size=out["size_bytes"])
         names = []
         with contextlib.suppress(ValueError):
             names = json.loads(get_setting(NAMES_KEY, "[]"))
+        # Only names of backups: the setting is also writable through the
+        # generic settings API, and each name pruned below is deleted.
+        names = [n for n in names if isinstance(n, str) and _FULL_BACKUP_FILENAME_RE.match(n)] \
+            if isinstance(names, list) else []
         names.append(path.name)
         keep = max(1, backup_settings()["keep"])
         while len(names) > keep:

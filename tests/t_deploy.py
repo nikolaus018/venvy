@@ -175,6 +175,10 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     check("Bearer secret works (own CI)", r.status_code == 200 and r.json()["deployed"] is True, r.text)
     end = time.time() + 90
     while time.time() < end and (state()["state"]["running"] or file_text("version.txt") != "8"): time.sleep(0.5)
+    r = httpx.post(hook, content=b'["not", "an", "object"]', headers={"Authorization": f"Bearer {secret}"})
+    check("a JSON body that is not an object names no branch (no 500)", r.status_code == 200 and r.json()["deployed"] is True, r.text)
+    end = time.time() + 90
+    while time.time() < end and state()["state"]["running"]: time.sleep(0.5)
     check("webhook deploys are audited", any(e["user"] == "webhook" for e in cl.req("GET", "/api/audit?action=app_webhook").json()["entries"]))
     put(auto_deploy=False)
     r = httpx.post(hook, content=b"{}", headers={"Authorization": f"Bearer {secret}"})

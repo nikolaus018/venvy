@@ -18,6 +18,7 @@ from typing import Dict, Optional, Set
 from fastapi import WebSocket
 from sqlmodel import Session
 
+from venvy import shared_env
 from venvy.config import TERMINAL_RC_DIR
 from venvy.crypto import _decrypt_secret
 from venvy.db import engine
@@ -182,6 +183,10 @@ class TerminalManager:
         if term_ids:
             _raw_env.update(HOME=str(jail_root), USER=_app_username(app_id), LOGNAME=_app_username(app_id))
         env: Dict[str, str] = {k: v for k, v in _raw_env.items() if v}
+        # The same variables the app, its jobs and its build get: the shared
+        # ones, then the app's own (which win). A `manage.py migrate` typed
+        # here used to run without the DATABASE_URL every app was given.
+        env.update(shared_env.load())
         try:
             _extra = json.loads(_decrypt_secret(db_app.env_json) or "{}")
             if isinstance(_extra, dict):

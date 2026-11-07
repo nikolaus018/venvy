@@ -1035,6 +1035,15 @@ async def supervisor_task() -> None:
                     continue
                 is_alive = _app_pid_alive(app_row)
 
+                if (app_row.status == "running" and not is_alive
+                        and app_row.pid and _active_app_pids.get(app_row.id) == app_row.pid):
+                    # Our own child that has just exited: a zombie until its
+                    # reaper (_reap_process) collects it, which records the real
+                    # exit code and wakes us. Handled here instead, it got exit
+                    # code 1 and the restart and crash notice of a crash — an
+                    # on-failure app that had exited cleanly was started again.
+                    continue
+
                 if app_row.status == "running" and not is_alive:
                     died = False
                     async with _app_lock(app_row.id):

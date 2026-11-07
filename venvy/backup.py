@@ -31,7 +31,7 @@ from sqlmodel import Session, select
 from venvy.audit import audit_log
 from venvy.config import APPS_BASE_DIR, BACKUP_DIR, DATA_DIR, DB_FILE, _VENVY_KEY_FILE, utc_now
 from venvy.db import engine
-from venvy.models import App, User
+from venvy.models import App, SystemSetting, User
 from venvy.process import set_restore_in_progress, stop_app_process_logic
 from venvy.safefs import foreign_hardlink, is_safe_path
 from venvy.terminal import terminal_manager
@@ -346,6 +346,7 @@ def _app_dir_labels() -> Dict[str, str]:
 def _create_full_backup_archive(
     protect: Optional[Path] = None,
     report: Callable[..., None] = lambda key, detail="", percent=None: None,
+    scheduled: bool = False,
 ) -> Path:
     """Build a complete disaster-recovery backup — a consistent data.db
     snapshot (via SQLite's VACUUM INTO, safe on a live WAL-mode database),
@@ -361,6 +362,7 @@ def _create_full_backup_archive(
     handlers already run off the event loop via Starlette's threadpool.
 
     *report(step, detail, percent)* is told what is happening as it happens.
+    *scheduled*: the backup schedule's, so not counted against _BACKUP_KEEP.
     """
     BACKUP_DIR.mkdir(mode=0o700, exist_ok=True)
     report("measure")
@@ -439,8 +441,13 @@ def _create_full_backup_archive(
         tmp_archive.unlink(missing_ok=True)
     dest.chmod(0o600)
 
-    # Retention: keep the newest _BACKUP_KEEP full backups.
-    fulls = sorted(BACKUP_DIR.glob("full-*.tar.gz"), key=lambda f: f.stat().st_mtime, reverse=True)
+    # Retention: keep the newest _BACKUP_KEEP full backups. Not counting the
+    # scheduled ones (this one included, when it is one): the schedule keeps
+    # as many of its own as it is set to, which used to be cut down to
+    # _BACKUP_KEEP here whatever it said.
+    exempt = _scheduled_backup_names() | ({dest.name} if scheduled else set())
+    fulls = sorted((f for f in BACKUP_DIR.glob("full-*.tar.gz") if f.name not in exempt),
+                   key=lambda f: f.stat().st_mtime, reverse=True)
     for old in fulls[_BACKUP_KEEP:]:
         if protect is not None and old.name == protect.name:
             continue  # e.g. the backup a restore is about to read
@@ -451,6 +458,23 @@ def _create_full_backup_archive(
 
 
 _BACKUP_KEEP = max(1, int(os.getenv("VENVY_BACKUP_KEEP", "10")))
+
+
+# System setting holding the files the backup schedule made (a JSON list).
+SCHEDULED_NAMES_KEY = "backup_scheduled_names"
+
+
+def _scheduled_backup_names() -> set:
+    """Names of the full backups the schedule made and still keeps; only
+    well-formed backup names, whatever the setting holds."""
+    try:
+        with Session(engine) as s:
+            row = s.get(SystemSetting, SCHEDULED_NAMES_KEY)
+        names = json.loads(row.value) if row and row.value else []
+    except Exception:
+        return set()
+    return {n for n in names if isinstance(n, str) and _FULL_BACKUP_FILENAME_RE.match(n)} \
+        if isinstance(names, list) else set()
 
 
 # (pattern, type label) — "database" is a legacy DB-only snapshot from an
@@ -567,10 +591,11 @@ def _self_restart():
     os.execv(sys.executable, argv)
 
 
-async def _backup_job(admin: User) -> dict:
-    """The body of POST /system/backup, after _begin_operation("backup")."""
+async def _backup_job(admin: User, scheduled: bool = False) -> dict:
+    """The body of POST /system/backup, after _begin_operation("backup").
+    *scheduled*: made by the backup schedule, which prunes its own."""
     try:
-        dest = await asyncio.to_thread(_create_full_backup_archive, None, _op_step)
+        dest = await asyncio.to_thread(_create_full_backup_archive, None, _op_step, scheduled)
         size = dest.stat().st_size
     except BaseException as e:
         _finish_operation(error=_error_text(e))

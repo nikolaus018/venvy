@@ -250,7 +250,10 @@ def clean_entrypoint(key: str, raw: str) -> str:
     name = Path(ep).name
     if not name or name != ep:
         noun = "folder name" if key == "static" else "filename"
-        raise ValueError(f"Entrypoint must be a plain {noun} (e.g. {rt.entry_default or _ENTRY_EXAMPLE.get(key, "main")}), not a path.")
+        # (Not inlined: the same quotes nested in an f-string are a syntax
+        # error before Python 3.12, and Venvy runs on 3.10.)
+        example = rt.entry_default or _ENTRY_EXAMPLE.get(key, "main")
+        raise ValueError(f"Entrypoint must be a plain {noun} (e.g. {example}), not a path.")
     if not _ENTRY_RE.fullmatch(name):
         raise ValueError("Entrypoint filename contains invalid characters.")
     return name

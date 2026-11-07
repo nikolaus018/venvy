@@ -321,11 +321,11 @@ def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner
 
 def _fs_move_or_copy(root: Path, src: tuple, dst: tuple, copy: bool, owner: Optional[tuple], dst_label: str) -> None:
     """Rename (copy=False) or copy the entry root/src to root/dst."""
-    if copy and dst[:len(src)] == src:
-        # The copy would land in what is being copied, and keep finding
-        # itself there until the disk is full. (A rename is refused by the
-        # kernel itself.)
-        raise AppPathError(400, "A folder cannot be copied into itself.")
+    if len(dst) > len(src) and dst[:len(src)] == src:
+        # A copy would land in what is being copied, and keep finding itself
+        # there until the disk is full. A rename the kernel refuses itself,
+        # but with an errno that reached the user as a 500.
+        raise AppPathError(400, f"A folder cannot be {'copied' if copy else 'moved'} into itself.")
     with _open_app_dir(root, src[:-1]) as sfd, _open_app_dir(root, dst[:-1], create=True, owner=owner) as dfd:
         s_st = _fs_lstat(sfd, src[-1])
         if s_st is None:

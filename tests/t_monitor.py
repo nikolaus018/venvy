@@ -10,7 +10,7 @@ def check(n, c, x=""):
     print(("  ok   " if c else "  FAIL ") + n, x if not c else "")
     if not c: fails.append(n)
 
-with server(repo, 55022, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv):
+with server(repo, 55022, env={"VENVY_METRICS_FLUSH_SEC": "5", "VENVY_BACKUP_KEEP": "1"}) as (base, d, srv):
     cl = admin(base)
     sink = Sink()
     r = cl.req("POST", "/api/system/notify", json={"name": "all", "kind": "webhook", "config": {"url": sink.url + "/n"}, "events": "*"})
@@ -151,6 +151,30 @@ with server(repo, 55022, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv)
     cl.req("POST", "/api/system/backup/schedule/run"); time.sleep(12)
     files = [b for b in cl.req("GET", "/api/system/backups").json() if b["filename"].startswith("full-")]
     check("retention keeps the newest scheduled backup only", len(files) == 1, str([f["filename"] for f in files]))
+
+    def run_scheduled():
+        before = cl.req("GET", "/api/system/backup/schedule").json()["last"]
+        time.sleep(1.1)                       # backup names are to the second
+        cl.req("POST", "/api/system/backup/schedule/run")
+        end = time.time() + 90
+        while time.time() < end:
+            last = cl.req("GET", "/api/system/backup/schedule").json()["last"]
+            if last != before:
+                return last
+            time.sleep(0.5)
+    # The list of the schedule's own backups is a plain setting; whatever it holds,
+    # only backup files are ever pruned from it.
+    cl.req("PUT", "/api/system/settings/backup_scheduled_names", json={"value": json.dumps(["../data.db", files[0]["filename"]])})
+    cl.req("PUT", "/api/system/backup/schedule", json={"schedule": "", "keep": 3})
+    runs = [run_scheduled() for _ in range(3)]
+    check("scheduled runs succeed", all(r and r["ok"] for r in runs), str(runs))
+    check("... and a name that is not a backup is never deleted", (d / "data.db").is_file())
+    time.sleep(1.1)
+    check("a manual backup", cl.job(cl.req("POST", "/api/system/backup"))["ok"])
+    files = [b for b in cl.req("GET", "/api/system/backups").json() if b["filename"].startswith("full-")]
+    kept = {f["filename"] for f in files}
+    check("the schedule keeps its own number, above VENVY_BACKUP_KEEP", {r["file"] for r in runs} <= kept and len(files) == 4,
+          str(sorted(kept)))
     ok = events("backup_ok", 5)
     check("scheduled backup notifies", bool(ok), "")
 
