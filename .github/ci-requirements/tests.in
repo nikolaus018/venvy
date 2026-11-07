@@ -1,0 +1,6 @@
+# What CI runs the suite with: Venvy's own pins, plus the test client.
+# Locked with hashes into tests.txt; see README.md here.
+-r ../../requirements.txt
+httpx
+websockets
+psutil

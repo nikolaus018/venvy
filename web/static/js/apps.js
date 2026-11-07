@@ -65,8 +65,11 @@
             const needle = _appFilter.trim().toLowerCase();
             const shown = needle ? apps.filter(a => (a.name || '').toLowerCase().includes(needle)) : apps;
 
-            const hash = shown.map(a => `${a.id}:${a.name}:${a.status}`).join('|')
-                + '|active:' + activeAppId + '|q:' + needle;
+            // Everything the rows show: with System open no row is highlighted,
+            // and a crash changes the dot, so both are part of it — without
+            // them, opening System kept the last app highlighted.
+            const hash = shown.map(a => `${a.id}:${a.name}:${a.status}:${a.crashed ? 1 : 0}`).join('|')
+                + '|active:' + activeAppId + '|sys:' + _isSystemViewActive() + '|q:' + needle;
             if (hash === _lastAppListHash) return;
             _lastAppListHash = hash;
 

@@ -88,6 +88,8 @@ with server(repo, 55010) as (base, data, srv):
 
         pg.click("#system-nav-btn"); pg.wait_for_timeout(2500)
         check("system view", pg.is_visible("#system-view") and "%" in pg.inner_text("#sys-cpu-val") and pg.locator("#sys-used-ports span").count() >= 1)
+        check("with System open no app is highlighted", pg.locator("#app-list .app-row.active").count() == 0
+              and pg.locator("#app-list .app-row[aria-current=true]").count() == 0)
         pg.evaluate("openBackupsModal()"); pg.wait_for_timeout(800)
         pg.evaluate("createBackup()"); pg.wait_for_timeout(6000)
         check("backup created from UI", len(cl.req("GET", "/api/system/backups").json()) == 1 and "full-" in pg.inner_text("#sys-backups-list"))

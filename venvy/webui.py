@@ -7,7 +7,7 @@ own file under web/partials/ and is pulled in where a line reads
 
 Includes are expanded here, on the server, so the browser still receives a
 single HTML document and there is no build step. Deliberately stdlib-only:
-emulator.py uses it too.
+scripts/emulator.py uses it too.
 """
 import re
 from pathlib import Path

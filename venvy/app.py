@@ -218,7 +218,7 @@ async def lifespan(app: FastAPI):
 
 
 # No /docs, /redoc or /openapi.json: they would hand anyone who can reach the
-# port a map of every endpoint. The API is described in venvy-api-documentation.md.
+# port a map of every endpoint. The API is described in docs/API.md.
 app = FastAPI(title="Venvy", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 app.add_middleware(

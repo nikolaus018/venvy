@@ -24,8 +24,22 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          grep -v '^playwright' tests/requirements.txt | pip install -r /dev/stdin
+          pip install --require-hashes -r .github/ci-requirements/tests.txt
+      - name: The CI lock has the same pins as requirements.txt
+        run: |
+          python - <<'PY'
+          import re, sys
+          pins = lambda text: dict(re.findall(r"^([A-Za-z0-9_.\-]+)(?:\[[^\]]*\])?==([^\s;\\]+)", text, re.M))
+          want = {k.lower(): v for k, v in pins(open("requirements.txt").read()).items()}
+          have = {k.lower(): v for k, v in pins(open(".github/ci-requirements/tests.txt").read()).items()}
+          off = {k: (v, have.get(k)) for k, v in want.items() if have.get(k) != v}
+          if off:
+              print("::error::.github/ci-requirements/tests.txt is out of date (requirements.txt wants, the lock has): "
+                    + ", ".join(f"{k} {a} vs {b}" for k, (a, b) in off.items())
+                    + " -- regenerate it, see .github/ci-requirements/README.md")
+              sys.exit(1)
+          print("in sync:", ", ".join(f"{k}=={v}" for k, v in want.items()))
+          PY
       - name: The committed Tailwind CSS matches the class names in web/
         run: |
           scripts/build-css.sh
@@ -48,7 +62,7 @@ jobs:
           python-version: "3.12"
       - name: pip-audit
         run: |
-          pip install pip-audit
+          pip install --require-hashes -r .github/ci-requirements/audit.txt
           pip-audit -r requirements.txt --progress-spinner off
 
   oldest-python:
@@ -63,10 +77,9 @@ jobs:
           python-version: "3.10"
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          grep -v '^playwright' tests/requirements.txt | pip install -r /dev/stdin
+          pip install --require-hashes -r .github/ci-requirements/tests.txt
       - name: Every file compiles
-        run: python -m compileall -q main.py emulator.py venvy tests
+        run: python -m compileall -q main.py scripts venvy tests
       - name: The server starts, serves and shuts down
         run: cd tests && SMOKE_EXPECT_SHUTDOWN_LOG=1 python smoke.py "$GITHUB_WORKSPACE"
 
@@ -113,7 +126,7 @@ jobs:
       - name: Python for the checks
         run: |
           sudo python3 -m venv /opt/checks
-          sudo /opt/checks/bin/pip install -q httpx websockets psutil
+          sudo /opt/checks/bin/pip install -q --require-hashes -r .github/ci-requirements/checks.txt
 
       - name: Check the installed service
         run: cd tests && sudo /opt/checks/bin/python t_installed.py $BASE ${{ matrix.mode == 'default' && '--app-users' || '' }}

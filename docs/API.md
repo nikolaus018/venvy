@@ -832,7 +832,10 @@ web/
                         index.html lists them — no build step for scripts
   sw.js                 service worker (served at /sw.js)
 scripts/build-css.sh    rebuilds web/static/css/tailwind.css (needs Node.js; Venvy does not)
-emulator.py             fake backend for UI development; serves the same web/ tree
+scripts/emulator.py     fake backend for UI development; serves the same web/ tree
+scripts/screenshots.py  retakes docs/screenshots/ from a real Venvy with demo apps
+scripts/sign-release.sh signs and publishes a release (maintainer's machine only)
+docs/API.md             this file
 tests/                  end-to-end suite: `tests/run_all.sh`
 install.sh              installer / updater (see "Installing and Updating")
 requirements.txt        Venvy's own Python dependencies, pinned

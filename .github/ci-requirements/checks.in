@@ -1,0 +1,4 @@
+# The checks against an installed Venvy (tests/t_installed.py).
+httpx
+websockets
+psutil

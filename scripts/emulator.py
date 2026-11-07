@@ -6,10 +6,10 @@ No database, no processes, no Linux-only deps (no pty/fcntl/psutil required).
 
 Usage:
     pip install fastapi uvicorn
-    python emulator.py
+    python scripts/emulator.py
 
 Then open http://localhost:54783 in your browser.
-Run it from a checkout: it serves web/ next to this script.
+Run it from a checkout: it serves the checkout's web/.
 """
 
 import json
@@ -32,8 +32,10 @@ import uvicorn
 
 PORT = int(os.getenv("PORT", "54783"))
 HOST = "127.0.0.1"
-ASSETS_DIR = Path(__file__).parent.resolve()
+ASSETS_DIR = Path(__file__).resolve().parent.parent      # the checkout: scripts/..
 WEB_DIR = ASSETS_DIR / "web"
+import sys
+sys.path.insert(0, str(ASSETS_DIR))      # for venvy.webui (stdlib-only)
 
 app = FastAPI(title="Venvy Emulator")
 
@@ -308,7 +310,7 @@ async def serve_spa():
         from fastapi.responses import HTMLResponse
         from venvy.webui import render_index   # stdlib-only; expands web/partials includes
         return HTMLResponse(render_index(WEB_DIR))
-    return PlainTextResponse("web/index.html not found next to emulator.py.", status_code=404)
+    return PlainTextResponse("web/index.html not found in this checkout.", status_code=404)
 
 _BOOT = time.time()
 

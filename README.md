@@ -119,16 +119,20 @@ otherwise on the first start (or with "Install from manifest" in the Packages ta
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/files.png" alt="File manager and editor"></td>
-    <td><img src="docs/screenshots/logs.png" alt="Live logs"></td>
+    <td><img src="docs/screenshots/files.png" alt="File manager and editor"><br><sub>Files and editor</sub></td>
+    <td><img src="docs/screenshots/logs.png" alt="Live logs"><br><sub>Live logs, with search across rotated files</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/system.png" alt="System view: host metrics, ports, backups"></td>
-    <td><img src="docs/screenshots/settings.png" alt="App settings"></td>
+    <td><img src="docs/screenshots/deploy.png" alt="Deploy tab with the log of a deploy"><br><sub>Deploys, with automatic rollback</sub></td>
+    <td><img src="docs/screenshots/settings.png" alt="Usage charts and health check of an app"><br><sub>Usage history and health checks</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/palette.png" alt="Command palette"></td>
-    <td><img src="docs/screenshots/light.png" alt="Light theme"></td>
+    <td><img src="docs/screenshots/system.png" alt="System view: host usage, activity, alerts, backups, updates"><br><sub>System: host usage, activity, alerts, backups, updates</sub></td>
+    <td><img src="docs/screenshots/jobs.png" alt="Scheduled jobs of an app"><br><sub>Scheduled jobs</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/palette.png" alt="Command palette"><br><sub>Command palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>)</sub></td>
+    <td><img src="docs/screenshots/light.png" alt="Light theme"><br><sub>Light theme</sub></td>
   </tr>
 </table>
 
@@ -151,12 +155,15 @@ venvy/             backend package
   config  crypto  models  db  auth       settings, encryption, tables, sessions and roles
   safefs  isolation                      symlink-safe file access, per-app Unix users
   process  terminal  backup              lifecycle and supervisor, PTY terminal, backup/restore
-  cloudflare  settings  jobs             integrations, setting rules, background jobs
+  runtimes  deploy  scheduler  monitor   the ten runtimes, git deploys, cron jobs, health and alerts
+  cloudflare  proxy  notify              tunnel routes, app domains, notifications
   api/                                   one router per resource
   app                                    FastAPI app: lifespan, middleware, static routes
 web/
   index.html  partials/                  page skeleton and per-view markup, assembled server-side
   static/css  static/js                  styles; one script per feature
+docs/              API reference (API.md) and the screenshots
+scripts/           release signing, Tailwind build, UI emulator, screenshot retake
 tests/             end-to-end suite
 install.sh         installer and updater
 ```
@@ -179,7 +186,7 @@ A few decisions worth pointing out:
 - **Restore without swapping files under a live database.** The backup's snapshot is loaded
   into the running SQLite file through its backup API, then the process re-executes itself.
 
-The API is documented in [venvy-api-documentation.md](venvy-api-documentation.md).
+The API is documented in [docs/API.md](docs/API.md).
 
 ### Isolation
 
@@ -225,8 +232,9 @@ pip install -r requirements.txt
 python main.py                 # serves http://127.0.0.1:54783, data in the current directory
 ```
 
-To work on the UI without a real backend, `python emulator.py` serves the same `web/` tree
-against fake data.
+To work on the UI without a real backend, `python scripts/emulator.py` serves the same `web/` tree
+against fake data. After a change to the UI, `python scripts/screenshots.py` retakes the
+screenshots above from a real Venvy running demo apps (needs Playwright and Chrome).
 
 ### Tests
 

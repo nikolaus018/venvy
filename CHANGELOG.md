@@ -5,6 +5,10 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.8.4
+
+- With System open, the sidebar no longer keeps the app that was open before highlighted. 4.8.1 meant to fix this, but the list skipped redrawing when nothing in its own contents had changed, and opening System was not one of the things it looked at. An app that crashed while its status stayed "stopped" now also gets its red dot without waiting for the next change.
+
 ## v4.8.3
 
 - An app's name can no longer contain control characters (a newline, say). Names go into the server log and the audit trail, where one with a newline could write a line that looked like an entry of its own. The audit trail's log line now escapes control characters in whatever it quotes, such as the names of jobs, tokens and hostnames.
