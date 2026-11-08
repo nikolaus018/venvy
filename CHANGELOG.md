@@ -5,6 +5,10 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.8.5
+
+- The clear (×) button in the sidebar's app filter sits inside the field again, centred on it. It had drifted onto the field's right border and a few pixels low.
+
 ## v4.8.4
 
 - With System open, the sidebar no longer keeps the app that was open before highlighted. 4.8.1 meant to fix this, but the list skipped redrawing when nothing in its own contents had changed, and opening System was not one of the things it looked at. An app that crashed while its status stayed "stopped" now also gets its red dot without waiting for the next change.

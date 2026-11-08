@@ -1409,8 +1409,10 @@
 
         #app-search-clear {
             position: absolute;
-            right: 6px;
-            top: 50%;
+            /* wrap has px-3 (12px) side and pb-2 (8px) bottom padding: offset so the
+               button sits inside the input, vertically centred on it */
+            right: 18px;
+            top: calc(50% - 4px);
             transform: translateY(-50%);
             width: 22px;
             height: 22px;
