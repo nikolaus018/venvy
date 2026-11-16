@@ -1,21 +1,28 @@
-<h1 align="center">Venvy</h1>
+﻿# Venvy
 
-<p align="center">
-  <b>A self-hosted control panel for running your apps on one server — Python, Node.js, Bun, Deno, Go, Rust, PHP, Ruby, Java and static sites.</b><br>
-  Upload code, get a virtualenv, a process supervisor, a browser terminal, live logs and a public URL.
-</p>
+[![CI](https://github.com/nikolaus018/venvy/actions/workflows/ci.yml/badge.svg)](https://github.com/nikolaus018/venvy/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nikolaus018/venvy)](https://github.com/nikolaus018/venvy/releases/latest)
+[![CodeQL](https://github.com/nikolaus018/venvy/actions/workflows/codeql.yml/badge.svg)](https://github.com/nikolaus018/venvy/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/nikolaus018/venvy/badge)](https://securityscorecards.dev/viewer/?uri=github.com/nikolaus018/venvy)
+[![License](https://img.shields.io/github/license/nikolaus018/venvy)](LICENSE)
 
-<p align="center">
-  <a href="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml"><img src="https://github.com/nikolaus018/venvy/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/nikolaus018/venvy/releases/latest"><img src="https://img.shields.io/github/v/release/nikolaus018/venvy" alt="Latest release"></a>
-  <a href="https://github.com/nikolaus018/venvy/actions/workflows/codeql.yml"><img src="https://github.com/nikolaus018/venvy/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
-  <a href="https://securityscorecards.dev/viewer/?uri=github.com/nikolaus018/venvy"><img src="https://api.securityscorecards.dev/projects/github.com/nikolaus018/venvy/badge" alt="OpenSSF Scorecard"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/nikolaus018/venvy" alt="MIT license"></a>
-</p>
+Self-hosted control panel for running applications on a single Linux server.
+Supports Python, Node.js, Bun, Deno, Go, Rust, PHP, Ruby, Java and static sites.
+Provides per-app virtualenvs, process supervision, git deploys with rollback, a
+browser terminal, live logs, backups and public URLs through Cloudflare Tunnel.
 
-<p align="center">
-  <img src="docs/screenshots/terminal.png" alt="Venvy dashboard with the in-browser terminal" width="900">
-</p>
+![Venvy dashboard with the in-browser terminal](docs/screenshots/terminal.png)
+
+```mermaid
+flowchart LR
+    A[git push / webhook] --> B[Pull]
+    B --> C[Install dependencies]
+    C --> D[Build]
+    D --> E[Restart app]
+    E --> F{Health check}
+    F -- passes --> G[Release recorded]
+    F -- fails --> H[Previous release restored]
+```
 
 ## Install
 
@@ -29,8 +36,8 @@ That installs the system packages it needs, sets up a systemd service that start
 one Unix user per hosted app, see [Isolation](#isolation)), and prints the URL and a one-time setup code. The first visit creates the admin account, with that code
 (it is also in the server log and in `.setup-code` in the data directory).
 
-Rather not pipe a script into `sudo bash` unseen? [SECURITY.md](SECURITY.md#checking-a-release-yourself)
-shows how to check a release's signature and read the installer before running it.
+To verify a release's signature and read the installer before running it, see
+[SECURITY.md](SECURITY.md#checking-a-release-yourself).
 
 Run the same command again to update. The new version is downloaded, checked against its
 checksum and its signature (see [Releases](#releases)) and prepared next to the running one; the database is snapshotted; and if the new version does not
@@ -87,7 +94,7 @@ otherwise on the first start (or with "Install from manifest" in the Packages ta
 
 ## What it does
 
-- **Apps as first-class things.** Create an app, upload a folder (chunked, resumable), and Venvy
+- **App management.** Create an app, upload a folder (chunked, resumable), and Venvy
   builds its virtualenv and installs `requirements.txt`. Start, stop and restart from the UI.
 - **Deploy from git.** Point an app at a repository and a build command; one click (or a push
   webhook from GitHub, GitLab, Gitea or Forgejo) pulls, installs dependencies, builds, restarts and
@@ -102,7 +109,7 @@ otherwise on the first start (or with "Install from manifest" in the Packages ta
 - **Access.** API tokens for CI, users limited to chosen apps, an audit trail, variables shared by every app.
 - **Supervision.** Restart policies (`never`, `on-failure`, `always`) with crash-loop back-off,
   start-on-boot, port detection, and per-app CPU and memory limits through systemd scopes.
-- **A real terminal in the browser.** A PTY shell in the app's directory with its virtualenv
+- **Browser terminal.** A PTY shell in the app's directory with its virtualenv
   active, including a key bar for phones.
 - **Files.** Tree, editor (Ace), upload, download, rename, copy, drag and drop.
 - **Logs.** Live tail with ANSI colours, filtering, follow and wrap, rotation on the server.
@@ -168,7 +175,7 @@ tests/             end-to-end suite
 install.sh         installer and updater
 ```
 
-A few decisions worth pointing out:
+Design notes:
 
 - **Two secrets per session.** Browsers send cookies to every port on a host, including the
   hosted apps. So the session cookie alone is not enough: each request also carries a
@@ -211,10 +218,10 @@ the apps they manage; it is not a container sandbox), how to verify a release yo
 the protections are tested is in [SECURITY.md](SECURITY.md). Found a problem? Please
 [report it privately](https://github.com/nikolaus018/venvy/security/advisories/new).
 
-### Locked out?
+### Account recovery
 
-If the only admin forgets the password or loses the authenticator, fix the account from a shell
-on the server — it works whether or not Venvy is running, and signs that user out everywhere:
+If the only admin loses the password or the authenticator, the account can be reset from a shell
+on the server. This works whether or not Venvy is running and signs that user out everywhere:
 
 ```bash
 cd /var/lib/venvy
@@ -269,8 +276,8 @@ workflows, and `pip-audit` against the pinned dependencies; Dependabot keeps tho
 
 ## Status
 
-Venvy is a personal project that I run on my own servers, maintained by one person and not
-independently audited (see [SECURITY.md](SECURITY.md#status)). Everything described above is
+Venvy is maintained by one person and has not been independently audited (see
+[SECURITY.md](SECURITY.md#status)). Everything described above is
 covered by the automated suite, including per-app-user mode and systemd resource limits, which
 CI exercises as root on a real Ubuntu host. Debian 12+ and Ubuntu 22.04+ are the supported
 targets; a frozen single-binary build is not.
