@@ -40,5 +40,20 @@ with server(repo, 55031) as (base, d, srv), tempfile.TemporaryDirectory() as tmp
     check("--keep and .env survive", "notes.txt" in tree() and ".env" in tree())
     check("dry-run changes nothing", run("sync", str(app_id), "--prune", "--dry-run").returncode == 0 and "keep.py" in tree())
     check("unknown app is an error", run("sync", "nope").returncode != 0)
+    # A same-size edit is a change: by size alone it was never shipped.
+    (proj / "keep.py").write_text("KEEP"); sh("git", "add", "-A")
+    r = run("sync", str(app_id))
+    check("same-size edit is uploaded", "upload keep.py" in r.stdout, r.stdout + r.stderr)
+    got = cl.req("GET", f"/api/apps/{app_id}/files/tree", params={"hashes": "true"}).json()
+    check("tree reports sha256 on request", any(i.get("sha256") for i in got if not i["is_dir"]), got)
+    # What the app wrote (its SQLite database) is not the repo's to prune.
+    cl.req("POST", f"/api/apps/{app_id}/files/op", json={"operation": "save", "path": "data.db", "content": "x"})
+    run("sync", str(app_id), "--prune")
+    check("--prune keeps *.db", "data.db" in tree())
+    # A tracked symlink out of the checkout must not ship the file it points to.
+    secret = Path(tmp) / "secret.txt"; secret.write_text("private")
+    os.symlink(secret, proj / "link.txt"); sh("git", "add", "-A")
+    r = run("sync", str(app_id))
+    check("symlink out of the checkout skipped", "link.txt" not in tree() and "skip   link.txt" in r.stdout, r.stdout)
 print("FAILED:" if fails else "ALL OK", fails or "")
 sys.exit(1 if fails else 0)

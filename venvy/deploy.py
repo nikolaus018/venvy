@@ -127,27 +127,54 @@ def state(app_id: int) -> dict:
 
 
 class _Log:
-    def __init__(self, app_id: int, secrets: List[str]):
+    """A deploy's log: kept in memory for the Deploy tab and written to the
+    app's deploy log file. With persist=False (a snapshot taken outside a
+    deploy) nothing is written, so the last deploy's log is not wiped out."""
+
+    def __init__(self, app_id: int, secrets: List[str], persist: bool = True):
         self.app_id = app_id
         self.secrets = [s for s in secrets if s]
         self.lines: List[str] = []
-        DEPLOY_LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.path = DEPLOY_LOG_DIR / f"{app_id}.log"
-        self.fh = open(self.path, "w", encoding="utf-8")
+        self.persist = persist
+        self.fh = None
+        if persist:
+            DEPLOY_LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self.path = DEPLOY_LOG_DIR / f"{app_id}.log"
+            self.fh = open(self.path, "w", encoding="utf-8")
 
     def __call__(self, line: str) -> None:
-        for s in self.secrets:
+        # Longest first: a secret that contains another must not be left half masked.
+        for s in sorted(self.secrets, key=len, reverse=True):
             line = line.replace(s, "***")
         self.lines.append(line)
-        if self.app_id in _state:
+        if self.persist and self.app_id in _state:
             _state[self.app_id]["log"] = self.lines
-        with contextlib.suppress(OSError):
-            self.fh.write(line + "\n")
-            self.fh.flush()
+        if self.fh is not None:
+            with contextlib.suppress(OSError):
+                self.fh.write(line + "\n")
+                self.fh.flush()
 
     def close(self) -> None:
-        with contextlib.suppress(OSError):
-            self.fh.close()
+        if self.fh is not None:
+            with contextlib.suppress(OSError):
+                self.fh.close()
+
+
+# Values shorter than this are not masked in a deploy log: "1", "true" or a
+# port number would turn every line into asterisks and hide nothing.
+_MASK_MIN_LEN = 6
+
+
+def _env_secrets(app: App) -> List[str]:
+    """The values of the app's own and the shared environment variables: a build
+    runs with them, and whatever it prints ends up in the deploy log."""
+    from venvy import shared_env
+    values = list(shared_env.load().values())
+    with contextlib.suppress(ValueError, TypeError):
+        own = json.loads(_decrypt_secret(app.env_json) or "{}")
+        if isinstance(own, dict):
+            values += [str(v) for v in own.values()]
+    return sorted({v for v in values if len(v) >= _MASK_MIN_LEN}, key=len, reverse=True)
 
 
 # ---------------------------------------------------------------------------
@@ -299,10 +326,17 @@ def public_key(app_id: int) -> Optional[str]:
 
 
 def forget_keys(app_id: int) -> None:
+    """Everything deploys kept for an app that is gone. App ids are handed out
+    again, so the in-memory state goes too: the next app with this id must not
+    be shown the last one's deploy log."""
     import shutil
     shutil.rmtree(DEPLOY_KEY_DIR / str(app_id), ignore_errors=True)
     shutil.rmtree(RELEASES_DIR / str(app_id), ignore_errors=True)
     (DEPLOY_LOG_DIR / f"{app_id}.log").unlink(missing_ok=True)
+    _state.pop(app_id, None)
+    lock = _locks.get(app_id)
+    if lock is not None and not lock.locked():
+        _locks.pop(app_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -370,20 +404,41 @@ async def _snapshot(app: App, log: _Log, dest_dir: Optional[Path] = None) -> Tup
         *_as_app_user(app, argv), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE, env=_app_tool_env(app))
     size = 0
-    with open(dest, "wb") as f:
-        assert proc.stdout is not None
+    # stderr is read alongside stdout: tar warns once per file it cannot read,
+    # and with nobody reading, a full stderr pipe stopped tar — and the deploy
+    # with it — for good.
+    err_buf = bytearray()
+
+    async def drain_stderr() -> None:
+        assert proc.stderr is not None
         while True:
-            chunk = await proc.stdout.read(1 << 20)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > SNAPSHOT_MAX_BYTES:
-                proc.kill()
-                await proc.wait()
-                dest.unlink(missing_ok=True)
-                raise DeployError("The app's files are too large to snapshot (over 2 GB).")
-            f.write(chunk)
-    _, err = await proc.communicate()
+            data = await proc.stderr.read(65536)
+            if not data:
+                return
+            if len(err_buf) < 64 * 1024:
+                err_buf.extend(data)
+
+    err_task = asyncio.ensure_future(drain_stderr())
+    try:
+        with open(dest, "wb") as f:
+            assert proc.stdout is not None
+            while True:
+                chunk = await proc.stdout.read(1 << 20)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > SNAPSHOT_MAX_BYTES:
+                    proc.kill()
+                    await proc.wait()
+                    dest.unlink(missing_ok=True)
+                    raise DeployError("The app's files are too large to snapshot (over 2 GB).")
+                f.write(chunk)
+        await proc.wait()
+        await err_task
+    finally:
+        if not err_task.done():
+            err_task.cancel()
+    err = bytes(err_buf)
     if proc.returncode not in (0, 1):            # 1: a file changed while being read
         dest.unlink(missing_ok=True)
         raise DeployError(f"tar failed: {err.decode(errors='replace')[:300]}")
@@ -456,6 +511,11 @@ def _record(app_id: int, **fields) -> None:
 
 def _add_release(app_id: int, kind: str, commit: Optional[str], message: str, archive: Optional[str],
                  size: int, by: str) -> None:
+    if not (commit or archive):
+        # Nothing to go back to (a build-only deploy, a snapshot rollback): such a
+        # row only pushed restorable releases, and their archives, out of
+        # KEEP_RELEASES — with every deploy of a build-only app, half of them.
+        return
     with Session(engine) as s:
         if kind == "before-deploy" and commit:
             # Usually what the last deploy left: already in the list, and a
@@ -539,9 +599,15 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
             raise DeployError("App not found.")
         if target is None and not app.git_url and not app.build_command:
             raise DeployError("Set a git repository or a build command first.")
+        # Checked here and not only by the routes: a push webhook arrives whenever it likes.
+        if app.status == "installing":
+            raise DeployError("This app is still being set up.")
+        from venvy.process import restore_in_progress
+        if restore_in_progress():
+            raise DeployError("A restore is in progress.")
         _state[app_id] = {"running": True, "status": "running", "log": [], "started": utc_now().isoformat(),
                           "finished": None, "trigger": trigger}
-        log = _Log(app_id, [])
+        log = _Log(app_id, _env_secrets(app))
         _state[app_id]["log"] = log.lines
         _record(app_id, last_deploy_status="running", last_deploy_at=utc_now())
         what = "Rolling back" if target else "Deploying"
@@ -553,8 +619,20 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
             was_running = app.status in ("running", "starting")
             before = await current_commit(app)
             before_archive: Optional[Tuple[str, int]] = None
-            if not (before or app.git_url):
-                before_archive = await _snapshot(app, log)
+            # Not a git checkout yet: a snapshot is the only way back — also on the
+            # first deploy from a repository, which checks the repository's files out
+            # over whatever was uploaded before. (Only apps that were not a
+            # checkout and had no repository used to get one; a failed first git
+            # deploy had nothing to return to.)
+            made_repo = before is None and not _is_repo(app)
+            if before is None:
+                try:
+                    before_archive = await _snapshot(app, log)
+                except DeployError as exc:
+                    if not app.git_url:
+                        raise
+                    # A first deploy from git used to go ahead without one; it still may.
+                    log(f"No snapshot ({exc}) — if this deploy fails, the old files cannot be put back.")
             # What to go back to if this goes wrong.
             if before or before_archive:
                 _add_release(app_id, "before-deploy", before[0] if before else None, before[1] if before else "",
@@ -565,6 +643,12 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
                 if before:
                     await _git(app, log, ["checkout", "-f", "-B", app.git_branch, before[0]])
                 elif before_archive:
+                    if made_repo and _is_repo(app):
+                        # The checkout this deploy made goes with it: left behind, the
+                        # next deploy would take the failed commit for the version to
+                        # return to.
+                        await _run(app, ["rm", "-rf", "--", ".git"], log, _app_tool_env(app), app.app_dir, 300,
+                                   "remove the new git checkout")
                     await _restore_snapshot(app, before_archive[0], log)
 
             try:
@@ -674,15 +758,34 @@ def webhook_event(headers) -> Optional[str]:
     return {"push hook": "push", "system hook": "system"}.get(event, event)
 
 
-def webhook_branch(headers, body: bytes) -> Optional[str]:
-    """The branch a push webhook is about, or None when the payload does not say."""
+_ZERO_SHA = re.compile(r"0{40}(0{24})?")
+
+
+def webhook_push(headers, body: bytes) -> Tuple[Optional[str], Optional[str]]:
+    """(branch, reason not to deploy) for a push webhook. The branch is None when
+    the payload does not name one (your own CI): that deploys. A push of a tag, or
+    one that deleted a branch, names no branch to deploy and gives a reason."""
     try:
         payload = json.loads(body or b"{}")
     except ValueError:
-        return None
+        return None, None
     # A body that is JSON but not an object (a list, a string) says nothing
     # about a branch; .get() on it used to answer the hook with a 500.
-    ref = payload.get("ref") if isinstance(payload, dict) else None
-    if isinstance(ref, str) and ref.startswith("refs/heads/"):
-        return ref[len("refs/heads/"):]
-    return None
+    if not isinstance(payload, dict):
+        return None, None
+    ref = payload.get("ref")
+    if not isinstance(ref, str):
+        return None, None
+    if not ref.startswith("refs/heads/"):
+        # A tag push (refs/tags/…) used to count as "no branch named" and deployed.
+        return None, f"push to {ref[:200]}, not a branch"
+    branch = ref[len("refs/heads/"):]
+    after = payload.get("after")
+    if payload.get("deleted") is True or (isinstance(after, str) and _ZERO_SHA.fullmatch(after)):
+        return branch, f"branch {branch[:200]} was deleted"
+    return branch, None
+
+
+def webhook_branch(headers, body: bytes) -> Optional[str]:
+    """The branch a push webhook is about, or None when the payload does not say."""
+    return webhook_push(headers, body)[0]

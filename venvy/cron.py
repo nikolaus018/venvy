@@ -67,6 +67,10 @@ def _field(text: str, name: str, lo: int, hi: int) -> Tuple[Set[int], bool]:
 
 class Cron:
     def __init__(self, expr: str):
+        if len(expr or "") > 200:
+            # (The longest sensible one is well under this; a list of thousands
+            # of items is only work for the parser on every scheduler tick.)
+            raise CronError("That schedule is too long.")
         text = " ".join(expr.split())
         text = _MACROS.get(text.lower(), text)
         parts = text.split(" ")

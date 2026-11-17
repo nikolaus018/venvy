@@ -51,6 +51,16 @@ def forget_health(app_id: int) -> None:
     _reported_unhealthy.discard(app_id)
 
 
+def forget_app(app_id: int) -> None:
+    """Everything kept in memory about an app that was deleted. App ids are
+    handed out again: the next app with this id must not inherit its disk size
+    (and with it a disk alert) or its half-collected metrics."""
+    forget_health(app_id)
+    _disk_cache.pop(app_id, None)
+    _acc.pop(app_id, None)
+    _alert_since.pop(("disk", app_id), None)
+
+
 def normalize_path(path: Optional[str]) -> Optional[str]:
     """A health-check path as stored: starts with /, no scheme or host."""
     if path is None:
@@ -336,6 +346,12 @@ def evaluate_alerts(avg: Dict[int, tuple], host_disk: float, apps: Dict[int, App
         for rule in s.exec(select(AlertRule).where(AlertRule.enabled == True)).all():  # noqa: E712
             val = _value(rule, avg, host_disk, apps)
             if val is None:
+                # No reading (the app is stopped). A rule that was on its way to firing
+                # starts over: kept, the old "since" fired it the moment the app was
+                # back, however briefly it then went over.
+                if rule.since is not None and not rule.firing:
+                    rule.since = None
+                    s.add(rule)
                 continue
             app = apps.get(rule.app_id)
             label = describe_rule(rule, app.name if app else None)

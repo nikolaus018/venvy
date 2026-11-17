@@ -1,5 +1,6 @@
 """File manager routes: tree, file operations, download, uploads."""
 import asyncio
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -53,6 +54,7 @@ class FileOpReq(BaseModel):
 def file_tree(
     app_id: int,
     path: str = "",
+    hashes: bool = False,
     session: Session = Depends(get_session),
     # A viewer's role is explicitly "read-only: status, logs, metrics" — not
     # file contents. App directories routinely contain .env files, config
@@ -74,13 +76,36 @@ def file_tree(
     for item in _fs_listdir(root, parts):
         if item["name"] in _SKIP_NAMES or _is_protected_app_file(item["name"]):
             continue
-        results.append({
+        entry = {
             "name": item["name"],
             "path": "/".join(parts + (item["name"],)),
             "is_dir": item["is_dir"],
             "size": item["size"],
-        })
+        }
+        if hashes and not item["is_dir"]:
+            entry["sha256"] = _file_sha256(root, parts + (item["name"],))
+        results.append(entry)
     return sorted(results, key=lambda x: (not x["is_dir"], x["name"].lower()))
+
+
+_HASH_MAX_BYTES = 256 * 1024 * 1024
+
+
+def _file_sha256(root: Path, parts: tuple) -> Optional[str]:
+    """SHA-256 of a regular file in the app (None for a link, something else, or one
+    over 256 MB) — so a client syncing files can tell a changed file from one
+    that only kept its size."""
+    try:
+        f, st = _fs_open_file(root, parts)
+    except (AppPathError, OSError):
+        return None
+    with f:
+        if st.st_size > _HASH_MAX_BYTES:
+            return None
+        h = hashlib.sha256()
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+        return h.hexdigest()
 
 
 @router.post("/apps/{app_id}/files/op")

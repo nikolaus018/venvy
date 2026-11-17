@@ -30,7 +30,7 @@ from venvy.audit import set_client_ip
 from venvy.auth import ensure_setup_code, request_is_https
 from venvy.backup import load_operation_state
 from venvy.db import create_db_and_tables, engine
-from venvy.models import App, SystemSetting
+from venvy.models import App, ScheduledJob, SystemSetting
 from venvy.process import (
     _active_app_pids,
     _app_pid_alive,
@@ -120,6 +120,10 @@ async def lifespan(app: FastAPI):
                 # process. Nothing else ever moves an app out of these states.
                 app_row.status = "running" if app_row.pid else "stopped"
                 modified = True
+            if app_row.last_deploy_status == "running":
+                # Likewise a deploy cut off by the restart: it shows as running for ever otherwise.
+                app_row.last_deploy_status = "failed"
+                modified = True
 
             if app_row.status == "running" and app_row.pid:
                 if _app_pid_alive(app_row):
@@ -134,6 +138,10 @@ async def lifespan(app: FastAPI):
 
             if modified:
                 session.add(app_row)
+        for job in session.exec(select(ScheduledJob).where(ScheduledJob.last_status == "running")).all():
+            job.last_status = "failed"
+            job.last_output = "[venvy] cut off: Venvy restarted while the job ran"
+            session.add(job)
         session.commit()
 
     for app_id, name in orphaned:

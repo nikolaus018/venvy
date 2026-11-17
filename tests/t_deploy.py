@@ -68,6 +68,10 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     check("token stored but never returned", "ghp_secrettoken" not in cl.req("GET", f"/api/apps/{app}/deploy").text and "ghp_secrettoken" not in json.dumps(cl.status(app)))
     check("app JSON hides git credentials", "git_auth" not in cl.status(app) and "webhook_secret" not in cl.status(app) and cl.status(app)["git_has_token"] is True)
     check("token removed", put(token="").json()["has_token"] is False)
+    put(git_url="https://github.com/o/r.git", token="ghp_secrettoken")
+    check("token kept when the host stays", put(git_url="https://github.com/o/other.git", git_branch="dev").json()["has_token"] is True)
+    check("token dropped when the repository moves to another host",
+          put(git_url="https://evil.example/o/r.git").json()["has_token"] is False)
     r = put(git_url=str(bare), git_branch="main", build_command="echo built-$(cat version.txt) > built.txt")
     check("local repo allowed here, build command saved", r.status_code == 200 and r.json()["build_command"].startswith("echo built-"), r.text)
     check("deploy refused with nothing configured", cl.req("POST", f"/api/apps/{make_app(cl, name='Bare')}/deploy").status_code == 400)
@@ -159,6 +163,14 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     other = json.dumps({"ref": "refs/heads/feature"}).encode()
     r = httpx.post(hook, content=other, headers={"X-Hub-Signature-256": "sha256=" + hmac.new(secret.encode(), other, hashlib.sha256).hexdigest()})
     check("a push to another branch is ignored", r.status_code == 200 and r.json()["deployed"] is False and "feature" in r.json()["reason"], r.text)
+    def signed(payload):
+        raw = json.dumps(payload).encode()
+        return httpx.post(hook, content=raw, headers={"X-GitHub-Event": "push",
+                          "X-Hub-Signature-256": "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()})
+    r = signed({"ref": "refs/tags/v1.0", "after": sha6})
+    check("a tag push is not a deploy", r.status_code == 200 and r.json()["deployed"] is False and "refs/tags/v1.0" in r.json()["reason"], r.text)
+    r = signed({"ref": "refs/heads/main", "after": "0" * 40, "deleted": True})
+    check("a push that deletes the branch is not a deploy", r.status_code == 200 and r.json()["deployed"] is False and "deleted" in r.json()["reason"], r.text)
     r = httpx.post(hook, content=body, headers={"X-Hub-Signature-256": sig, "X-GitHub-Event": "issues"})
     check("an event other than a push is ignored", r.status_code == 200 and r.json()["deployed"] is False and "issues" in r.json()["reason"], r.text)
     r = httpx.post(hook, content=body, headers={"X-Hub-Signature-256": sig, "X-GitHub-Event": "push"})
@@ -201,6 +213,7 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     vw = login_as(base, "viewer1", "hunter2hunter2")
     vg = vw.req("GET", f"/api/apps/{app}/deploy").json()
     check("a viewer sees deploy state but not the webhook secret", vg["git"]["webhook_secret"] is None and vg["state"] is not None)
+    check("... nor the build command (it may carry a secret, like a job's)", vg["git"]["build_command"] == "" and state()["git"]["build_command"] != "")
     rtok = cl.req("POST", "/api/tokens", json={"name": "ro", "scope": "read"}).json()["token"]
     tg = httpx.get(f"{base}/api/apps/{app}/deploy", headers={"Authorization": f"Bearer {rtok}"}).json()
     check("an API token does not get the webhook secret", tg["git"]["webhook_secret"] is None and tg["git"]["has_webhook_secret"] is True, str(tg["git"]))
@@ -208,7 +221,8 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
 
     # ── an app that is not a git checkout: snapshots ────────────────────────
     snap = make_app(cl, name="Snap", code='print("ORIGINAL")\nimport time; time.sleep(120)\n')
-    cl.req("PUT", f"/api/apps/{snap}/git", json={"build_command": "echo rebuilt > built.txt"})
+    cl.req("PUT", f"/api/apps/{snap}", json={"env_vars": {"API_KEY": "sk-live-abcdef123", "DEBUG": "1"}})
+    cl.req("PUT", f"/api/apps/{snap}/git", json={"build_command": "echo rebuilt > built.txt; echo key=$API_KEY"})
     r = cl.req("POST", f"/api/apps/{snap}/deploy", json={"start": False}); check("build-only deploy accepted", r.status_code == 200)
     end = time.time() + 60
     while time.time() < end and cl.req("GET", f"/api/apps/{snap}/deploy").json()["state"]["status"] in (None, "running"): time.sleep(0.5)
@@ -216,6 +230,9 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     check("build-only deploy runs the build", sd["state"]["status"] == "ok" and any("build:" in l for l in sd["state"]["log"]))
     before = [r for r in sd["releases"] if r["kind"] == "before-deploy"]
     check("a snapshot is taken first", len(before) == 1 and before[0]["size"] > 0 and before[0]["commit"] is None, str(sd["releases"]))
+    check("only restorable releases are recorded", sd["releases"] and all(r["restorable"] for r in sd["releases"]), str(sd["releases"]))
+    log_text = "\n".join(sd["state"]["log"])
+    check("variable values printed by the build are masked in the log", "key=***" in log_text and "sk-live-abcdef123" not in log_text, log_text[-400:])
     cl.req("POST", f"/api/apps/{snap}/files/op", json={"operation": "save", "path": "main.py", "content": 'print("CHANGED")\n'})
     cl.req("POST", f"/api/apps/{snap}/files/op", json={"operation": "save", "path": "keep.txt", "content": "stays"})
     r = cl.req("POST", f"/api/apps/{snap}/releases/{before[0]['id']}/rollback"); check("snapshot rollback accepted", r.status_code == 200)
@@ -227,9 +244,26 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     check("... and does not delete what came later", cl.req("GET", f"/api/apps/{snap}/files/download", params={"path": "keep.txt"}).status_code == 200)
     m = cl.req("POST", f"/api/apps/{snap}/releases"); cl.job(m)
     check("a manual snapshot can be taken", any(r["kind"] == "manual" for r in cl.req("GET", f"/api/apps/{snap}/releases").json()))
+    check("... without wiping the last deploy's log file", "Finished:" in (d / "deploy-logs" / f"{snap}.log").read_text())
+
+    # ── the first deploy from git over uploaded files can be undone ─────────
+    fresh = make_app(cl, name="Fresh", code='print("UPLOADED")\n')
+    cl.req("PUT", f"/api/apps/{fresh}/git", json={"git_url": str(bare), "git_branch": "main", "build_command": "exit 1"})
+    r = cl.req("POST", f"/api/apps/{fresh}/deploy", json={"start": False}); check("first git deploy accepted", r.status_code == 200, r.text)
+    end = time.time() + 60
+    while time.time() < end and cl.req("GET", f"/api/apps/{fresh}/deploy").json()["state"]["status"] in (None, "running"): time.sleep(0.5)
+    fd = cl.req("GET", f"/api/apps/{fresh}/deploy").json()
+    back = cl.req("GET", f"/api/apps/{fresh}/files/download", params={"path": "main.py"}).text
+    fresh_dirs = list(d.glob("apps/*/fresh*"))
+    check("a failed first git deploy puts the uploaded files back", fd["state"]["status"] == "failed" and "UPLOADED" in back, back[:200] + str(fd["state"]["log"][-6:]))
+    check("... and removes the checkout it made", fresh_dirs and not (fresh_dirs[0] / ".git").exists(), str(fresh_dirs))
 
     # ── delete cleans up ────────────────────────────────────────────────────
     check("deleting an app removes its releases and keys", cl.req("DELETE", f"/api/apps/{snap}").status_code == 200 and not (d / "releases" / str(snap)).exists())
+    cl.req("DELETE", f"/api/apps/{fresh}")
+    reused = make_app(cl, name="Reused")
+    check("an app that gets a deleted app's id starts with no deploy log", reused not in (fresh, snap)
+          or cl.req("GET", f"/api/apps/{reused}/deploy").json()["state"]["log"] == [], f"id {reused}")
     sink.close()
 
 shutil.rmtree(work, ignore_errors=True)

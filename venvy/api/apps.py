@@ -705,7 +705,7 @@ async def delete_app(
             session.exec(sql_delete(model).where(model.app_id == app_id))
         session.exec(sql_delete(AlertRule).where(AlertRule.app_id == app_id))
         await asyncio.to_thread(deploy.forget_keys, app_id)
-        monitor.forget_health(app_id)
+        monitor.forget_app(app_id)
         session.delete(app_row)
         session.commit()
         proxy.invalidate()

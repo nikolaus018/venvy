@@ -5,6 +5,20 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.8.6
+
+- The first deploy from a repository into an app that already had files (uploaded ones, say) can be undone. It checked the repository out over them without taking a snapshot first, so a failed build or a failed health check had nothing to go back to. Now the old files are snapshotted, and a failure puts them back and removes the half-made checkout.
+- A tag push no longer deploys. A push webhook for `refs/tags/…` counted as "no branch named" and deployed the branch; so did a push that deleted the branch. Both now answer `deployed: false` with the reason. A webhook that arrives while the app is still being set up is ignored too, and no deploy or rollback starts during a restore.
+- A stored access token is no longer sent to a new host. Changing the repository URL to another host kept the token, so the next deploy sent it there; it is now removed unless a new one comes with the change.
+- Values of the app's and the shared environment variables (6 characters or more) are masked in the deploy log, which shows whatever the build prints. Viewers no longer see the build command, as they already did not see job commands. Saving the git settings with an API token no longer returns the webhook secret.
+- Snapshots no longer hang when tar has a lot to complain about (many unreadable files): its error output was never read, and once that pipe was full tar stopped for good, and the deploy with it.
+- Build-only deploys and snapshot rollbacks no longer record releases that cannot be restored. Each of those pushed a real one, and its snapshot, out of the ten kept: a build-only app kept only five it could go back to.
+- Taking a manual snapshot no longer wipes the last deploy's log.
+- A deploy or a job cut off by a restart of Venvy no longer shows as running for ever.
+- Deleting an app clears what Venvy kept about it in memory. App ids are reused, so the next app with that id was shown the deleted app's deploy log, disk usage and disk alert.
+- A resource alert for an app that was stopped starts its count over when the app is back, instead of firing at once. Cron schedules longer than 200 characters are refused.
+- `scripts/ship.py` no longer skips a file that was edited but kept its size (`DEBUG=1` → `DEBUG=0`): it compares SHA-256 hashes, which `GET …/files/tree?hashes=true` now reports. `--prune` never deletes SQLite databases (`*.db`, `*.sqlite`, `*.sqlite3`), and a tracked symlink that points out of the checkout is not uploaded.
+
 ## v4.8.5
 
 - The clear (×) button in the sidebar's app filter sits inside the field again, centred on it. It had drifted onto the field's right border and a few pixels low.

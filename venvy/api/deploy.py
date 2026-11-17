@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import re
 import shutil
 import time
 from pathlib import Path
@@ -23,6 +24,7 @@ from venvy.db import engine, get_session
 from venvy.isolation import _chown_app_dir, _delete_app_user, _ensure_app_user
 from venvy.jobs import _running_tasks, _start_job
 from venvy.models import App, AppAccess, Release, User
+from venvy.process import restore_in_progress
 
 router = APIRouter(
     prefix="/api", tags=["deploy"], dependencies=[Depends(check_ip_allowlist), Depends(require_app_access)]
@@ -40,11 +42,28 @@ def _app_or_404(session: Session, app_id: int) -> App:
     return app
 
 
-def _git_info(app: App, reveal: bool) -> dict:
+_USERINFO_RE = re.compile(r"\A(https://)[^/@]+@")
+
+
+def _redact_url(url: str) -> str:
+    """https://user:password@host/… with the credentials taken out."""
+    return _USERINFO_RE.sub(r"\1***@", url or "")
+
+
+def _url_host(url: Optional[str]) -> str:
+    """The host an https:// URL sends a stored token to ('' for anything else)."""
+    m = re.match(r"https://(?:[^/@]+@)?([^/:]+)", url or "")
+    return m.group(1).lower() if m else ""
+
+
+def _git_info(app: App, reveal: bool, operator: bool = True) -> dict:
+    """The deploy settings as the API shows them. A viewer sees neither a password
+    in the URL nor the build command (which, like a job's command, may carry one)."""
     secret = _decrypt_secret(app.webhook_secret) if app.webhook_secret else ""
     return {
-        "url": app.git_url or "", "branch": app.git_branch or "main",
-        "has_token": bool(app.git_auth), "build_command": app.build_command or "",
+        "url": (app.git_url or "") if operator else _redact_url(app.git_url or ""),
+        "branch": app.git_branch or "main",
+        "has_token": bool(app.git_auth), "build_command": (app.build_command or "") if operator else "",
         "auto_deploy": app.auto_deploy, "public_key": deploy.public_key(app.id),
         "ssh": bool(app.git_url and deploy.is_ssh_url(app.git_url)),
         "webhook_path": f"/api/hooks/deploy/{app.id}", "has_webhook_secret": bool(secret),
@@ -58,9 +77,10 @@ def get_deploy(app_id: int, request: Request, session: Session = Depends(get_ses
     app = _app_or_404(session, app_id)
     # The secret lets anyone deploy: shown in the browser, never to an API token
     # (a read-only one must not be a way to get hold of it).
-    reveal = user.role in ("admin", "operator") and not getattr(request.state, "via_token", False)
+    operator = user.role in ("admin", "operator")
+    reveal = operator and not getattr(request.state, "via_token", False)
     return {
-        "git": _git_info(app, reveal=reveal),
+        "git": _git_info(app, reveal=reveal, operator=operator),
         "state": deploy.state(app_id),
         "last": {"at": app.last_deploy_at.isoformat() if app.last_deploy_at else None,
                  "status": app.last_deploy_status, "commit": app.last_deploy_commit},
@@ -78,11 +98,12 @@ class GitReq(BaseModel):
 
 @router.put("/apps/{app_id}/git")
 def put_git(
-    app_id: int, req: GitReq,
+    app_id: int, req: GitReq, request: Request,
     session: Session = Depends(get_session), user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
 ):
     app = _app_or_404(session, app_id)
+    old_host = _url_host(app.git_url)
     try:
         if req.git_url is not None:
             app.git_url = deploy.clean_git_url(req.git_url) or None
@@ -99,6 +120,11 @@ def put_git(
         if tok and not (app.git_url or "").startswith("https://"):
             raise HTTPException(400, "An access token is for https:// repositories; use the deploy key for ssh.")
         app.git_auth = _encrypt_secret(json.dumps({"token": tok})) if tok else None
+    elif app.git_auth and _url_host(app.git_url) != old_host:
+        # The stored token was given for the old host. Kept, the next deploy would
+        # send it to whatever host the repository now names — anyone who may
+        # edit the settings could collect it with a server of their own.
+        app.git_auth = None
     if req.auto_deploy is not None:
         if req.auto_deploy and not app.webhook_secret:
             app.webhook_secret = _encrypt_secret(deploy.new_webhook_secret())
@@ -106,9 +132,11 @@ def put_git(
     app.updated_at = utc_now()
     session.add(app)
     session.commit()
-    audit_log(user.username, "app_git_settings", f"app '{app.name}' (id={app_id}): {app.git_url or 'no repository'} "
-                                                 f"branch={app.git_branch} build={'yes' if app.build_command else 'no'}")
-    return _git_info(app, reveal=True)
+    audit_log(user.username, "app_git_settings",
+              f"app '{app.name}' (id={app_id}): {_redact_url(app.git_url or '') or 'no repository'} "
+              f"branch={app.git_branch} build={'yes' if app.build_command else 'no'}")
+    # The webhook secret as GET shows it: to a browser session, not to an API token.
+    return _git_info(app, reveal=not getattr(request.state, "via_token", False))
 
 
 @router.post("/apps/{app_id}/git/key")
@@ -157,6 +185,8 @@ async def start_deploy(
     app = _app_or_404(session, app_id)
     if app.status == "installing":
         raise HTTPException(409, "This app is still being set up.")
+    if restore_in_progress():
+        raise HTTPException(409, "A restore is in progress.")
     if deploy.is_running(app_id):
         raise HTTPException(409, "A deploy is already running for this app.")
     if not app.git_url and not app.build_command:
@@ -199,7 +229,7 @@ async def make_release(
             if now:
                 deploy._add_release(app_id, "manual", now[0], now[1], None, 0, user.username)
             else:
-                log = deploy._Log(app_id, [])
+                log = deploy._Log(app_id, [], persist=False)
                 try:
                     name, size = await deploy._snapshot(app, log)
                 except deploy.DeployError as exc:
@@ -220,7 +250,11 @@ async def rollback(
     _rl: None = Depends(rate_limit_mutations),
 ):
     """Go back to a release: the code, its dependencies, the build, a restart. Follow GET /apps/{id}/deploy."""
-    _app_or_404(session, app_id)
+    app = _app_or_404(session, app_id)
+    if app.status == "installing":
+        raise HTTPException(409, "This app is still being set up.")
+    if restore_in_progress():
+        raise HTTPException(409, "A restore is in progress.")
     rel = session.get(Release, release_id)
     if not rel or rel.app_id != app_id:
         raise HTTPException(404, "No such release.")
@@ -270,6 +304,7 @@ async def deploy_webhook(app_id: int, request: Request):
         enabled = bool(app and app.auto_deploy)
         branch = app.git_branch if app else "main"
         name = app.name if app else ""
+        status = app.status if app else None
     # One answer for "no such app", "no secret" and "wrong secret".
     if not secret or not deploy.verify_webhook(request.headers, body, secret):
         raise HTTPException(401, "Invalid signature or token.")
@@ -281,9 +316,13 @@ async def deploy_webhook(app_id: int, request: Request):
         return {"ok": True, "deployed": False, "reason": f"'{event}' event, not a push"}
     if not enabled:
         return {"ok": True, "deployed": False, "reason": "auto-deploy is off for this app"}
-    pushed = deploy.webhook_branch(request.headers, body)
+    pushed, skip = deploy.webhook_push(request.headers, body)
     if pushed is not None and pushed != branch:
-        return {"ok": True, "deployed": False, "reason": f"push to {pushed}, not {branch}"}
+        return {"ok": True, "deployed": False, "reason": f"push to {pushed[:200]}, not {branch}"}
+    if skip:
+        return {"ok": True, "deployed": False, "reason": skip}
+    if status == "installing":
+        return {"ok": True, "deployed": False, "reason": "the app is still being set up"}
     if deploy.is_running(app_id):
         return {"ok": True, "deployed": False, "reason": "a deploy is already running"}
 
@@ -351,7 +390,7 @@ async def duplicate_app(
             with Session(engine) as s:
                 src_row, row = s.get(App, app_id), s.get(App, new_id)
             await asyncio.to_thread(_ensure_app_user, row)
-            log = deploy._Log(new_id, [])
+            log = deploy._Log(new_id, [], persist=False)
             try:
                 archive, _ = await deploy._snapshot(src_row, log, RELEASES_TMP(new_id))
                 await deploy._restore_snapshot(row, archive, log, RELEASES_TMP(new_id))

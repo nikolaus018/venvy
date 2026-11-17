@@ -6,11 +6,14 @@
   ship.py sync   APP [--url URL] [--prune] [--dry-run] [--keep GLOB ...] [--restart]
 
 `sync` uploads every file git tracks (or has staged/untracked-but-not-ignored)
-into the app, chunked, skipping files whose size already matches. Files that
-were removed from the repo stay on the server (Venvy's upload never deletes):
-`sync` lists them as "stale", and `--prune` deletes them. `.env*` files and
-anything matching --keep are never touched; folders Venvy hides from the file
-tree (venv, node_modules, logs, .git, __pycache__) are never seen at all.
+into the app, chunked, skipping files the server already has unchanged (same
+SHA-256; a server too old to report hashes is compared by size). Symlinks that
+point outside the checkout are not uploaded. Files that were removed from the
+repo stay on the server (Venvy's upload never deletes): `sync` lists them as
+"stale", and `--prune` deletes them. `.env*` files, SQLite databases (`*.db`,
+`*.sqlite`, `*.sqlite3` — usually what the app wrote, not what the repo had)
+and anything matching --keep are never touched; folders Venvy hides from the
+file tree (venv, node_modules, logs, .git, __pycache__) are never seen at all.
 
 APP is the app's id or exact name. The session is kept in
 ~/.config/venvy/<host>.json (mode 0600) and renews with use; the password is
@@ -19,6 +22,7 @@ only ever typed at the prompt. The URL defaults to $VENVY_URL.
 import argparse
 import fnmatch
 import getpass
+import hashlib
 import http.cookiejar
 import json
 import os
@@ -30,10 +34,11 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
+from typing import Optional
 
 CHUNK = 8 * 1024 * 1024
 CONFIG_DIR = Path.home() / ".config" / "venvy"
-ALWAYS_KEEP = [".env", ".env.*"]
+ALWAYS_KEEP = [".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3"]
 
 
 class Client:
@@ -134,17 +139,39 @@ def tracked_files(root: Path) -> list[str]:
     out = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         check=True, capture_output=True).stdout.decode()
-    return sorted(p for p in out.split("\0") if p and (root / p).is_file())
+    files = []
+    for p in out.split("\0"):
+        if not p or not (root / p).is_file():
+            continue
+        # A tracked symlink is read through: one pointing out of the checkout
+        # (~/.ssh/id_ed25519, say) would ship that file's contents to the server.
+        if (root / p).is_symlink() and root not in (root / p).resolve().parents:
+            print(f"  skip   {p} (symlink out of the checkout)")
+            continue
+        files.append(p)
+    return sorted(files)
 
 
-def remote_files(c: Client, app_id: int, path: str = "") -> dict[str, int]:
+def remote_files(c: Client, app_id: int, path: str = "") -> dict[str, tuple]:
+    """{path: (size, sha256 or None)} of the files the app has."""
     found = {}
-    for item in c.request("GET", f"/api/apps/{app_id}/files/tree?path={urllib.parse.quote(path)}"):
+    for item in c.request("GET", f"/api/apps/{app_id}/files/tree?hashes=true&path={urllib.parse.quote(path)}"):
         if item["is_dir"]:
             found.update(remote_files(c, app_id, item["path"]))
         else:
-            found[item["path"]] = item["size"]
+            found[item["path"]] = (item["size"], item.get("sha256"))
     return found
+
+
+def unchanged(remote: Optional[tuple], data: bytes) -> bool:
+    """Whether the server's copy is this file. By content when the server reports
+    hashes: by size alone, an edit that kept the length (DEBUG=1 -> DEBUG=0) was
+    never shipped."""
+    if remote is None or remote[0] != len(data):
+        return False
+    if remote[1] is not None:
+        return remote[1] == hashlib.sha256(data).hexdigest()
+    return True
 
 
 def find_app(c: Client, ref: str) -> dict:
@@ -165,7 +192,7 @@ def cmd_sync(c: Client, args) -> None:
     sent = skipped = 0
     for rel in local:
         data = (root / rel).read_bytes()
-        if remote.get(rel) == len(data):
+        if unchanged(remote.get(rel), data):
             skipped += 1
             continue
         print(f"  upload {rel}")
