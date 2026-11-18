@@ -100,6 +100,7 @@ class App(SQLModel, table=True):
     build_command: Optional[str] = Field(default=None)      # run after every deploy, before the restart
     webhook_secret: Optional[str] = Field(default=None)     # encrypted; signs push webhooks
     auto_deploy: bool = Field(default=False)                # a verified push webhook deploys
+    keep_releases: Optional[int] = Field(default=None)     # releases kept per app; None = the server default
     last_deploy_at: Optional[datetime.datetime] = Field(default=None)
     last_deploy_status: Optional[str] = Field(default=None)  # ok | failed | rolled-back | running
     last_deploy_commit: Optional[str] = Field(default=None)

@@ -246,6 +246,40 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     check("a manual snapshot can be taken", any(r["kind"] == "manual" for r in cl.req("GET", f"/api/apps/{snap}/releases").json()))
     check("... without wiping the last deploy's log file", "Finished:" in (d / "deploy-logs" / f"{snap}.log").read_text())
 
+    # ── releases can be deleted, and old ones go away by themselves ─────────
+    rl = cl.req("GET", f"/api/apps/{snap}/releases").json()
+    snap_rel = next(r for r in rl if r["kind"] == "manual")
+    arch_dir = d / "releases" / str(snap)
+    n_files = len(list(arch_dir.glob("*")))
+    check("deleting a release needs it to exist", cl.req("DELETE", f"/api/apps/{snap}/releases/99999").status_code == 404)
+    check("a release of another app is not deletable", cl.req("DELETE", f"/api/apps/{app}/releases/{snap_rel['id']}").status_code == 404)
+    check("a release can be deleted", cl.req("DELETE", f"/api/apps/{snap}/releases/{snap_rel['id']}").status_code == 200)
+    check("... it is gone from the list and its snapshot file is removed",
+          all(r["id"] != snap_rel["id"] for r in cl.req("GET", f"/api/apps/{snap}/releases").json()) and len(list(arch_dir.glob("*"))) == n_files - 1)
+    check("keep_releases is shown", cl.req("GET", f"/api/apps/{snap}/deploy").json()["git"]["keep_releases"] == 10)
+    check("keep_releases must be 1-50", cl.req("PUT", f"/api/apps/{snap}/git", json={"keep_releases": 0}).status_code == 400
+          and cl.req("PUT", f"/api/apps/{snap}/git", json={"keep_releases": 51}).status_code == 400)
+    for _ in range(3):
+        cl.job(cl.req("POST", f"/api/apps/{snap}/releases"))
+    check("several snapshots are kept", len(cl.req("GET", f"/api/apps/{snap}/releases").json()) >= 3)
+    check("keep_releases is saved", cl.req("PUT", f"/api/apps/{snap}/git", json={"keep_releases": 2}).json()["keep_releases"] == 2)
+    left = cl.req("GET", f"/api/apps/{snap}/releases").json()
+    check("lowering it deletes the older releases at once, files included", len(left) == 2 and len(list(arch_dir.glob("*"))) == 2, str(left))
+    cl.job(cl.req("POST", f"/api/apps/{snap}/releases"))
+    check("a new release pushes the oldest out", len(cl.req("GET", f"/api/apps/{snap}/releases").json()) == 2 and len(list(arch_dir.glob("*"))) == 2)
+    # The oldest kept release is still there when a rollback to it restores it,
+    # although the rollback's own before-deploy snapshot pushes it past the limit.
+    oldest = cl.req("GET", f"/api/apps/{snap}/releases").json()[-1]
+    prev_fin = cl.req("GET", f"/api/apps/{snap}/deploy").json()["state"]["finished"]
+    check("rollback to the oldest kept release accepted", cl.req("POST", f"/api/apps/{snap}/releases/{oldest['id']}/rollback").status_code == 200)
+    end = time.time() + 60
+    while time.time() < end:
+        st = cl.req("GET", f"/api/apps/{snap}/deploy").json()["state"]
+        if not st["running"] and st["finished"] != prev_fin: break
+        time.sleep(0.5)
+    check("... restores it instead of pruning it first", st["status"] == "ok", str(st["log"][-6:]))
+    check("... and the limit holds afterwards", len(cl.req("GET", f"/api/apps/{snap}/releases").json()) == 2 and len(list(arch_dir.glob("*"))) == 2)
+
     # ── the first deploy from git over uploaded files can be undone ─────────
     fresh = make_app(cl, name="Fresh", code='print("UPLOADED")\n')
     cl.req("PUT", f"/api/apps/{fresh}/git", json={"git_url": str(bare), "git_branch": "main", "build_command": "exit 1"})

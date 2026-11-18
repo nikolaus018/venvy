@@ -64,7 +64,7 @@ def _git_info(app: App, reveal: bool, operator: bool = True) -> dict:
         "url": (app.git_url or "") if operator else _redact_url(app.git_url or ""),
         "branch": app.git_branch or "main",
         "has_token": bool(app.git_auth), "build_command": (app.build_command or "") if operator else "",
-        "auto_deploy": app.auto_deploy, "public_key": deploy.public_key(app.id),
+        "auto_deploy": app.auto_deploy, "keep_releases": deploy.keep_limit(app.id), "public_key": deploy.public_key(app.id),
         "ssh": bool(app.git_url and deploy.is_ssh_url(app.git_url)),
         "webhook_path": f"/api/hooks/deploy/{app.id}", "has_webhook_secret": bool(secret),
         "webhook_secret": secret if reveal else None,
@@ -93,6 +93,7 @@ class GitReq(BaseModel):
     git_branch: Optional[str] = None
     build_command: Optional[str] = None
     auto_deploy: Optional[bool] = None
+    keep_releases: Optional[int] = None     # how many releases to keep; older ones are deleted
     token: Optional[str] = None             # "" removes the stored token
 
 
@@ -129,12 +130,20 @@ def put_git(
         if req.auto_deploy and not app.webhook_secret:
             app.webhook_secret = _encrypt_secret(deploy.new_webhook_secret())
         app.auto_deploy = req.auto_deploy
+    if req.keep_releases is not None:
+        if not 1 <= req.keep_releases <= deploy.MAX_KEEP_RELEASES:
+            raise HTTPException(400, f"Keep between 1 and {deploy.MAX_KEEP_RELEASES} releases.")
+        app.keep_releases = req.keep_releases
     app.updated_at = utc_now()
     session.add(app)
     session.commit()
+    # While a deploy or rollback runs it may need an old release (the one it
+    # restores); it prunes by the new limit itself when it finishes.
+    if req.keep_releases is not None and not deploy.is_running(app_id):
+        deploy._prune_releases(app_id)
     audit_log(user.username, "app_git_settings",
               f"app '{app.name}' (id={app_id}): {_redact_url(app.git_url or '') or 'no repository'} "
-              f"branch={app.git_branch} build={'yes' if app.build_command else 'no'}")
+              f"branch={app.git_branch} build={'yes' if app.build_command else 'no'} keep={deploy.keep_limit(app_id)}")
     # The webhook secret as GET shows it: to a browser session, not to an API token.
     return _git_info(app, reveal=not getattr(request.state, "via_token", False))
 
@@ -241,6 +250,22 @@ async def make_release(
         return {"ok": True}
 
     return _start_job(user, "release", _job)
+
+
+@router.delete("/apps/{app_id}/releases/{release_id}")
+def delete_release(
+    app_id: int, release_id: int,
+    session: Session = Depends(get_session), user: User = Depends(require_operator),
+    _rl: None = Depends(rate_limit_mutations),
+):
+    """Delete a release (and its snapshot file). Does not touch the running app."""
+    app = _app_or_404(session, app_id)
+    if deploy.is_running(app_id):
+        raise HTTPException(409, "A deploy is running for this app.")
+    if not deploy.delete_release(app_id, release_id):
+        raise HTTPException(404, "No such release.")
+    audit_log(user.username, "app_release_delete", f"app '{app.name}' (id={app_id}) release {release_id}")
+    return {"ok": True}
 
 
 @router.post("/apps/{app_id}/releases/{release_id}/rollback")

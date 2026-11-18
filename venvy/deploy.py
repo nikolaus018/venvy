@@ -35,6 +35,7 @@ RELEASES_DIR = DATA_DIR / "releases"
 DEPLOY_LOG_DIR = DATA_DIR / "deploy-logs"
 DEPLOY_KEY_DIR = DATA_DIR / "deploy-keys"
 KEEP_RELEASES = int(os.getenv("VENVY_KEEP_RELEASES", "10"))
+MAX_KEEP_RELEASES = 50
 SNAPSHOT_MAX_BYTES = 2 * 1024 ** 3
 HEALTH_WAIT_SEC = int(os.getenv("VENVY_HEALTH_WAIT_SEC", "60"))     # tests shorten it
 
@@ -473,14 +474,42 @@ async def _restore_snapshot(app: App, archive: str, log: _Log, src_dir: Optional
         raise DeployError(f"tar failed: {err.decode(errors='replace')[:300]}")
 
 
-def _prune_releases(app_id: int) -> None:
+def keep_limit(app_id: int) -> int:
+    """How many releases an app keeps: its own setting, else the server default."""
+    with Session(engine) as s:
+        app = s.get(App, app_id)
+    n = app.keep_releases if app and app.keep_releases else KEEP_RELEASES
+    return max(1, min(n, MAX_KEEP_RELEASES))
+
+
+def _delete_release_rows(s: Session, app_id: int, rows) -> int:
+    for r in rows:
+        if r.archive:
+            (RELEASES_DIR / str(app_id) / r.archive).unlink(missing_ok=True)
+        s.delete(r)
+    return len(rows)
+
+
+def _prune_releases(app_id: int, protect: Optional[int] = None) -> int:
+    """Delete all but the newest keep_limit() releases. *protect* (a release a
+    running rollback is about to restore) is never deleted, however old."""
+    keep = keep_limit(app_id)
     with Session(engine) as s:
         rows = s.exec(select(Release).where(Release.app_id == app_id).order_by(Release.id.desc())).all()
-        for r in rows[KEEP_RELEASES:]:
-            if r.archive:
-                (RELEASES_DIR / str(app_id) / r.archive).unlink(missing_ok=True)
-            s.delete(r)
+        n = _delete_release_rows(s, app_id, [r for r in rows[keep:] if r.id != protect])
         s.commit()
+    return n
+
+
+def delete_release(app_id: int, release_id: int) -> bool:
+    """Remove one release (and its snapshot file). False if there is no such release."""
+    with Session(engine) as s:
+        rel = s.get(Release, release_id)
+        if not rel or rel.app_id != app_id:
+            return False
+        _delete_release_rows(s, app_id, [rel])
+        s.commit()
+    return True
 
 
 def list_releases(app_id: int) -> List[dict]:
@@ -510,7 +539,7 @@ def _record(app_id: int, **fields) -> None:
 
 
 def _add_release(app_id: int, kind: str, commit: Optional[str], message: str, archive: Optional[str],
-                 size: int, by: str) -> None:
+                 size: int, by: str, protect: Optional[int] = None) -> None:
     if not (commit or archive):
         # Nothing to go back to (a build-only deploy, a snapshot rollback): such a
         # row only pushed restorable releases, and their archives, out of
@@ -525,7 +554,7 @@ def _add_release(app_id: int, kind: str, commit: Optional[str], message: str, ar
                 return
         s.add(Release(app_id=app_id, kind=kind, commit=commit, message=message[:300], archive=archive, size=size, by=by))
         s.commit()
-    _prune_releases(app_id)
+    _prune_releases(app_id, protect)
 
 
 async def _install_and_build(app: App, log: _Log, build: bool = True) -> None:
@@ -636,7 +665,10 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
             # What to go back to if this goes wrong.
             if before or before_archive:
                 _add_release(app_id, "before-deploy", before[0] if before else None, before[1] if before else "",
-                             before_archive[0] if before_archive else None, before_archive[1] if before_archive else 0, by)
+                             before_archive[0] if before_archive else None, before_archive[1] if before_archive else 0, by,
+                             # With few releases kept, the one being rolled back to may be the
+                             # oldest: pruned now, its snapshot would be gone before the restore.
+                             protect=target.id if target is not None else None)
 
             async def go_back() -> None:
                 log("Putting the previous version back…")
@@ -703,6 +735,10 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
             log.close()
             if status == "ok":
                 _add_release(app_id, "deploy", commit_sha, message, None, 0, by)
+            # A rollback target spared above, or a lower keep_releases saved while
+            # this ran (put_git leaves pruning to the deploy then).
+            with contextlib.suppress(Exception):
+                _prune_releases(app_id)
             _record(app_id, last_deploy_status=status, last_deploy_at=utc_now(),
                     last_deploy_commit=commit_sha if status == "ok" else None)
             _state[app_id].update(running=False, status=status, finished=utc_now().isoformat())

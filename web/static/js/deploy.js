@@ -49,6 +49,9 @@
             $id('git-key-copy').classList.toggle('hidden', !g.public_key);
             $id('git-key-btn').textContent = g.public_key ? 'Generate a new key' : 'Generate key';
             $id('git-auto').checked = !!g.auto_deploy;
+            const keep = $id('rel-keep');
+            if (![...keep.options].some(o => o.value === String(g.keep_releases))) keep.add(new Option(g.keep_releases, g.keep_releases));
+            keep.value = String(g.keep_releases);
             $id('hook-box').classList.toggle('hidden', !g.auto_deploy);
             $id('hook-url').value = window.location.origin + g.webhook_path;
             $id('hook-secret').value = g.webhook_secret || '';
@@ -87,16 +90,25 @@
                 ? 'Each deploy is a git commit you can return to. Data files in the app folder are not touched.'
                 : 'Snapshots of the app\'s files (not its virtualenv or dependencies). Going back puts those files back as they were — including data stored in the app folder — and leaves files added since in place.';
             const kinds = { deploy: 'Deployed', 'before-deploy': 'Before a deploy', manual: 'Snapshot' };
-            $id('rel-list').innerHTML = rel.length ? rel.map(r => `
+            const cur = d.last && d.last.commit;
+            const busy = d.state.running ? ' disabled' : '';
+            $id('rel-list').innerHTML = rel.length ? rel.map(r => {
+                const isCur = !!(cur && r.commit && r.commit === cur);
+                return `
                 <div class="px-5 py-3 flex items-center gap-3">
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium truncate" style="color:var(--text)">${escapeHtml(kinds[r.kind] || r.kind)}${r.commit ? ` <span class="mono text-xs" style="color:var(--text3)">${escapeHtml(r.commit.slice(0, 10))}</span>` : ''}
+                            ${isCur ? '<span class="text-[10px] uppercase font-bold ml-1" style="color:var(--accent-light)">current</span>' : ''}
                             ${r.message ? `<span class="font-normal" style="color:var(--text2)"> — ${escapeHtml(r.message)}</span>` : ''}</p>
                         <p class="text-xs mt-0.5" style="color:var(--text3)">${escapeHtml(fmtWhen(r.created_at))}${r.by ? ' · ' + escapeHtml(r.by) : ''}${r.size ? ' · ' + fmtBytes(r.size) : ''}</p>
                     </div>
-                    ${r.restorable ? `<button data-rel="${r.id}" data-requires-operator class="rel-rollback btn-ghost px-3 py-1.5 text-xs shrink-0"${d.state.running ? ' disabled' : ''}>Roll back</button>` : ''}
-                </div>`).join('') : '<p class="px-5 py-6 text-xs text-center" style="color:var(--text3)">No releases yet — one is recorded with every deploy.</p>';
+                    ${r.restorable && !isCur ? `<button data-rel="${r.id}" data-requires-operator class="rel-rollback btn-ghost px-3 py-1.5 text-xs shrink-0"${busy}>Roll back</button>` : ''}
+                    <button data-rel="${r.id}" data-requires-operator title="Delete this release" aria-label="Delete this release" class="rel-delete btn-ghost px-2 py-1.5 shrink-0"${busy}><i data-feather="trash-2" class="w-3.5 h-3.5"></i></button>
+                </div>`;
+            }).join('') : '<p class="px-5 py-6 text-xs text-center" style="color:var(--text3)">No releases yet — one is recorded with every deploy.</p>';
             document.querySelectorAll('#rel-list .rel-rollback').forEach(b => b.addEventListener('click', () => rollbackTo(Number(b.dataset.rel))));
+            document.querySelectorAll('#rel-list .rel-delete').forEach(b => b.addEventListener('click', () => deleteRelease(Number(b.dataset.rel))));
+            _featherReplace();
         }
 
         async function saveGit() {
@@ -171,5 +183,35 @@
             const res = await fetch(`${API}/apps/${activeAppId}/releases`, { method: 'POST' });
             try { await waitForJob(res); showToast('Snapshot taken', 'success'); }
             catch (e) { showToast(e.message, 'error'); }
+            loadDeploy({ keepForm: true });
+        }
+
+        async function deleteRelease(id) {
+            const rel = (_depData?.releases || []).find(x => x.id === id);
+            const ok = await confirmDialog({
+                title: 'Delete this release?',
+                body: 'You will not be able to roll back to it any more.' + (rel && !rel.commit ? ' Its snapshot of the files is deleted too.' : ' The running app is not changed.'),
+                confirmLabel: 'Delete', danger: true,
+            });
+            if (!ok) return;
+            const r = await apiJson('DELETE', `/apps/${activeAppId}/releases/${id}`);
+            if (!r.ok) { showToast(r.error, 'error'); return; }
+            showToast('Release deleted', 'info', 1500);
+            loadDeploy({ keepForm: true });
+        }
+
+        async function setKeepReleases(n) {
+            const num = Number(n);
+            const cnt = (_depData?.releases || []).length;
+            if (cnt > num) {
+                const ok = await confirmDialog({
+                    title: `Keep only the last ${num}?`,
+                    body: `${cnt - num} older release${cnt - num === 1 ? '' : 's'} will be deleted now.`,
+                    confirmLabel: 'Delete older', danger: true,
+                });
+                if (!ok) { loadDeploy({ keepForm: true }); return; }
+            }
+            const r = await apiJson('PUT', `/apps/${activeAppId}/git`, { keep_releases: num });
+            if (!r.ok) { showToast(r.error, 'error'); return; }
             loadDeploy({ keepForm: true });
         }

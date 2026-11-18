@@ -5,6 +5,13 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.9.0
+
+- The Deploy tab is reorganised: deploy status and the log first, then Releases, then the repository and build settings, then deploy on push. Releases is no longer buried at the bottom.
+- Releases can be deleted, one at a time (trash button; a snapshot's file goes with it). The release that is running now is marked "current" and has no Roll back button.
+- Old releases clean themselves up: each app keeps its last 3, 5, 10, 20 or 50 releases (default 10), set on the Releases card or with `keep_releases` on `PUT …/git`. Lowering it deletes the older ones at once, after asking.
+- Rolling back to the oldest release that is kept no longer deletes it first. The rollback records what is there now as a new release, which pushed the oldest one out — and its snapshot with it — before it was restored, so the rollback failed. Now the release being restored is spared until the rollback is done. Lowering the limit while a deploy runs leaves the pruning to the end of that deploy.
+
 ## v4.8.6
 
 - The first deploy from a repository into an app that already had files (uploaded ones, say) can be undone. It checked the repository out over them without taking a snapshot first, so a failed build or a failed health check had nothing to go back to. Now the old files are snapshotted, and a failure puts them back and removes the half-made checkout.

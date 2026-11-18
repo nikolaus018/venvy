@@ -600,7 +600,13 @@ Any role with access to the app. `git` (repository, branch, `has_token`, `build_
 `require_operator`, rate-limited. Body `{ "start": false }`. Starts a deploy and answers at once; follow `state` in `GET …/deploy`. `409` while one runs. A deploy: records what is there now (a git commit, or a snapshot of the files), fetches and checks out the branch (`git checkout -f -B`), installs the manifest's dependencies, runs the build command (`sh -c`, 30 min limit, with the app's environment), restarts the app if it was running (or `start: true`), then waits for it to look alive — its health check answers, or it is still running a few seconds later (`VENVY_HEALTH_WAIT_SEC`, 60 s). If anything fails the previous version is put back: `state.status` is `failed` (nothing was restarted) or `rolled-back` (it did not come up). The first deploy from a repository also snapshots the files that were there before (uploaded ones, say), and a failure puts them back and removes the new checkout. `409` while the app is being set up or a restore runs. Notifies `deploy_ok`, `deploy_failed` or `deploy_rolled_back`.
 
 #### `GET /api/apps/{app_id}/releases` · `POST /api/apps/{app_id}/releases`
-List (newest first; `kind` is `deploy`, `before-deploy` or `manual`; the last 10 are kept; only what can be gone back to is recorded — a git commit or a snapshot) / take a manual one (a snapshot job for apps without git). Snapshots are tar archives of the app's files without `venv`, `node_modules`, `target`, `vendor/bundle`, `logs` and `.git`.
+List (newest first; `kind` is `deploy`, `before-deploy` or `manual`; the last 10 are kept unless the app's `keep_releases` says otherwise; only what can be gone back to is recorded — a git commit or a snapshot) / take a manual one (a snapshot job for apps without git). Snapshots are tar archives of the app's files without `venv`, `node_modules`, `target`, `vendor/bundle`, `logs` and `.git`.
+
+#### `DELETE /api/apps/{app_id}/releases/{release_id}`
+`require_operator`, rate-limited. Deletes a release and its snapshot file; the running app is not touched. `404` for a release that does not exist or belongs to another app, `409` while a deploy runs.
+
+#### `PUT /api/apps/{app_id}/git` — `keep_releases`
+An integer from 1 to 50 (default 10, or `VENVY_KEEP_RELEASES`): how many releases the app keeps. Older ones, and their snapshot files, are deleted as soon as a new release is recorded — and at once when this is lowered (while a deploy or rollback runs, when it finishes). A release a rollback is restoring is never pruned before it is restored. `GET …/deploy` shows it in `git.keep_releases`.
 
 #### `POST /api/apps/{app_id}/releases/{release_id}/rollback`
 `require_operator`. Restores a release — a git commit, or a snapshot (which overwrites files; it deletes nothing, so files added since the snapshot stay) — then installs dependencies, builds and restarts like a deploy. Follow `state` (`trigger: "rollback"`).

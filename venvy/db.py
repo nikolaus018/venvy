@@ -62,6 +62,7 @@ def create_db_and_tables() -> None:
         "ALTER TABLE app ADD COLUMN build_command VARCHAR",
         "ALTER TABLE app ADD COLUMN webhook_secret VARCHAR",
         "ALTER TABLE app ADD COLUMN auto_deploy BOOLEAN DEFAULT 0",
+        "ALTER TABLE app ADD COLUMN keep_releases INTEGER",
         "ALTER TABLE app ADD COLUMN last_deploy_at DATETIME",
         "ALTER TABLE app ADD COLUMN last_deploy_status VARCHAR",
         "ALTER TABLE app ADD COLUMN last_deploy_commit VARCHAR",

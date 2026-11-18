@@ -26,6 +26,27 @@
                                     style="background:var(--surface2);border:1px solid var(--border2);color:var(--text2);max-height:18rem"></pre>
                             </div>
 
+                            <!-- Releases -->
+                            <div class="card overflow-hidden">
+                                <div class="px-5 py-4 flex flex-wrap items-center gap-3" style="border-bottom:1px solid var(--border)">
+                                    <div class="flex-1 min-w-0">
+                                        <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)"><i data-feather="clock" class="w-4 h-4"></i> Releases</h3>
+                                        <p class="text-xs mt-0.5" style="color:var(--text3)" id="rel-help">Versions you can go back to.</p>
+                                    </div>
+                                    <label class="flex items-center gap-2 text-xs shrink-0" style="color:var(--text2)" data-requires-operator>
+                                        Keep last
+                                        <select id="rel-keep" class="inp px-2 py-1 text-xs" data-on-change="setKeepReleases(this.value)">
+                                            <option>3</option><option>5</option><option>10</option><option>20</option><option>50</option>
+                                        </select>
+                                    </label>
+                                    <button data-on-click="snapshotNow()" data-requires-operator class="btn-ghost px-3 py-1.5 text-xs shrink-0">Snapshot now</button>
+                                </div>
+                                <div id="rel-list" class="divide-y" style="border-color:var(--border)">
+                                    <p class="px-5 py-6 text-xs text-center" style="color:var(--text3)">No releases yet.</p>
+                                </div>
+                                <p class="px-5 py-2.5 text-[11px]" style="color:var(--text3);border-top:1px solid var(--border)">Older releases are deleted automatically once more than this many are kept.</p>
+                            </div>
+
                             <!-- Repository -->
                             <div class="card p-5 space-y-4">
                                 <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
@@ -104,18 +125,5 @@
                                 </div>
                             </div>
 
-                            <!-- Releases -->
-                            <div class="card overflow-hidden">
-                                <div class="px-5 py-4 flex items-center gap-3" style="border-bottom:1px solid var(--border)">
-                                    <div class="flex-1 min-w-0">
-                                        <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)"><i data-feather="clock" class="w-4 h-4"></i> Releases</h3>
-                                        <p class="text-xs mt-0.5" style="color:var(--text3)" id="rel-help">Versions you can go back to.</p>
-                                    </div>
-                                    <button data-on-click="snapshotNow()" data-requires-operator class="btn-ghost px-3 py-1.5 text-xs shrink-0">Snapshot now</button>
-                                </div>
-                                <div id="rel-list" class="divide-y" style="border-color:var(--border)">
-                                    <p class="px-5 py-6 text-xs text-center" style="color:var(--text3)">No releases yet.</p>
-                                </div>
-                            </div>
                         </div>
                     </div>
