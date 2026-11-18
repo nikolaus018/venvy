@@ -5,6 +5,10 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.9.1
+
+- Firefox on desktop draws thin, themed scrollbars like the other browsers. It ignored Venvy's scrollbar styling and showed its own wide grey ones — next to the app list, the file list and every scrolling page — and a scrollbar inside the tab bar and toolbars that are meant to have none.
+
 ## v4.9.0
 
 - The Deploy tab is reorganised: deploy status and the log first, then Releases, then the repository and build settings, then deploy on push. Releases is no longer buried at the bottom.

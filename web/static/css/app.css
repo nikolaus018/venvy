@@ -118,6 +118,25 @@
             display: none;
         }
 
+        /* Firefox ignores ::-webkit-scrollbar: without these it draws its full
+           native scrollbars everywhere, including inside the scrollbar-hide strips
+           (the app tab bar, toolbars). The @supports test is true only in browsers
+           without ::-webkit-scrollbar, so Chrome and Safari keep the styling below
+           (Chrome would otherwise let scrollbar-color override it). */
+        .scrollbar-hide {
+            scrollbar-width: none;
+        }
+
+        @supports not selector(::-webkit-scrollbar) {
+            @media (min-width: 768px) {
+                * {
+                    scrollbar-width: thin;
+                    /* No hover state in Firefox: the hover shade keeps the thumb findable. */
+                    scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+                }
+            }
+        }
+
         .xterm-viewport {
             overflow-y: auto !important;
         }
