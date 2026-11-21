@@ -5,6 +5,17 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.9.4
+
+- Scheduled job output is now masked where it is stored and shown, not only in failure notifications. Values of the app's and the shared environment variables (6 characters or longer) appear as `***`.
+- A file with backslashes in its name can no longer make a full backup impossible to restore.
+- Unsaved editor changes survive a session expiry when the same user signs back in.
+- Venvy no longer falls back to a bare command name when `setpriv` or `systemd-run` is missing from the system directories, so an app's `PATH` can't supply them.
+- Deleting an app is no longer blocked by zombie processes, and a failed delete leaves its Cloudflare routes in place so it can be retried.
+- Changing the destination of a notification channel or off-site backup now asks for its secret again, instead of silently saving without it.
+- Opening several files in quick succession can no longer leave the editor stuck on "Loading…".
+- The installer shows the setup code whenever no admin exists yet, reads it as the service user, and restarts the running version if the pre-update database snapshot fails.
+
 ## v4.9.3
 
 - Minimum supported Python version is now 3.11+ (Debian 12+ / Ubuntu 24.04+).
