@@ -132,10 +132,12 @@ def merge_secrets(kind: str, new: dict, old: dict) -> dict:
     same_dest = _same_secret_dest(kind, out, old)
     for field in FIELDS[kind]["secret"]:
         if out.get(field) == MASK:
-            if same_dest and old.get(field):
+            if not old.get(field):
+                out.pop(field, None)
+            elif same_dest:
                 out[field] = old[field]
             else:
-                out.pop(field, None)
+                raise ValueError(f"The destination changed: enter the {field} again.")
     return out
 
 

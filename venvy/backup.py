@@ -655,7 +655,8 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
             import posixpath
 
             def _norm_tar_name(raw: str) -> str:
-                n = posixpath.normpath(raw.replace("\\", "/")).lstrip("/")
+                # A backslash is an ordinary filename character on Linux.
+                n = posixpath.normpath(raw).lstrip("/")
                 return "" if n == "." else n
 
             total = 0

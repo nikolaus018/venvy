@@ -99,6 +99,8 @@ def clean(cfg: dict, old: Optional[dict]) -> dict:
         if out.get(f) == MASK:
             if same_dest and old and old.get(f):
                 out[f] = old[f]
+            elif old and old.get("kind") == kind and old.get(f):
+                raise ValueError(f"The destination changed: enter the {f} again.")
             else:
                 out.pop(f, None)
     for f in REQUIRED[kind]:

@@ -10,23 +10,18 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Dict
 
 from fastapi import HTTPException, UploadFile
 
 from venvy.config import _UPLOAD_TMP_DIR
 
-_upload_part_locks: Dict[str, threading.Lock] = {}
-_upload_part_locks_guard = threading.Lock()
+# A fixed set: one lock per upload would need evicting, and an evicted lock
+# that a thread is about to take no longer excludes anyone.
+_upload_part_locks = tuple(threading.Lock() for _ in range(256))
 
 
 def _part_lock(part: Path) -> threading.Lock:
-    key = str(part)
-    with _upload_part_locks_guard:
-        if len(_upload_part_locks) > 4096:
-            for k in [k for k, lk in _upload_part_locks.items() if not lk.locked()]:
-                _upload_part_locks.pop(k, None)
-        return _upload_part_locks.setdefault(key, threading.Lock())
+    return _upload_part_locks[hash(str(part)) % len(_upload_part_locks)]
 
 
 # Uploads. The UI sends every file through the chunked endpoints below, so

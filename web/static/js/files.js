@@ -292,6 +292,7 @@
         // Save / Ctrl+S, replacing its file of the same name.
         function _resetEditor() {
             _openFilePath = null;
+            _openFileBase = null;
             const filenameEl = document.getElementById('current-filename');
             if (filenameEl) { filenameEl.innerText = 'No file open'; filenameEl.dataset.path = ''; }
             if (aceEditor) {
@@ -331,6 +332,7 @@
         }
 
         let _openFileSeq = 0;
+        let _openFileBase = null;
 
         async function openFile(path, name) {
             if (path === _openFilePath) {
@@ -353,13 +355,21 @@
             }
             const seq = ++_openFileSeq;
             const filenameEl = document.getElementById('current-filename');
-            const prevName = filenameEl.innerText, prevPath = filenameEl.dataset.path, prevOpen = _openFilePath;
-            const restorePrev = () => { filenameEl.innerText = prevName; filenameEl.dataset.path = prevPath || ''; _openFilePath = prevOpen; };
+            const appId = activeAppId;
+            // A load still in progress has put "Loading…" in the header: what to
+            // go back to is the file from before it.
+            if (_openFileBase?.appId !== appId) {
+                _openFileBase = { appId, name: filenameEl.innerText, path: filenameEl.dataset.path, open: _openFilePath };
+            }
+            const base = _openFileBase;
+            const restorePrev = () => {
+                filenameEl.innerText = base.name; filenameEl.dataset.path = base.path || ''; _openFilePath = base.open;
+                _openFileBase = null;
+            };
             filenameEl.innerText = 'Loading…'; filenameEl.dataset.path = ''; _openFilePath = null;
             const ctrl = new AbortController();
             // If the user switches to another app or clicks another file while this
             // loads, discard this response so Save never writes to the wrong path.
-            const appId = activeAppId;
             const stale = () => seq !== _openFileSeq || appId !== activeAppId;
             // On any failure put the header back the way it was: the editor
             // still holds the previous file, and it must stay saveable.
@@ -400,6 +410,7 @@
                 aceEditor.setValue(text, -1);
                 aceEditor.session.getUndoManager().reset();
             }
+            _openFileBase = null;
             filenameEl.innerText = name; filenameEl.dataset.path = path; _openFilePath = path; _setEditorDirty(false);
             document.getElementById('editor-panel').classList.remove('translate-x-full');
             document.getElementById('file-tree-container').classList.add('slide-out-left', 'md:translate-x-0');

@@ -114,6 +114,19 @@ def _finished(job_id: int, task: asyncio.Task) -> None:
         logging.error(f"Job {job_id} crashed: {task.exception()}")
 
 
+def _mask_env_secrets(text: str, app: App) -> str:
+    """*text* with the app's environment values masked, as in a deploy log."""
+    from venvy.deploy import _env_secrets
+    try:
+        secrets = _env_secrets(app)
+    except Exception as exc:
+        logging.error(f"Could not load the secrets of app {app.id}: {exc}")
+        return "[venvy] output hidden: the app's secrets could not be loaded to mask it"
+    for secret in secrets:
+        text = text.replace(secret, "***")
+    return text
+
+
 async def _run_job(job_id: int, by: str) -> dict:
     from venvy.deploy import _app_env_for_commands
     with Session(engine, expire_on_commit=False) as s:
@@ -157,11 +170,12 @@ async def _run_job(job_id: int, by: str) -> dict:
                 os.killpg(proc.pid, signal.SIGKILL)
             await proc.wait()
             status = "timeout"
-        out_tail = b"".join(chunks).decode(errors="replace")[-OUTPUT_KEEP:]
+        # Masked before the cut, so a secret across it can't survive in part.
+        out_tail = _mask_env_secrets(b"".join(chunks).decode(errors="replace"), app)[-OUTPUT_KEEP:]
         if status == "timeout":
             out_tail += f"\n[venvy] killed after {timeout} seconds"
     except Exception as exc:
-        out_tail = f"[venvy] could not run the job: {exc}"
+        out_tail = _mask_env_secrets(f"[venvy] could not run the job: {exc}", app)
         status = "failed"
     duration = time.monotonic() - started
     with Session(engine) as s:
@@ -171,12 +185,8 @@ async def _run_job(job_id: int, by: str) -> dict:
             s.add(job)
             s.commit()
     if status != "ok":
-        from venvy import deploy as _deploy
-        notify_tail = out_tail[-600:]
-        for sec in sorted({s for s in _deploy._env_secrets(app) if s}, key=len, reverse=True):
-            notify_tail = notify_tail.replace(sec, "***")
         notify.emit("job_failed", f"{app.name}: job '{name}' {'timed out' if status == 'timeout' else 'failed'}",
-                    notify_tail, app.id, app.name, "error")
+                    out_tail[-600:], app.id, app.name, "error")
     return {"status": status, "exit_code": code, "duration": round(duration, 2), "output": out_tail}
 
 

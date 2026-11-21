@@ -430,10 +430,17 @@ chown root:root "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
 # ── 5. Stop, snapshot the database, switch over ──────────────────────────────
+WAS_ACTIVE=0
 if systemctl is-active --quiet venvy.service; then
+  WAS_ACTIVE=1
   say "Stopping the running Venvy..."
   systemctl stop venvy.service
 fi
+
+# For anything that touches files inside the service user's data directory.
+as_run_user() {
+  if [ "$RUN_USER" = "root" ]; then "$@"; else runuser -u "$RUN_USER" -- "$@"; fi
+}
 
 if [ "$HAND_OVER" -eq 1 ]; then
   say "Switching to one shared user: handing $DATA_DIR over to 'venvy'..."
@@ -481,10 +488,11 @@ for old in snaps[keep:]:
     except OSError:
         pass
 '
-  if [ "$RUN_USER" != "root" ]; then
-    runuser -u "$RUN_USER" -- python3 -c "$_snap_py" "$DATA_DIR" "$SNAP" "$KEEP_DB_SNAPSHOTS"
-  else
-    python3 -c "$_snap_py" "$DATA_DIR" "$SNAP" "$KEEP_DB_SNAPSHOTS"
+  if ! as_run_user python3 -I -c "$_snap_py" "$DATA_DIR" "$SNAP" "$KEEP_DB_SNAPSHOTS"; then
+    # Nothing has been switched yet: leave the running version running.
+    rm -rf "$STAGE"
+    [ "$WAS_ACTIVE" -eq 0 ] || systemctl start venvy.service || warn "Could not start Venvy again."
+    die "Could not snapshot the database. The update was not installed."
   fi
 fi
 
@@ -659,8 +667,9 @@ case "$HOST" in 127.0.0.1|localhost|::1) SHOW="127.0.0.1 (this machine only — 
 echo
 say "Venvy $REL_VERSION is running."
 say "  Open:      http://$SHOW:$PORT"
-if [ -z "$PREV_DIR" ] && [ ! -L "$DATA_DIR/.setup-code" ] && [ -f "$DATA_DIR/.setup-code" ]; then
-  _code="$(python3 -c 'import os, sys; fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW); print(os.read(fd, 64).decode(errors="replace").strip()); os.close(fd)' "$DATA_DIR/.setup-code" 2>/dev/null || true)"
+if [ ! -L "$DATA_DIR/.setup-code" ] && [ -f "$DATA_DIR/.setup-code" ]; then
+  # Venvy removes this file once an admin exists. O_NONBLOCK: a FIFO put here must not hang the installer.
+  _code="$(as_run_user python3 -I -c 'import os, stat, sys; fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK); stat.S_ISREG(os.fstat(fd).st_mode) or sys.exit(1); print(os.read(fd, 64).decode(errors="replace").strip()); os.close(fd)' "$DATA_DIR/.setup-code" 2>/dev/null || true)"
   [ -n "$_code" ] && say "             the first visit creates the admin account, with setup code: $_code"
 fi
 say "  Settings:  $ENV_FILE   (then: systemctl restart venvy)"

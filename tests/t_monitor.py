@@ -47,9 +47,9 @@ with server(repo, 55022, env={"VENVY_METRICS_FLUSH_SEC": "5", "VENVY_BACKUP_KEEP
     check("bad cron refused", jb(schedule="* * *").status_code == 400 and jb(schedule="61 * * * *").status_code == 400 and jb(schedule="0 0 31 2 *").status_code == 400)
     check("timeout range", jb(timeout=1).status_code == 400 and jb(timeout=999999).status_code == 400)
     check("name and command required", jb(name=" ").status_code == 400 and jb(command=" ").status_code == 400)
-    cron_job = jb(name="every minute", command='echo "JOB-RAN $MARK $SHARED_X"; pwd').json()
+    cron_job = jb(name="every minute", command='echo "JOB-RAN $MARK $SHARED_X $SHARED_LONG"; pwd').json()
     check("job created with next run", cron_job["next_run"] and cron_job["schedule"] == "* * * * *", str(cron_job))
-    cl.req("PUT", "/api/system/shared-env", json={"vars": {"SHARED_X": "shared-ok"}})
+    cl.req("PUT", "/api/system/shared-env", json={"vars": {"SHARED_X": "sh-ok", "SHARED_LONG": "long-shared-secret"}})
     now_job = jb(name="now", schedule="0 3 * * *", command='echo "OUT"; echo "ERR" >&2').json()
     r = cl.req("POST", f"/api/apps/{web}/jobs/{now_job['id']}/run"); check("run now accepted", r.status_code == 200)
     time.sleep(2)
@@ -139,7 +139,8 @@ with server(repo, 55022, env={"VENVY_METRICS_FLUSH_SEC": "5", "VENVY_BACKUP_KEEP
     check("disk limit validated", cl.req("PUT", f"/api/apps/{web}", json={"disk_limit_mb": -5}).status_code == 400)
 
     j = next(x for x in cl.req("GET", f"/api/apps/{web}/jobs").json() if x["id"] == cron_job["id"])
-    check("scheduled job ran on its own", j["last_status"] == "ok" and "JOB-RAN hello shared-ok" in j["last_output"] and "/apps/" in j["last_output"], str(j))
+    check("scheduled job ran on its own", j["last_status"] == "ok" and "JOB-RAN hello sh-ok ***" in j["last_output"] and "/apps/" in j["last_output"], str(j))
+    check("scheduled job output masks env values", "long-shared-secret" not in j["last_output"], str(j))
     sch = cl.req("GET", "/api/system/backup/schedule").json()
     deadline = time.time() + 60
     while time.time() < deadline and not (sch["last"] and sch["last"].get("file")):

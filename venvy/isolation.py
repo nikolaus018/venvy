@@ -114,19 +114,23 @@ def _ensure_app_user(app_row: "App") -> Optional[tuple]:
     return ids
 
 
-def _user_pids(uid: int) -> list:
+def _user_pids(uid: int, include_zombies: bool = False) -> list:
     """PIDs of the processes running as *uid* — by any of their real,
     effective, saved or filesystem ids, from /proc/<pid>/status (the owner of
     /proc/<pid> itself turns into root for a process that made itself
-    non-dumpable)."""
+    non-dumpable). Zombies are left out unless asked for: they run nothing
+    and no signal can remove them."""
     pids = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
         try:
+            zombie = False
             for line in (entry / "status").read_text().splitlines():
-                if line.startswith("Uid:"):
-                    if str(uid) in line.split()[1:]:
+                if line.startswith("State:"):
+                    zombie = line.split()[1] == "Z"
+                elif line.startswith("Uid:"):
+                    if str(uid) in line.split()[1:] and (include_zombies or not zombie):
                         pids.append(int(entry.name))
                     break
         except (OSError, ValueError):
@@ -151,7 +155,9 @@ _DANGEROUS_ENV_PREFIXES = ("LD_", "DBUS_", "SYSTEMD_", "GLIBC_TUNABLES")
 def _resolve_system_bin(name: str) -> str:
     """Resolve a system binary from a fixed trusted PATH so an app's PATH
     can never hijack root-privileged wrappers like systemd-run or setpriv."""
-    return shutil.which(name, path=_SYSTEM_BIN_PATH) or name
+    # Never the bare name: exec would look it up in the app's PATH. A path that
+    # does not exist makes the launch fail instead.
+    return shutil.which(name, path=_SYSTEM_BIN_PATH) or f"/usr/bin/{name}"
 
 
 def is_dangerous_env_var(name: str) -> bool:
@@ -213,7 +219,9 @@ def _delete_app_user(app_id: int) -> bool:
         logging.error(f"Processes for user {name} (uid={uid}) did not exit; refusing to remove user.")
         return False
     try:
-        r = subprocess.run([_resolve_system_bin("userdel"), name], capture_output=True, timeout=30)
+        # Only zombies can be left here, and userdel would count them as busy.
+        force = ["--force"] if _user_pids(uid, include_zombies=True) else []
+        r = subprocess.run([_resolve_system_bin("userdel"), *force, name], capture_output=True, timeout=30)
         if r.returncode != 0:
             logging.error(f"Could not remove user {name}: {r.stderr.decode(errors='replace').strip()}")
             return False

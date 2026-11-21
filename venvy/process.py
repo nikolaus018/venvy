@@ -401,8 +401,8 @@ def _systemd_run_available() -> bool:
         sr = _resolve_system_bin("systemd-run")
         sc = _resolve_system_bin("systemctl")
         available = bool(
-            os.path.isabs(sr)
-            and os.path.isabs(sc)
+            os.path.exists(sr)
+            and os.path.exists(sc)
             and Path("/run/systemd/system").exists()
         )
         if available:

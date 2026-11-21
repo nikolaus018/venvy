@@ -679,6 +679,10 @@ async def delete_app(
         await _stop_app_process(app_id, session)
         # Shells opened on the app keep its directory and its Unix user busy.
         await terminal_manager.close_for_app(app_id)
+        # Before anything outside Venvy changes: a failure here leaves the app
+        # and its published routes as they were, so the delete can be retried.
+        if not await asyncio.to_thread(_delete_app_user, app_id):
+            raise HTTPException(500, "Could not terminate all processes or remove the app's system user. Try again.")
 
         # An app has one route per published port. Every one of them has to go:
         # a hostname left in the tunnel keeps forwarding to that port, where the
@@ -710,8 +714,6 @@ async def delete_app(
         for cf_route in cf_routes:
             session.delete(cf_route)
 
-        if not await asyncio.to_thread(_delete_app_user, app_id):
-            raise HTTPException(500, "Could not terminate all processes or remove the app's system user. Try again.")
         app_dir_path = Path(app_row.app_dir)
         if await asyncio.to_thread(app_dir_path.exists):
             await asyncio.to_thread(shutil.rmtree, app_row.app_dir, ignore_errors=True)

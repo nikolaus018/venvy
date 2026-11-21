@@ -3,6 +3,7 @@
 // directory, in the order web/index.html loads them.
         // ── Auth ─────────────────────────────────────────────────────────────────
         let _appInitialized = false;
+        let _reauthUser = null;     // who had unsaved edits when the session expired
 
         async function checkAuth() {
             try {
@@ -10,6 +11,11 @@
                 if (!res.ok) return;
                 const data = await res.json();
                 if (data.authenticated) {
+                    // Edits kept through a session expiry are only for the same user.
+                    if (_reauthUser !== null) {
+                        if (_reauthUser !== data.username) deselectApp();
+                        _reauthUser = null;
+                    }
                     // Hide auth screen, show app — no reload needed
                     document.getElementById('auth-screen').classList.add('hidden');
                     document.getElementById('app-shell').classList.remove('hidden');
@@ -66,7 +72,9 @@
             if (typeof stopBackupOpWatch === 'function') stopBackupOpWatch();
             if (typeof stopDeployPolling === 'function') stopDeployPolling();
             if (typeof _termDestroy === 'function') _termDestroy();
-            if (typeof deselectApp === 'function') deselectApp();
+            // Unsaved edits stay for whoever signs back in; see checkAuth.
+            if (_editorDirty) { _reauthUser = currentUser?.username || ''; _termAppId = null; }
+            else if (typeof deselectApp === 'function') deselectApp();
             if (window._controlPollTimer) { clearInterval(window._controlPollTimer); window._controlPollTimer = null; }
             setAuthKey(null);
             document.getElementById('admin-users-btn')?.classList.add('hidden');
