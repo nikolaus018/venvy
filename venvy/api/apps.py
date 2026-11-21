@@ -43,12 +43,14 @@ from venvy.isolation import (
     _delete_app_user,
     _ensure_app_user,
     _isolation_active,
+    is_dangerous_env_var,
 )
 from venvy.jobs import _running_tasks, _start_job
 from venvy.models import (
     AlertRule, App, AppAccess, CfRoute, EnvHistory, MetricSample, Release, ScheduledJob, User,
 )
 from venvy.process import (
+    _active_app_pids,
     _app_lock,
     _app_locks,
     _app_metrics,
@@ -140,6 +142,10 @@ def list_apps(
         if app_row.status in ("starting", "stopping"):
             continue
         if app_row.status == "running" and app_row.pid:
+            # Skip processes actively managed in this Venvy run — _reap_process
+            # owns their transition so exit codes and crash notifications aren't lost.
+            if _active_app_pids.get(app_row.id) == app_row.pid:
+                continue
             if not _app_pid_alive(app_row):
                 app_row.status = "stopped"
                 app_row.pid = None
@@ -163,12 +169,16 @@ async def _make_venv(row: App, version: Optional[str]) -> None:
     py = runtimes.python_binary(version)
     proc = await asyncio.create_subprocess_exec(
         *_as_app_user(row, [py, "-m", "venv", str(row.venv_path)]),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_app_tool_env(row), cwd=_TOOL_CWD,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_app_tool_env(row),
+        cwd=_TOOL_CWD, start_new_session=True,
     )
     try:
         _, venv_err = await asyncio.wait_for(proc.communicate(), timeout=120)
     except asyncio.TimeoutError:
-        proc.kill()
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            await proc.wait()
         raise HTTPException(500, "venv creation timed out.")
     if proc.returncode != 0:
         err_msg = venv_err.decode(errors="replace")
@@ -188,12 +198,16 @@ async def _install_requirements(row: App) -> None:
         raise HTTPException(500, "pip not found in the virtual environment.")
     proc = await asyncio.create_subprocess_exec(
         *_as_app_user(row, [str(pip_bin), "install", "--no-input", "-r", str(req_path)]),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_app_tool_env(row), cwd=_TOOL_CWD,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_app_tool_env(row),
+        cwd=_TOOL_CWD, start_new_session=True,
     )
     try:
         _, pip_err = await asyncio.wait_for(proc.communicate(), timeout=600)
     except asyncio.TimeoutError:
-        proc.kill()
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            await proc.wait()
         raise HTTPException(500, "pip install timed out after 10 minutes.")
     if proc.returncode != 0:
         raise HTTPException(500, f"pip install failed: {pip_err.decode(errors='replace')}")
@@ -331,13 +345,15 @@ async def upload_app(
             return result
         except BaseException:
             # Failed or cancelled: remove the half-created app entirely.
+            # Stop/remove the user before deleting files so nothing recreates them.
+            await asyncio.to_thread(_delete_app_user, app_id)
             await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
             with Session(engine) as s2:
+                s2.exec(sql_delete(AppAccess).where(AppAccess.app_id == app_id))
                 row = s2.get(App, app_id)
                 if row:
                     s2.delete(row)
-                    s2.commit()
-            await asyncio.to_thread(_delete_app_user, app_id)
+                s2.commit()
             raise
 
     return {**_start_job(user, "app_create", _finish), "app_id": app_id, "skipped_files": skipped_files}
@@ -497,6 +513,8 @@ async def update_app(
             # only failed later, as an unexplained error on start.
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
                 raise HTTPException(400, f"Invalid environment variable name: {env_key!r}")
+            if is_dangerous_env_var(env_key):
+                raise HTTPException(400, f"Environment variable {env_key!r} is not allowed for security reasons.")
             if "\x00" in env_value:
                 raise HTTPException(400, f"Environment variable {env_key} contains a NUL character.")
         _record_env_change(session, app_row, req.env_vars, user.username)
@@ -692,12 +710,13 @@ async def delete_app(
         for cf_route in cf_routes:
             session.delete(cf_route)
 
+        if not await asyncio.to_thread(_delete_app_user, app_id):
+            raise HTTPException(500, "Could not terminate all processes or remove the app's system user. Try again.")
         app_dir_path = Path(app_row.app_dir)
         if await asyncio.to_thread(app_dir_path.exists):
             await asyncio.to_thread(shutil.rmtree, app_row.app_dir, ignore_errors=True)
         await asyncio.to_thread(shutil.rmtree, APP_LOGS_DIR / str(app_id), True)
         (TERMINAL_RC_DIR / f"app-{app_id}.bashrc").unlink(missing_ok=True)
-        await asyncio.to_thread(_delete_app_user, app_id)
         _restart_backoff.pop(app_id, None)
         _app_metrics.pop(app_id, None)
         _package_locks.pop(app_id, None)
@@ -802,6 +821,7 @@ async def list_packages(
     
     # The venv's python runs app-controlled code (.pth files, sitecustomize),
     # so it runs as the app's user, never as Venvy's.
+    await asyncio.to_thread(_ensure_app_user, app_row)
     proc = await asyncio.create_subprocess_exec(
         *_as_app_user(app_row, [str(venv_python), "-m", "pip", "list", "--format=json"]),
         stdin=asyncio.subprocess.DEVNULL,
@@ -809,11 +829,15 @@ async def list_packages(
         stderr=asyncio.subprocess.DEVNULL,
         env=_app_tool_env(app_row),
         cwd=_TOOL_CWD,
+        start_new_session=True,
     )
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
     except asyncio.TimeoutError:
-        proc.kill()
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            await proc.wait()
         return []
     try:
         return json.loads(stdout)
@@ -834,6 +858,7 @@ async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str,
     HTTPException with its stderr on failure or timeout. *cwd* is for tools
     that work on the directory they are started in."""
     async with _package_locks.setdefault(app_row.id, asyncio.Lock()):
+        await asyncio.to_thread(_ensure_app_user, app_row)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *_as_app_user(app_row, argv),
@@ -852,6 +877,8 @@ async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str,
         except asyncio.TimeoutError:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)     # the tool and whatever it started
+            with contextlib.suppress(Exception):
+                await proc.wait()
             raise HTTPException(500, f"{what} timed out after {timeout} seconds.")
         if proc.returncode != 0:
             # Some tools (go, composer, bundler) explain themselves on stdout.
@@ -904,11 +931,15 @@ async def install_package(
         raise HTTPException(400, "This app's runtime has no packages to install.")
 
     async def _job() -> dict:
+        with Session(engine) as s:
+            row = s.get(App, app_id)
+        if not row:
+            raise HTTPException(404, "App no longer exists.")
         if argv is None:
-            await _run_steps(app_row, steps)
+            await _run_steps(row, steps)
         else:
-            await _run_app_tool(app_row, argv, timeout, what)
-        audit_log(user.username, "package_install", f"app '{app_row.name}' (id={app_id}): {pkg_name}")
+            await _run_app_tool(row, argv, timeout, what)
+        audit_log(user.username, "package_install", f"app '{row.name}' (id={app_id}): {pkg_name}")
         return {"ok": True}
 
     return _start_job(user, "package_install", _job)
@@ -949,11 +980,15 @@ async def uninstall_package(
         raise HTTPException(400, "This app's runtime has no packages to remove.")
 
     async def _job() -> dict:
+        with Session(engine) as s:
+            row = s.get(App, app_id)
+        if not row:
+            raise HTTPException(404, "App no longer exists.")
         if argv is None:
-            await _run_steps(app_row, steps)
+            await _run_steps(row, steps)
         else:
-            await _run_app_tool(app_row, argv, timeout, what)
-        audit_log(user.username, "package_uninstall", f"app '{app_row.name}' (id={app_id}): {name}")
+            await _run_app_tool(row, argv, timeout, what)
+        audit_log(user.username, "package_uninstall", f"app '{row.name}' (id={app_id}): {name}")
         return {"ok": True}
 
     return _start_job(user, "package_uninstall", _job)
@@ -986,22 +1021,41 @@ async def rebuild_venv(
         raise HTTPException(400, str(exc))
 
     async def _job() -> dict:
-        async with _package_locks.setdefault(app_id, asyncio.Lock()):
+        async with _app_lock(app_id), _package_locks.setdefault(app_id, asyncio.Lock()):
             with Session(engine) as s:
                 row = s.get(App, app_id)
-            await asyncio.to_thread(_ensure_app_user, row)
-            proc = await asyncio.create_subprocess_exec(
-                *_as_app_user(row, ["rm", "-rf", str(row.venv_path)]), stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, cwd=_TOOL_CWD)
-            await proc.wait()
-            await _make_venv(row, version)
-            await _install_requirements(row)
-            with Session(engine) as s:
-                row = s.get(App, app_id)
-                row.runtime_version = version
+                if not row:
+                    raise HTTPException(404, "App no longer exists.")
+                if row.status in ("running", "starting", "stopping", "installing"):
+                    raise HTTPException(409, "Stop the app first.")
+                app_name = row.name
+                row.status = "installing"
                 s.add(row)
                 s.commit()
-        audit_log(user.username, "app_venv_rebuild", f"app '{app_row.name}' (id={app_id}) python={version or 'default'}")
+            try:
+                await asyncio.to_thread(_ensure_app_user, row)
+                proc = await asyncio.create_subprocess_exec(
+                    *_as_app_user(row, ["rm", "-rf", str(row.venv_path)]), stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, cwd=_TOOL_CWD)
+                await proc.wait()
+                await _make_venv(row, version)
+                await _install_requirements(row)
+                with Session(engine) as s:
+                    row = s.get(App, app_id)
+                    if row:
+                        row.runtime_version = version
+                        row.status = "stopped"
+                        s.add(row)
+                        s.commit()
+            except BaseException:
+                with Session(engine) as s:
+                    row = s.get(App, app_id)
+                    if row and row.status == "installing":
+                        row.status = "stopped"
+                        s.add(row)
+                        s.commit()
+                raise
+        audit_log(user.username, "app_venv_rebuild", f"app '{app_name}' (id={app_id}) python={version or 'default'}")
         return {"ok": True, "version": version}
 
     return _start_job(user, "venv_rebuild", _job)
@@ -1026,8 +1080,12 @@ async def sync_packages(
         raise HTTPException(400, "There is no manifest in the app's folder to install from.")
 
     async def _job() -> dict:
-        await _run_steps(app_row, steps)
-        audit_log(user.username, "package_sync", f"app '{app_row.name}' (id={app_id})")
+        with Session(engine) as s:
+            row = s.get(App, app_id)
+        if not row:
+            raise HTTPException(404, "App no longer exists.")
+        await _run_steps(row, steps)
+        audit_log(user.username, "package_sync", f"app '{row.name}' (id={app_id})")
         return {"ok": True}
 
     return _start_job(user, "package_sync", _job)
@@ -1117,7 +1175,10 @@ def _scan_imported_modules(root: Path) -> Set[str]:
                 with fileobj:
                     if st.st_size > _SCAN_MAX_FILE_BYTES:
                         continue
-                    text = fileobj.read().decode("utf-8", errors="replace")
+                    raw = fileobj.read(_SCAN_MAX_FILE_BYTES + 1)
+                    if len(raw) > _SCAN_MAX_FILE_BYTES:
+                        continue
+                    text = raw.decode("utf-8", errors="replace")
                 tree = ast.parse(text)
             except (AppPathError, OSError, SyntaxError, ValueError, RecursionError, MemoryError):
                 # Not a plain file we can reach without following a link, or not
@@ -1150,6 +1211,7 @@ async def scan_imports(
 
     installed: Set[str] = set()
     if venv_python.exists():
+        await asyncio.to_thread(_ensure_app_user, app_row)
         proc = await asyncio.create_subprocess_exec(
             *_as_app_user(app_row, [str(venv_python), "-m", "pip", "list", "--format=json"]),
             stdin=asyncio.subprocess.DEVNULL,
@@ -1157,11 +1219,15 @@ async def scan_imports(
             stderr=asyncio.subprocess.DEVNULL,
             env=_app_tool_env(app_row),
             cwd=_TOOL_CWD,
+            start_new_session=True,
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
         except asyncio.TimeoutError:
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(Exception):
+                await proc.wait()
             stdout = b"[]"
         try:
             for pkg in json.loads(stdout):

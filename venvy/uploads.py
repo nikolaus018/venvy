@@ -7,12 +7,26 @@ file-count limit applies. The single-request endpoints remain for API clients.
 import os
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
+from typing import Dict
 
 from fastapi import HTTPException, UploadFile
 
 from venvy.config import _UPLOAD_TMP_DIR
+
+_upload_part_locks: Dict[str, threading.Lock] = {}
+_upload_part_locks_guard = threading.Lock()
+
+
+def _part_lock(part: Path) -> threading.Lock:
+    key = str(part)
+    with _upload_part_locks_guard:
+        if len(_upload_part_locks) > 4096:
+            for k in [k for k, lk in _upload_part_locks.items() if not lk.locked()]:
+                _upload_part_locks.pop(k, None)
+        return _upload_part_locks.setdefault(key, threading.Lock())
 
 
 # Uploads. The UI sends every file through the chunked endpoints below, so
@@ -60,33 +74,36 @@ def _append_upload_chunk(part: Path, chunk: UploadFile, offset: int, total: int)
     """Append one chunk to *part* and return the bytes it now holds. The
     client sends chunks in order: *offset* must equal what has arrived so far
     (a mismatch answers 409 with the real count, so the client resumes from
-    there). The first chunk checks there is room for the whole file. Blocking."""
-    if offset == 0:
-        free = shutil.disk_usage(part.parent).free
-        if total + 256 * 1024 * 1024 > free:
-            raise HTTPException(507, "Not enough free disk space for this upload.")
-        mode = "wb"
-    else:
-        try:
-            have = part.stat().st_size
-        except FileNotFoundError:
+    there). Checks there is room for the remaining bytes. Blocking."""
+    with _part_lock(part):
+        if offset == 0:
             have = 0
-        if have != offset:
-            raise HTTPException(409, {"message": "Offset mismatch.", "received": have})
-        mode = "ab"
-    written = 0
-    with open(part, mode) as out:
-        while True:
-            buf = chunk.file.read(_UPLOAD_COPY_BUF)
-            if not buf:
-                break
-            written += len(buf)
-            if written > _UPLOAD_CHUNK_MAX or offset + written > total:
-                out.close()
-                part.unlink(missing_ok=True)
-                raise HTTPException(400, "Chunk is larger than allowed.")
-            out.write(buf)
-    return offset + written
+            mode = "wb"
+        else:
+            try:
+                have = part.stat().st_size
+            except FileNotFoundError:
+                have = 0
+            if have != offset:
+                raise HTTPException(409, {"message": "Offset mismatch.", "received": have})
+            mode = "ab"
+        free = shutil.disk_usage(part.parent).free
+        remaining = max(0, total - have)
+        if remaining + 256 * 1024 * 1024 > free:
+            raise HTTPException(507, "Not enough free disk space for this upload.")
+        written = 0
+        with open(part, mode) as out:
+            while True:
+                buf = chunk.file.read(_UPLOAD_COPY_BUF)
+                if not buf:
+                    break
+                written += len(buf)
+                if written > _UPLOAD_CHUNK_MAX or offset + written > total:
+                    out.close()
+                    part.unlink(missing_ok=True)
+                    raise HTTPException(400, "Chunk is larger than allowed.")
+                out.write(buf)
+        return offset + written
 
 
 def _purge_stale_upload_parts() -> None:

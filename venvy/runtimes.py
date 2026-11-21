@@ -248,7 +248,7 @@ def clean_entrypoint(key: str, raw: str) -> str:
     if ep == "":
         return ""
     name = Path(ep).name
-    if not name or name != ep:
+    if not name or name != ep or name in (".", "..") or name.startswith("-"):
         noun = "folder name" if key == "static" else "filename"
         # (Not inlined: the same quotes nested in an f-string are a syntax
         # error before Python 3.12, and Venvy runs on 3.10.)
@@ -321,8 +321,16 @@ def start_command(key: str, app_dir: Path, entrypoint: str, port: Optional[int],
 
 def start_problem(key: str, app_dir: Path, entrypoint: str) -> Optional[str]:
     """Something that would make the app fail at once, said in words — or None."""
-    if key == "static" and entrypoint and not (app_dir / entrypoint).is_dir():
-        return f"The site folder '{entrypoint}' does not exist. Upload it, or clear the setting to pick one automatically."
+    if key == "static" and entrypoint:
+        candidate = app_dir / entrypoint
+        try:
+            real_root = app_dir.resolve()
+            real_cand = candidate.resolve()
+            inside = real_cand == real_root or real_root in real_cand.parents
+        except OSError:
+            inside = False
+        if candidate.is_symlink() or not inside or not candidate.is_dir():
+            return f"The site folder '{entrypoint}' does not exist. Upload it, or clear the setting to pick one automatically."
     if key == "go" and not (app_dir / "go.mod").is_file():
         return "There is no go.mod in the app's folder. Upload one, or run go mod init in the Terminal tab."
     return None

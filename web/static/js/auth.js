@@ -16,7 +16,7 @@
                     document.getElementById('current-user').innerText = data.username;
                     document.getElementById('user-avatar').innerText = (data.username || 'U')[0].toUpperCase();
                     currentUser = data;
-                    if (data.role === 'admin') document.getElementById('admin-users-btn').classList.remove('hidden');
+                    document.getElementById('admin-users-btn').classList.toggle('hidden', data.role !== 'admin');
                     applyRoleUiGating(data.role);
                     if (!_appInitialized) {
                         _appInitialized = true;
@@ -56,12 +56,20 @@
             document.body.classList.toggle('role-viewer', isViewer);
         }
 
-        // Called when polling detects session has expired (3 consecutive 401s).
+        // Called when polling detects session has expired (10 consecutive 401s).
         // Shows a minimal re-auth overlay without wiping the current view — feels
         // native on iOS PWA instead of a jarring white-flash reload.
         function _showReAuthOverlay() {
             // If the full auth screen is already showing, nothing to do
             if (!document.getElementById('auth-screen').classList.contains('hidden')) return;
+            // Tear down active polling, watchers, terminal, and expired session key
+            if (typeof stopBackupOpWatch === 'function') stopBackupOpWatch();
+            if (typeof stopDeployPolling === 'function') stopDeployPolling();
+            if (typeof _termDestroy === 'function') _termDestroy();
+            if (typeof deselectApp === 'function') deselectApp();
+            if (window._controlPollTimer) { clearInterval(window._controlPollTimer); window._controlPollTimer = null; }
+            setAuthKey(null);
+            document.getElementById('admin-users-btn')?.classList.add('hidden');
             // Reset login form to clean state
             _loginTotpPending = false;
             const step1 = document.getElementById('login-step-password');
@@ -127,7 +135,7 @@
                     if (!code) { showToast('Enter the 6-digit code.', 'warn'); return; }
                     submitBtn.disabled = true; submitBtn.textContent = 'Verifying…';
                     const res = await fetch(API + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p, totp_code: code }) });
-                    if (res.ok) { setAuthKey((await res.json()).auth_key); await checkAuth(); }
+                    if (res.ok) { _loginTotpPending = false; setAuthKey((await res.json()).auth_key); await checkAuth(); }
                     else {
                         const err = await res.json().catch(() => ({ detail: 'Invalid code' }));
                         showToast(err.detail || 'Invalid code', 'error');

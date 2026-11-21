@@ -67,7 +67,7 @@ RELEASE_PUBKEY='-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAajX9BBDJMsBY6qPPyBa9/svuCnIenVQIx7WhO2tGpUM=
 -----END PUBLIC KEY-----'
 
-VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; WITH_NODE=0; WITH_GO=0; WITH_BUN=0; WITH_DENO=0; WITH_PHP=0; WITH_RUBY=0; WITH_JAVA=0; APP_USERS=""; UNINSTALL=0
+VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; WITH_NODE=0; WITH_GO=0; WITH_BUN=0; WITH_DENO=0; WITH_PHP=0; WITH_RUBY=0; WITH_JAVA=0; APP_USERS=""; UNINSTALL=0; ALLOW_DOWNGRADE=0
 
 # Printed from here rather than read back out of this file: piped into bash
 # from curl there is no file to read.
@@ -120,6 +120,7 @@ while [ $# -gt 0 ]; do
     --with-all)  WITH_RUST=1; WITH_NODE=1; WITH_GO=1; WITH_BUN=1; WITH_DENO=1; WITH_PHP=1; WITH_RUBY=1; WITH_JAVA=1; shift ;;
     --app-users) APP_USERS=1; shift ;;     # the default for a new install; kept for scripts
     --shared-user) APP_USERS=0; shift ;;
+    --allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)   usage; exit 0 ;;
     *)           die "Unknown option: $1 (see --help)" ;;
@@ -326,6 +327,27 @@ done
 REL_VERSION="$(tr -cd '0-9A-Za-z._-' < "$TMP/src/VERSION")"
 [ -n "$REL_VERSION" ] || die "The release archive has no version."
 
+# Refuse silent downgrades to an older (still validly signed) release unless
+# explicitly requested with --allow-downgrade.
+if [ "$ALLOW_DOWNGRADE" -eq 0 ] && [ -f "$CODE_DIR/current/VERSION" ]; then
+  CUR_VERSION="$(tr -cd '0-9A-Za-z._-' < "$CODE_DIR/current/VERSION")"
+  if [ -n "$CUR_VERSION" ]; then
+    python3 - "$CUR_VERSION" "$REL_VERSION" <<'PY' || die "Refusing to downgrade from $CUR_VERSION to $REL_VERSION (pass --allow-downgrade to override)."
+import re, sys
+def parse(v):
+    m = re.match(r"^v?(\d+(?:\.\d+)*)(.*)$", v.strip())
+    if not m:
+        return None
+    nums = tuple(int(x) for x in m.group(1).split("."))
+    pre = m.group(2)
+    return (nums, 0 if pre else 1)
+cur, rel = parse(sys.argv[1]), parse(sys.argv[2])
+if cur is not None and rel is not None and rel < cur:
+    sys.exit(1)
+PY
+  fi
+fi
+
 # ── 3. Prepare the release next to the running one ───────────────────────────
 REL_DIR="$CODE_DIR/releases/$REL_VERSION"
 PREV_DIR="$(readlink -f "$CODE_DIR/current" 2>/dev/null || true)"
@@ -423,22 +445,46 @@ if [ "$HAND_OVER" -eq 1 ]; then
   chmod 750 "$DATA_DIR"
 fi
 
-if [ -f "$DATA_DIR/data.db" ]; then
+if [ ! -L "$DATA_DIR/data.db" ] && [ -f "$DATA_DIR/data.db" ]; then
   # Named like Venvy's own database-only backups, so it shows up (and can be
-  # downloaded) under System → Backups.
+  # downloaded) under System → Backups. Run as $RUN_USER when non-root so
+  # root never follows symlinks inside $RUN_USER-owned $DATA_DIR.
   SNAP="$DATA_DIR/backups/data-$(date -u +%Y%m%d-%H%M%S).db"
   say "Snapshotting the database -> $SNAP"
-  install -d -m 700 -o "$RUN_USER" -g "$RUN_GROUP" "$DATA_DIR/backups"
-  python3 - "$DATA_DIR/data.db" "$SNAP" <<'PY'
-import sqlite3, sys
-src = sqlite3.connect(sys.argv[1]); dst = sqlite3.connect(sys.argv[2])
+  _snap_py='
+import os, sqlite3, sys
+data_dir, snap, keep = sys.argv[1], sys.argv[2], int(sys.argv[3])
+bdir = os.path.join(data_dir, "backups")
+if os.path.islink(bdir):
+    sys.exit("Refusing to follow symlink at backups directory")
+os.makedirs(bdir, mode=0o700, exist_ok=True)
+os.chmod(bdir, 0o700)
+if os.path.islink(snap):
+    sys.exit("Refusing to follow symlink at snapshot path")
+fd = os.open(snap, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+os.close(fd)
+src = sqlite3.connect(os.path.join(data_dir, "data.db"))
+dst = sqlite3.connect(snap)
 with dst:
     src.backup(dst)
 dst.close(); src.close()
-PY
-  chown "$RUN_USER:$RUN_GROUP" "$SNAP"; chmod 600 "$SNAP"
-  # shellcheck disable=SC2012
-  ls -1t "$DATA_DIR"/backups/data-*.db 2>/dev/null | tail -n +$((KEEP_DB_SNAPSHOTS + 1)) | while read -r old; do rm -f "$old"; done
+os.chmod(snap, 0o600)
+snaps = sorted(
+    (os.path.join(bdir, f) for f in os.listdir(bdir) if f.startswith("data-") and f.endswith(".db") and not os.path.islink(os.path.join(bdir, f))),
+    key=lambda p: os.path.getmtime(p),
+    reverse=True,
+)
+for old in snaps[keep:]:
+    try:
+        os.unlink(old)
+    except OSError:
+        pass
+'
+  if [ "$RUN_USER" != "root" ]; then
+    runuser -u "$RUN_USER" -- python3 -c "$_snap_py" "$DATA_DIR" "$SNAP" "$KEEP_DB_SNAPSHOTS"
+  else
+    python3 -c "$_snap_py" "$DATA_DIR" "$SNAP" "$KEEP_DB_SNAPSHOTS"
+  fi
 fi
 
 rm -rf "$REL_DIR"
@@ -612,8 +658,9 @@ case "$HOST" in 127.0.0.1|localhost|::1) SHOW="127.0.0.1 (this machine only — 
 echo
 say "Venvy $REL_VERSION is running."
 say "  Open:      http://$SHOW:$PORT"
-if [ -f "$DATA_DIR/.setup-code" ]; then
-  say "             the first visit creates the admin account, with setup code: $(cat "$DATA_DIR/.setup-code")"
+if [ -z "$PREV_DIR" ] && [ ! -L "$DATA_DIR/.setup-code" ] && [ -f "$DATA_DIR/.setup-code" ]; then
+  _code="$(python3 -c 'import os, sys; fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW); print(os.read(fd, 64).decode(errors="replace").strip()); os.close(fd)' "$DATA_DIR/.setup-code" 2>/dev/null || true)"
+  [ -n "$_code" ] && say "             the first visit creates the admin account, with setup code: $_code"
 fi
 say "  Settings:  $ENV_FILE   (then: systemctl restart venvy)"
 say "  Data:      $DATA_DIR"

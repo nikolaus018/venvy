@@ -46,7 +46,7 @@
         // network hiccup (common when iOS resumes a backgrounded PWA).
         let _loginTotpPending = false; // waiting for TOTP code after password OK
         let _pollFailures = 0;
-        const _MAX_POLL_FAILURES = 3;
+        const _MAX_POLL_FAILURES = 10;
 
         let _pollInflight = false;
         let _pollTick = 0;
@@ -64,7 +64,7 @@
                     if (!res.ok) {
                         if (res.status === 401) {
                             _pollFailures++;
-                            if (_pollFailures >= 10) { // More lenient
+                            if (_pollFailures >= _MAX_POLL_FAILURES) {
                                 clearInterval(pollInterval);
                                 pollInterval = null;
                                 _showReAuthOverlay();

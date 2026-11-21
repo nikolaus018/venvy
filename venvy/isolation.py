@@ -134,43 +134,93 @@ def _user_pids(uid: int) -> list:
     return pids
 
 
-def _kill_user_processes(uid: int) -> None:
-    """SIGKILL everything running as *uid*. Blocking, a second at most."""
-    for _ in range(10):
+_SYSTEM_BIN_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Dynamic-linker, glibc, and systemd/D-Bus variables that would be honoured by
+# root-privileged wrappers (systemd-run, setpriv) or alter loader behaviour
+# before privileges are dropped.
+_DANGEROUS_ENV_EXACT = frozenset({
+    "GCONV_PATH", "LOCPATH", "HOSTALIASES", "GETCONF_DIR", "NLSPATH",
+    "RESOLV_HOST_CONF", "RES_OPTIONS", "LOCALDOMAIN", "TZDIR",
+    "BASH_ENV", "ENV", "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME",
+    "MALLOC_CHECK_", "MALLOC_TRACE",
+})
+_DANGEROUS_ENV_PREFIXES = ("LD_", "DBUS_", "SYSTEMD_", "GLIBC_TUNABLES")
+
+
+def _resolve_system_bin(name: str) -> str:
+    """Resolve a system binary from a fixed trusted PATH so an app's PATH
+    can never hijack root-privileged wrappers like systemd-run or setpriv."""
+    return shutil.which(name, path=_SYSTEM_BIN_PATH) or name
+
+
+def is_dangerous_env_var(name: str) -> bool:
+    """True if *name* is a loader, IPC, or shell-hook variable apps must not set."""
+    up = name.upper()
+    return (
+        up in _DANGEROUS_ENV_EXACT
+        or any(up.startswith(p) for p in _DANGEROUS_ENV_PREFIXES)
+        or "PYDEVD" in up
+        or "DEBUGPY" in up
+    )
+
+
+def strip_dangerous_env_vars(env: dict) -> None:
+    """Remove dangerous loader/IPC/hook variables from *env* in place."""
+    for key in [k for k in env if is_dangerous_env_var(k)]:
+        env.pop(key, None)
+
+
+def _kill_user_processes(uid: int) -> bool:
+    """SIGSTOP then SIGKILL everything running as *uid*. Returns True when none remain."""
+    for _ in range(20):
         pids = _user_pids(uid)
         if not pids:
-            return
+            return True
+        # Stop before killing so a fork loop cannot outpace per-PID SIGKILL.
+        for pid in pids:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGSTOP)
         for pid in pids:
             with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGKILL)
         time.sleep(0.1)
+    return not _user_pids(uid)
 
 
-def _delete_app_user(app_id: int) -> None:
+def _delete_app_user(app_id: int) -> bool:
     """Remove the app's user — and first whatever still runs as it. Stopping
     the app and closing its terminals ends what Venvy started, but not what
     those started on their own (a daemon, a `nohup … &` from the terminal).
     Left running, it would also keep userdel from removing the user; and app
     ids are handed out again, so the next app with this id would get the same
-    user, and those processes would have its files."""
+    user, and those processes would have its files.
+    Returns True if the user is gone (or isolation is off), False on failure."""
     if not _isolation_active():
-        return
+        return True
     import pwd
     name = _app_username(app_id)
     try:
         uid = pwd.getpwnam(name).pw_uid
     except KeyError:
-        return
+        return True
     if uid == 0:
-        return
+        return False
+    cleared = False
     with contextlib.suppress(Exception):
-        _kill_user_processes(uid)
+        cleared = _kill_user_processes(uid)
+    if not cleared:
+        logging.error(f"Processes for user {name} (uid={uid}) did not exit; refusing to remove user.")
+        return False
     try:
-        r = subprocess.run(["userdel", name], capture_output=True, timeout=30)
+        r = subprocess.run([_resolve_system_bin("userdel"), name], capture_output=True, timeout=30)
         if r.returncode != 0:
             logging.error(f"Could not remove user {name}: {r.stderr.decode(errors='replace').strip()}")
+            return False
+        return True
     except Exception as exc:
         logging.error(f"Could not remove user {name}: {exc}")
+        return False
 
 
 def _chown_app_dir(app_row: "App") -> None:
@@ -191,10 +241,12 @@ def _as_app_user(app_row: "App", argv: list) -> list:
     ("unexpected kwargs: user, group, extra_groups"), which made every venv,
     pip and git run fail under per-app users. setpriv execs the command, so
     the PID the caller gets is the command's own."""
+    if not _isolation_active():
+        return list(argv)
     ids = _app_ids(app_row)
     if not ids:
-        return list(argv)
-    return ["setpriv", f"--reuid={ids[0]}", f"--regid={ids[1]}", "--clear-groups", "--", *argv]
+        raise RuntimeError(f"App user for app {app_row.id} does not exist.")
+    return [_resolve_system_bin("setpriv"), f"--reuid={ids[0]}", f"--regid={ids[1]}", "--clear-groups", "--", *argv]
 
 
 def _app_tool_env(app_row: "App") -> Dict[str, str]:

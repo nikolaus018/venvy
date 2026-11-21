@@ -121,6 +121,9 @@ async def _check_app(app_id: int, restart) -> None:
                         app.id, app.name, "error")
             logging.warning(f"App '{app.name}' is unhealthy: {res['error']}")
         if app.health_restart:
+            from venvy import deploy as _deploy
+            if _deploy.is_running(app.id):
+                return
             logging.warning(f"Restarting '{app.name}' after {h['failures']} failed health checks.")
             h["failures"] = 0
             await restart(app.id)

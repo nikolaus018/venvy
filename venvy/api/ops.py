@@ -67,9 +67,12 @@ class SharedEnvReq(BaseModel):
 
 
 def check_env_vars(values: Dict[str, str]) -> Dict[str, str]:
+    from venvy.isolation import is_dangerous_env_var
     for k, v in values.items():
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
             raise HTTPException(400, f"Invalid environment variable name: {k!r}")
+        if is_dangerous_env_var(k):
+            raise HTTPException(400, f"Environment variable {k!r} is not allowed for security reasons.")
         if "\x00" in v:
             raise HTTPException(400, f"Environment variable {k} contains a NUL character.")
     return values
@@ -305,7 +308,7 @@ def delete_backup_remote(admin: User = Depends(check_admin)):
 
 
 @router.post("/system/backup/remote/test")
-async def test_backup_remote(cfg: Optional[Dict[str, object]] = None, _: User = Depends(check_admin),
+async def test_backup_remote(cfg: Optional[Dict[str, object]] = None, admin: User = Depends(check_admin),
                              _rl: None = Depends(rate_limit_mutations)):
     """Upload a small file with the saved settings (or the ones in the body, unsaved)."""
     try:
@@ -314,6 +317,8 @@ async def test_backup_remote(cfg: Optional[Dict[str, object]] = None, _: User = 
         raise HTTPException(400, str(exc))
     if not use:
         raise HTTPException(400, "No off-site copy is set up.")
+    if cfg:
+        audit_log(admin.username, "backup_remote_test", f"unsaved kind={use.get('kind', '')}")
     try:
         where = await remote_backup.test(use)
     except remote_backup.RemoteError as exc:

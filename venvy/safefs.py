@@ -1,11 +1,14 @@
 """Path checks and symlink-safe file access inside app directories."""
 import contextlib
+import errno
 import os
 import secrets
 import shutil
 import urllib.parse
 from pathlib import Path
 from typing import List, Optional
+
+_FS_MAX_DEPTH = 64
 
 
 def is_safe_path(root: Path, target: Path) -> bool:
@@ -116,7 +119,11 @@ def _open_app_dir(root: Path, parts: tuple, create: bool = False, owner: Optiona
                         os.mkdir(part, 0o755, dir_fd=fd)
                     nfd = os.open(part, _O_NOFOLLOW_DIR, dir_fd=fd)
                     if owner:
-                        os.fchown(nfd, *owner)
+                        try:
+                            os.fchown(nfd, *owner)
+                        except OSError:
+                            os.close(nfd)
+                            raise
             except OSError as exc:
                 # ELOOP / ENOTDIR: a symlink or a plain file where a folder
                 # was expected.
@@ -154,7 +161,7 @@ def _fs_write_new(dir_fd: int, name: str, chunks, mode: int, owner: Optional[tup
     """Write *chunks* to dir_fd/name via a temp file + rename, so a crash or
     full disk never leaves a truncated file behind. Returns False (nothing
     changed) if the data exceeds *limit* bytes."""
-    tmp = f".{name}.venvy-{secrets.token_hex(4)}.tmp"
+    tmp = f".venvy-{secrets.token_hex(8)}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, 0o600, dir_fd=dir_fd)
     try:
         written = 0
@@ -166,9 +173,9 @@ def _fs_write_new(dir_fd: int, name: str, chunks, mode: int, owner: Optional[tup
                 f.write(chunk)
             f.flush()
             os.fsync(f.fileno())
-            os.fchmod(f.fileno(), mode)
             if owner:
                 os.fchown(f.fileno(), *owner)
+            os.fchmod(f.fileno(), mode & 0o777)
         # rename() replaces a symlink itself, it never writes through one.
         os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
         return True
@@ -192,7 +199,7 @@ def _fs_save(root: Path, parts: tuple, data: bytes, owner: Optional[tuple]) -> N
         st = _fs_lstat(dfd, parts[-1])
         if _fs_is_dir(st):
             raise AppPathError(409, "That path is a folder.")
-        mode = _stat.S_IMODE(st.st_mode) if st is not None and _stat.S_ISREG(st.st_mode) else 0o644
+        mode = (st.st_mode & 0o777) if st is not None and _stat.S_ISREG(st.st_mode) else 0o644
         _fs_write_new(dfd, parts[-1], [data], mode, owner)
 
 
@@ -213,7 +220,9 @@ def _fs_install(root: Path, parts: tuple, src: Path, owner: Optional[tuple]) -> 
             os.lchown(src, *owner)
         try:
             os.replace(src, parts[-1], dst_dir_fd=dfd)
-        except OSError:
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
             # Different filesystem (e.g. DATA_DIR/apps is a mount) — copy instead.
             mode = os.stat(src).st_mode & 0o777
             with open(src, "rb") as f:
@@ -241,9 +250,11 @@ def _fs_mkdir(root: Path, parts: tuple, owner: Optional[tuple]) -> None:
         pass
 
 
-def _fs_rmtree(dir_fd: int, name: str) -> None:
+def _fs_rmtree(dir_fd: int, name: str, _depth: int = 0) -> None:
     """Remove the directory dir_fd/name and everything in it, best effort,
     descending only into real directories (never through a symlink)."""
+    if _depth > _FS_MAX_DEPTH:
+        raise AppPathError(400, "Folder nesting is too deep.")
     try:
         sub = os.open(name, _O_NOFOLLOW_DIR, dir_fd=dir_fd)
     except OSError:
@@ -255,7 +266,7 @@ def _fs_rmtree(dir_fd: int, name: str) -> None:
             entries = [(e.name, e.is_dir(follow_symlinks=False)) for e in it]
         for child, is_dir in entries:
             if is_dir:
-                _fs_rmtree(sub, child)
+                _fs_rmtree(sub, child, _depth + 1)
             else:
                 with contextlib.suppress(OSError):
                     os.unlink(child, dir_fd=sub)
@@ -276,10 +287,12 @@ def _fs_delete(root: Path, parts: tuple) -> None:
             os.unlink(parts[-1], dir_fd=dfd)
 
 
-def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner: Optional[tuple]) -> None:
+def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner: Optional[tuple], _depth: int = 0) -> None:
     """Copy one directory entry (file, symlink or whole directory) between
     two directory fds. Symlinks are copied as symlinks, never followed."""
     import stat as _stat
+    if _depth > _FS_MAX_DEPTH:
+        raise AppPathError(400, "Folder nesting is too deep.")
     st = os.stat(src_name, dir_fd=src_fd, follow_symlinks=False)
     if _stat.S_ISLNK(st.st_mode):
         os.symlink(os.readlink(src_name, dir_fd=src_fd), dst_name, dir_fd=dst_fd)
@@ -296,23 +309,27 @@ def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner
                 with os.scandir(s_sub) as it:
                     names = [e.name for e in it]
                 for name in names:
-                    _fs_copy_entry(s_sub, name, d_sub, name, owner)
-                os.fchmod(d_sub, _stat.S_IMODE(st.st_mode))
+                    _fs_copy_entry(s_sub, name, d_sub, name, owner, _depth + 1)
+                os.fchmod(d_sub, st.st_mode & 0o777)
             finally:
                 os.close(d_sub)
         finally:
             os.close(s_sub)
     elif _stat.S_ISREG(st.st_mode):
-        fd = os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW | _O_CLOEXEC, dir_fd=src_fd)
+        flags = os.O_RDONLY | os.O_NOFOLLOW | _O_CLOEXEC | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(src_name, flags, dir_fd=src_fd)
         with os.fdopen(fd, "rb") as f:
-            if foreign_hardlink(os.fstat(fd), os.fstat(src_fd)):
+            fst = os.fstat(fd)
+            if not _stat.S_ISREG(fst.st_mode) or foreign_hardlink(fst, os.fstat(src_fd)):
                 return
+            with contextlib.suppress(OSError, AttributeError):
+                os.set_blocking(fd, True)
             out = os.open(dst_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, 0o600, dir_fd=dst_fd)
             with os.fdopen(out, "wb") as o:
                 shutil.copyfileobj(f, o, _FS_COPY_BUF)
-                os.fchmod(o.fileno(), _stat.S_IMODE(st.st_mode))
                 if owner:
                     os.fchown(o.fileno(), *owner)
+                os.fchmod(o.fileno(), st.st_mode & 0o777)
         os.utime(dst_name, ns=(st.st_atime_ns, st.st_mtime_ns), dir_fd=dst_fd, follow_symlinks=False)
 
 
@@ -375,10 +392,11 @@ def _fs_listdir(root: Path, parts: tuple) -> List[dict]:
             out = []
             with os.scandir(dfd) as it:
                 for entry in it:
-                    follow = True
-                    with contextlib.suppress(OSError):
-                        if entry.is_symlink():
-                            follow = is_safe_path(root_r, here / entry.name)
+                    follow = False
+                    try:
+                        follow = is_safe_path(root_r, here / entry.name) if entry.is_symlink() else True
+                    except OSError:
+                        follow = False
                     try:
                         size = entry.stat(follow_symlinks=follow).st_size
                     except OSError:

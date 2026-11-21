@@ -307,10 +307,8 @@ async def system_ports(
                     pass
         return free
 
-    listening_raw, app_rows = await asyncio.gather(
-        asyncio.to_thread(_collect_listening),
-        asyncio.to_thread(lambda: session.exec(select(App)).all()),
-    )
+    listening_raw = await asyncio.to_thread(_collect_listening)
+    app_rows = session.exec(select(App)).all()
 
     seen: Set[int] = set()
     result = []

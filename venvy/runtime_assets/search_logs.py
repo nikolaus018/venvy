@@ -43,10 +43,16 @@ def main() -> None:
                     if len(m["after"]) < ctx:
                         m["after"].append(line)
                 pending = [m for m in pending if len(m["after"]) < ctx]
+                if truncated:
+                    if not pending or scanned > MAX_SCAN_BYTES:
+                        break
+                    continue
                 if rx.search(line):
                     if len(matches) >= limit:
                         truncated = True
-                        break
+                        if not pending:
+                            break
+                        continue
                     m = {"file": name, "line": n, "text": line, "before": window[-ctx:] if ctx else [], "after": []}
                     matches.append(m)
                     if ctx:

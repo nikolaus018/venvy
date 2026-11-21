@@ -160,7 +160,7 @@
                 <div><p class="section-label mb-1.5">Events</p>
                     <label class="flex items-center gap-2 text-sm mb-1.5 select-none cursor-pointer" style="color:var(--text2)"><input type="checkbox" id="ch-all" class="rounded" ${!c || c.events === '*' ? 'checked' : ''}> All events</label>
                     <div id="ch-events" class="grid grid-cols-1 gap-1 pl-1 ${!c || c.events === '*' ? 'opacity-40 pointer-events-none' : ''}">
-                        ${Object.entries(events).map(([k, d]) => `<label class="flex items-start gap-2 text-xs select-none cursor-pointer" style="color:var(--text2)"><input type="checkbox" class="ch-ev rounded mt-0.5" value="${k}" ${sel.has(k) ? 'checked' : ''}> <span>${escapeHtml(d)}</span></label>`).join('')}
+                        ${Object.entries(events).map(([k, d]) => `<label class="flex items-start gap-2 text-xs select-none cursor-pointer" style="color:var(--text2)"><input type="checkbox" class="ch-ev rounded mt-0.5" value="${escapeHtml(k)}" ${sel.has(k) ? 'checked' : ''}> <span>${escapeHtml(d)}</span></label>`).join('')}
                     </div></div>
                 <label class="flex items-center gap-2 text-sm cursor-pointer select-none" style="color:var(--text2)"><input type="checkbox" id="ch-enabled" class="rounded" ${!c || c.enabled ? 'checked' : ''}> Enabled</label>
                 <div class="flex gap-3"><button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" data-on-click="closeModal('channel-modal')">Cancel</button>
@@ -264,7 +264,7 @@
                 <div class="flex items-center gap-2 mt-3 flex-wrap">
                     <button class="btn-primary px-4 py-2 text-xs font-bold" data-on-click="saveBackupSchedule()">Save schedule</button>
                     <button class="btn-ghost px-3 py-2 text-xs" data-on-click="runScheduledBackupNow()">Run it now</button>
-                    <span class="text-xs" style="color:var(--text3)" id="sch-status">${scheduleStatusText(d)}</span>
+                    <span class="text-xs" style="color:var(--text3)" id="sch-status">${escapeHtml(scheduleStatusText(d))}</span>
                 </div>
 
                 <h3 class="text-sm font-semibold mt-7 mb-1" style="color:var(--text)">Off-site copy</h3>

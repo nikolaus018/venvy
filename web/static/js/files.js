@@ -330,6 +330,8 @@
             if (ok) triggerDownload(`${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(path)}`, name);
         }
 
+        let _openFileSeq = 0;
+
         async function openFile(path, name) {
             if (path === _openFilePath) {
                 document.getElementById('editor-panel').classList.remove('translate-x-full');
@@ -349,16 +351,16 @@
                 });
                 if (!discard) return;
             }
+            const seq = ++_openFileSeq;
             const filenameEl = document.getElementById('current-filename');
             const prevName = filenameEl.innerText, prevPath = filenameEl.dataset.path, prevOpen = _openFilePath;
             const restorePrev = () => { filenameEl.innerText = prevName; filenameEl.dataset.path = prevPath || ''; _openFilePath = prevOpen; };
             filenameEl.innerText = 'Loading…'; filenameEl.dataset.path = ''; _openFilePath = null;
             const ctrl = new AbortController();
-            // If the user switches to another app while this loads, the
-            // editor has been reset for that app: putting this file into it
-            // would have the next Save write it into the wrong application.
+            // If the user switches to another app or clicks another file while this
+            // loads, discard this response so Save never writes to the wrong path.
             const appId = activeAppId;
-            const stale = () => appId !== activeAppId;
+            const stale = () => seq !== _openFileSeq || appId !== activeAppId;
             // On any failure put the header back the way it was: the editor
             // still holds the previous file, and it must stay saveable.
             let res;

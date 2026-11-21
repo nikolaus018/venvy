@@ -11,7 +11,9 @@ import json
 import logging
 import smtplib
 import ssl
+import threading
 import time
+import urllib.parse
 from email.message import EmailMessage
 from typing import Dict, List, Optional
 
@@ -53,6 +55,7 @@ MASK = "***"
 
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _last_sent: Dict[tuple, float] = {}
+_last_sent_lock = threading.Lock()
 _COOLDOWN_SEC = 20.0
 _tasks: set = set()
 
@@ -102,12 +105,34 @@ def masked(kind: str, cfg: dict) -> dict:
     return {k: (MASK if k in secret and v else v) for k, v in cfg.items()}
 
 
+def _url_origin(url: str) -> tuple:
+    p = urllib.parse.urlparse((url or "").strip())
+    return (p.scheme.lower(), p.netloc.lower())
+
+
+def _same_secret_dest(kind: str, new: dict, old: dict) -> bool:
+    """True if reusing masked secrets for *kind* sends them to the same host/security level."""
+    if kind == "webhook":
+        return _url_origin(new.get("url", "")) == _url_origin(old.get("url", ""))
+    if kind == "ntfy":
+        return _url_origin(new.get("url") or "https://ntfy.sh") == _url_origin(old.get("url") or "https://ntfy.sh")
+    if kind == "email":
+        same_host = (new.get("host") or "").strip().lower() == (old.get("host") or "").strip().lower()
+        old_sec = (old.get("security") or "starttls").lower()
+        new_sec = (new.get("security") or "starttls").lower()
+        downgraded = old_sec in ("ssl", "starttls") and new_sec == "none"
+        return same_host and not downgraded
+    return True
+
+
 def merge_secrets(kind: str, new: dict, old: dict) -> dict:
-    """A secret sent back as *** means "unchanged"."""
+    """A secret sent back as *** means "unchanged" — only when the destination
+    has not changed (prevents redirecting stored credentials to another host)."""
     out = dict(new)
+    same_dest = _same_secret_dest(kind, out, old)
     for field in FIELDS[kind]["secret"]:
         if out.get(field) == MASK:
-            if old.get(field):
+            if same_dest and old.get(field):
                 out[field] = old[field]
             else:
                 out.pop(field, None)
@@ -138,22 +163,23 @@ async def _send_one(kind: str, cfg: dict, payload: dict) -> None:
             headers = {"Content-Type": "application/json", "User-Agent": "Venvy"}
             if cfg.get("secret"):
                 headers["X-Venvy-Signature"] = "sha256=" + hmac.new(cfg["secret"].encode(), raw, hashlib.sha256).hexdigest()
-            resp = await http.post(cfg["url"], data=raw, headers=headers)
+            resp = await http.post(cfg["url"], data=raw, headers=headers, allow_redirects=False)
         elif kind == "slack":
-            resp = await http.post(cfg["url"], json={"text": f"*{title}*\n{body}" if body else f"*{title}*"})
+            resp = await http.post(cfg["url"], json={"text": f"*{title}*\n{body}" if body else f"*{title}*"}, allow_redirects=False)
         elif kind == "discord":
-            resp = await http.post(cfg["url"], json={"content": f"**{title}**\n{body}"[:2000]})
+            resp = await http.post(cfg["url"], json={"content": f"**{title}**\n{body}"[:2000]}, allow_redirects=False)
         elif kind == "ntfy":
             base = (cfg.get("url") or "https://ntfy.sh").rstrip("/")
             headers = {"Title": title.encode("ascii", "ignore").decode() or "Venvy"}
             headers["Priority"] = "high" if payload["level"] == "error" else "default"
             if cfg.get("token"):
                 headers["Authorization"] = f"Bearer {cfg['token']}"
-            resp = await http.post(f"{base}/{cfg['topic']}", data=body.encode() or b"-", headers=headers)
+            resp = await http.post(f"{base}/{cfg['topic']}", data=body.encode() or b"-", headers=headers, allow_redirects=False)
         elif kind == "telegram":
             resp = await http.post(
                 f"https://api.telegram.org/bot{cfg['bot_token']}/sendMessage",
-                json={"chat_id": cfg["chat_id"], "text": _text(title, body)[:4000]})
+                json={"chat_id": cfg["chat_id"], "text": _text(title, body)[:4000]},
+                allow_redirects=False)
         else:
             raise ValueError(f"unknown kind {kind}")
         async with resp:
@@ -188,9 +214,11 @@ def _matches(ch: NotifyChannel, event: str) -> bool:
 
 async def _deliver(event: str, payload: dict, only_channel: Optional[int] = None) -> List[dict]:
     with Session(engine) as s:
-        channels = s.exec(select(NotifyChannel).where(NotifyChannel.enabled == True)).all()  # noqa: E712
         if only_channel is not None:
-            channels = [c for c in s.exec(select(NotifyChannel)).all() if c.id == only_channel]
+            ch = s.get(NotifyChannel, only_channel)
+            channels = [ch] if ch else []
+        else:
+            channels = s.exec(select(NotifyChannel).where(NotifyChannel.enabled == True)).all()  # noqa: E712
         targets = [(c.id, c.kind, load_config(c)) for c in channels if only_channel is not None or _matches(c, event)]
     results = []
     for cid, kind, cfg in targets:
@@ -220,12 +248,13 @@ def emit(event: str, title: str, body: str = "", app_id: Optional[int] = None,
     """Send an event to the channels that listen for it. Fire and forget."""
     now = time.monotonic()
     key = (event, app_id, title)
-    if now - _last_sent.get(key, 0.0) < _COOLDOWN_SEC:
-        return
-    _last_sent[key] = now
-    if len(_last_sent) > 2000:
-        for k in [k for k, t in _last_sent.items() if now - t > 600]:
-            _last_sent.pop(k, None)
+    with _last_sent_lock:
+        if now - _last_sent.get(key, 0.0) < _COOLDOWN_SEC:
+            return
+        _last_sent[key] = now
+        if len(_last_sent) > 2000:
+            for k in [k for k, t in _last_sent.items() if now - t > 600]:
+                _last_sent.pop(k, None)
     payload = _payload(event, title, body, app_id, app_name, level)
 
     def _start() -> None:
