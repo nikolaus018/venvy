@@ -67,6 +67,7 @@ curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install
 | `--with-java` | Also install a headless Java runtime. |
 | `--with-all` | All of the above, and Rust. Python and static sites need nothing extra. |
 | `--shared-user` | Run every app as the one `venvy` user instead of one Unix user per app (see [Isolation](#isolation)). |
+| `--allow-downgrade` | Allow installing a release older than the currently installed version. |
 | `--uninstall` | Remove the service and code. Data and config are kept. |
 
 Settings live in `/etc/venvy/venvy.env`, data in `/var/lib/venvy`, code in `/opt/venvy`.

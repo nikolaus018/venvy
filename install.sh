@@ -93,6 +93,7 @@ Options go after `bash -s --`:
   --with-all        all of the runtimes above, and Rust
   --shared-user     run every app as the one 'venvy' user, without per-app
                     users (a new install gets one Unix user per app)
+  --allow-downgrade allow installing a release older than the current one
   --uninstall       remove the service and code (data and config are kept)
 
 Run it again at any time to update. Settings are in /etc/venvy/venvy.env,
