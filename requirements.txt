@@ -2,7 +2,7 @@
 # passes with; install.sh installs exactly these into Venvy's own venv.
 fastapi==0.143.0
 uvicorn[standard]==0.54.0
-sqlmodel==0.0.48
+sqlmodel==0.0.50
 aiofiles==25.1.0
 aiohttp==3.14.5
 cryptography==50.0.2
