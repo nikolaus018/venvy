@@ -1032,6 +1032,7 @@ async def rebuild_venv(
                 row.status = "installing"
                 s.add(row)
                 s.commit()
+                s.refresh(row)
             try:
                 await asyncio.to_thread(_ensure_app_user, row)
                 proc = await asyncio.create_subprocess_exec(

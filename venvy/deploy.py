@@ -743,10 +743,8 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
             # this ran (put_git leaves pruning to the deploy then).
             with contextlib.suppress(Exception):
                 _prune_releases(app_id)
-            rec = {"last_deploy_status": status, "last_deploy_at": utc_now()}
-            if status == "ok":
-                rec["last_deploy_commit"] = commit_sha
-            _record(app_id, **rec)
+            _record(app_id, last_deploy_status=status, last_deploy_at=utc_now(),
+                    last_deploy_commit=commit_sha if status == "ok" else None)
             _state[app_id].update(running=False, status=status, finished=utc_now().isoformat())
             row = _app(app_id)
             name = row.name if row else f"App {app_id}"

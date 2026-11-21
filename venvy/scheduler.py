@@ -163,9 +163,6 @@ async def _run_job(job_id: int, by: str) -> dict:
     except Exception as exc:
         out_tail = f"[venvy] could not run the job: {exc}"
         status = "failed"
-    from venvy import deploy as _deploy
-    for sec in sorted({s for s in _deploy._env_secrets(app) if s}, key=len, reverse=True):
-        out_tail = out_tail.replace(sec, "***")
     duration = time.monotonic() - started
     with Session(engine) as s:
         job = s.get(ScheduledJob, job_id)
@@ -174,8 +171,12 @@ async def _run_job(job_id: int, by: str) -> dict:
             s.add(job)
             s.commit()
     if status != "ok":
+        from venvy import deploy as _deploy
+        notify_tail = out_tail[-600:]
+        for sec in sorted({s for s in _deploy._env_secrets(app) if s}, key=len, reverse=True):
+            notify_tail = notify_tail.replace(sec, "***")
         notify.emit("job_failed", f"{app.name}: job '{name}' {'timed out' if status == 'timeout' else 'failed'}",
-                    out_tail[-600:], app.id, app.name, "error")
+                    notify_tail, app.id, app.name, "error")
     return {"status": status, "exit_code": code, "duration": round(duration, 2), "output": out_tail}
 
 
