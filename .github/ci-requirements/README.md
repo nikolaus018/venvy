@@ -16,5 +16,5 @@ file, regenerate them; CI fails until `tests.txt` has the same pins as
 
 ```bash
 cd .github/ci-requirements
-for n in tests audit checks; do uv pip compile $n.in --generate-hashes --universal --python-version 3.10 -o $n.txt; done
+for n in tests audit checks; do uv pip compile $n.in --generate-hashes --universal --python-version 3.11 -o $n.txt; done
 ```

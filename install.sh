@@ -296,8 +296,8 @@ install_deno() {
 [ "$WITH_BUN" -eq 1 ]  && install_bun
 [ "$WITH_DENO" -eq 1 ] && install_deno
 
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
-  || die "Python 3.10 or newer is required (found $(python3 -V 2>&1)). Debian 12 / Ubuntu 22.04 or later have it."
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
+  || die "Python 3.11 or newer is required (found $(python3 -V 2>&1)). Debian 12 / Ubuntu 24.04 or later have it."
 
 # ── 2. Download and verify ───────────────────────────────────────────────────
 TMP="$(mktemp -d)"

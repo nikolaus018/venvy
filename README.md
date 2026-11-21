@@ -26,7 +26,7 @@ flowchart LR
 
 ## Install
 
-On a fresh Debian 12+ or Ubuntu 22.04+ machine:
+On a fresh Debian 12+ or Ubuntu 24.04+ machine:
 
 ```bash
 curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install.sh | sudo bash
@@ -271,7 +271,7 @@ CI runs on every push: the full suite on Ubuntu, and the installer itself on a r
 both modes — fresh install, checks against the running service, update, automatic rollback of
 a release that does not start, rejection of a bad checksum and of a signature by another key
 (by the installer and by the updater), and uninstall. Also on every push: the smoke test on
-Python 3.10 (the oldest supported), CodeQL over the backend, the UI's JavaScript and the
+Python 3.11 (the oldest supported), CodeQL over the backend, the UI's JavaScript and the
 workflows, and `pip-audit` against the pinned dependencies; Dependabot keeps those and the
 (commit-pinned) actions current.
 
@@ -280,7 +280,7 @@ workflows, and `pip-audit` against the pinned dependencies; Dependabot keeps tho
 Venvy is maintained by one person and has not been independently audited (see
 [SECURITY.md](SECURITY.md#status)). Everything described above is
 covered by the automated suite, including per-app-user mode and systemd resource limits, which
-CI exercises as root on a real Ubuntu host. Debian 12+ and Ubuntu 22.04+ are the supported
+CI exercises as root on a real Ubuntu host. Debian 12+ and Ubuntu 24.04+ are the supported
 targets; a frozen single-binary build is not.
 
 ## License

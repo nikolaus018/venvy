@@ -66,15 +66,15 @@ jobs:
           pip-audit -r requirements.txt --progress-spinner off
 
   oldest-python:
-    # install.sh accepts Python 3.10 (Ubuntu 22.04, Debian 12 has 3.11); the
-    # suite above runs on 3.12, where syntax that is new in 3.12 goes unnoticed.
-    name: Python 3.10 (oldest supported)
+    # install.sh requires Python 3.11+ (Debian 12 has 3.11, Ubuntu 24.04 has 3.12);
+    # the suite above runs on 3.12, where syntax that is new in 3.12 goes unnoticed.
+    name: Python 3.11 (oldest supported)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.10"
+          python-version: "3.11"
       - name: Install dependencies
         run: |
           pip install --require-hashes -r .github/ci-requirements/tests.txt
