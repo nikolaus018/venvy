@@ -5,6 +5,12 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.9.3
+
+- Minimum supported Python version is now 3.11+ (Debian 12+ / Ubuntu 24.04+).
+- Updated pinned dependencies (`fastapi` 0.162.7, `sqlmodel` 0.0.50, `aiohttp` 3.14.5, `python-multipart` 0.0.33).
+- Documented `--allow-downgrade` in `README.md` and `install.sh --help`.
+
 ## v4.9.2
 
 - Apps can no longer escalate to root through `PATH` or dynamic-linker environment variables. Previously, Venvy launched `systemd-run` and `setpriv` by bare name with the app's own `PATH` (which starts with app-writable folders like `venv/bin`) and environment variables, so a hosted app could plant a fake `systemd-run`/`setpriv` binary or an operator could set `LD_PRELOAD` and run code as root before privileges were dropped. Both wrappers are now resolved from a fixed system path, and dynamic-linker/IPC variables (`LD_*`, `DBUS_*`, `SYSTEMD_*`, `GCONV_PATH`, etc.) are rejected and stripped.
