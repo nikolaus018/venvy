@@ -20,8 +20,58 @@
     const TYPES = ['click', 'keydown', 'change', 'input', 'blur', 'mousemove', 'enter'];
     const SELECTOR = TYPES.map(t => `[data-on-${t}]`).join(',');
     const NATIVE = /\{\s*\[native code\]\s*\}\s*$/;
-    const BAD_PROPS = new Set(['constructor', 'prototype', '__proto__']);
+    // Explicit allowlist of UI action handlers reachable from data-on-* attributes.
+    // Built-ins, wrapped fetch(), apiJson(), setAuthKey(), etc. are never allowed.
+    const ALLOWED_FNS = new Set([
+        '_confirmResolve', '_termClear', '_termReconnect', '_updateResourceLimitLabels',
+        'aceSearch', 'cancelBackupUpload', 'cancelTotpStep', 'changePassword',
+        'clearAppSearch', 'clearGitToken', 'clearValue', 'clickEl', 'closeCtxMenu',
+        'closeEditorMobile', 'closeModal', 'closeSidebar', 'closeSystemView',
+        'confirmDeleteApp', 'confirmDeleteUser', 'confirmFileNameOp',
+        'confirmPublishOverwrite', 'confirmRemovePackage', 'confirmRestoreBackup',
+        'confirmTotpSetup', 'controlApp', 'copyAccessUrl', 'copyCfRouteUrl', 'copyFrom',
+        'copyLogs', 'copyPortToClipboard', 'copyTotpSecret', 'createBackup',
+        'createToken', 'createUser', 'deleteApp', 'deleteBackup', 'deleteLogs',
+        'deployNow', 'disableTotp', 'dismissBackupOp', 'dismissPwaBanner',
+        'downloadAllLogs', 'downloadAppZip', 'downloadBackup', 'downloadCurrentFile',
+        'downloadLogs', 'duplicateApp', 'fileOp', 'focusEl', 'focusTerminal',
+        'installAllMissing', 'installPackage', 'loadApps', 'loadAudit', 'loadBackups',
+        'loadFiles', 'loadHostHistory', 'loadSystemView', 'loadUpdateCard', 'loadUsage',
+        'logJumpToLatest', 'logout', 'makeDeployKey', 'onAppSearchInput',
+        'onAppSearchKey', 'onDeleteAppConfirmInput', 'onLogSearchInput',
+        'onLogSearchKey', 'onRestoreConfirmInput', 'onRuntimeChange', 'onTabListKey',
+        'onUpdateButton', 'openAccountMenu', 'openAlertModal', 'openAuditModal',
+        'openBackupsModal', 'openChangePwdModal', 'openChannelModal', 'openExternal',
+        'openJobModal', 'openModal', 'openNotifyModal', 'openReleaseNotes',
+        'openRestoreBackupModal', 'openScheduleModal', 'openSharedEnvModal',
+        'openShortcutsModal', 'openSystemView', 'openTokensModal', 'openTotpSetup',
+        'openUsersModal', 'promptFileOp', 'publishCfRoute', 'rebuildVenv',
+        'regenWebhookSecret', 'reloadPage', 'removeBackupRemote', 'runLogSearch',
+        'runPaletteItem', 'runScheduledBackupNow', 'saveBackupRemote',
+        'saveBackupSchedule', 'saveCfCreds', 'saveCurrentFile', 'saveGit',
+        'saveSettings', 'saveSharedEnv', 'scanImports', 'selectApp', 'setKeepReleases',
+        'setOpenUrlPref', 'setPaletteIndex', 'setTheme', 'snapshotNow', 'switchTab',
+        'syncPackages', 'termMobKey', 'termMobToggleMore', 'termModToggle', 'termSend',
+        'testBackupRemote', 'testCfCreds', 'toggleAutoDeploy', 'toggleCfGuide',
+        'toggleCfTokenVis', 'toggleLogFollow', 'toggleLogSearchPanel', 'toggleLogWrap',
+        'toggleReduceMotion', 'toggleResourceLimits', 'toggleSecretVis',
+        'toggleSidebar', 'triggerPwaInstall', 'unpublishCfRoute',
+        'updateCfHostnamePreview', 'uploadBackupFile', 'uploadFile',
+    ]);
     const parsed = new Map();
+
+    function isAllowedPropPath(root, props) {
+        if (props.length === 0) return true;
+        if (root === 'this') {
+            if (props.length === 1) return props[0] === 'value' || props[0] === 'checked' || props[0] === 'id';
+            if (props.length === 2) return props[0] === 'dataset' && props[1] !== '__proto__' && props[1] !== 'constructor' && props[1] !== 'prototype';
+            return false;
+        }
+        if (root === 'event') {
+            return props.length === 1 && props[0] === 'key';
+        }
+        return false;
+    }
 
     function parse(src) {
         let i = 0;
@@ -68,10 +118,9 @@
             const props = [];
             while (src[i] === '.') {
                 i++;
-                const p = ident();
-                if (BAD_PROPS.has(p)) fail(`property ${p}`);
-                props.push(p);
+                props.push(ident());
             }
+            if (!isAllowedPropPath(id, props)) fail(`disallowed property path ${id}.${props.join('.')}`);
             return { root: id, props };
         };
         const calls = [];
@@ -99,10 +148,13 @@
         return calls;
     }
 
-    function run(src, el, event) {
+    function run(src, el, event, type) {
         let calls = parsed.get(src);
         if (!calls) { calls = parse(src); parsed.set(src, calls); }
         for (const { fn, args } of calls) {
+            if (!ALLOWED_FNS.has(fn) || (type === 'mousemove' && fn !== 'setPaletteIndex')) {
+                throw new ReferenceError(`data-on handler: ${fn} is not one of Venvy's functions`);
+            }
             const f = Object.prototype.hasOwnProperty.call(window, fn) ? window[fn] : undefined;
             if (typeof f !== 'function' || NATIVE.test(Function.prototype.toString.call(f))) {
                 throw new ReferenceError(`data-on handler: ${fn} is not one of Venvy's functions`);
@@ -122,7 +174,7 @@
             el.addEventListener(type === 'enter' ? 'keydown' : type, function (event) {
                 if (type === 'enter' && event.key !== 'Enter') return;
                 const src = el.getAttribute(attr);   // read each time: it may have changed
-                if (src) run(src, el, event);
+                if (src) run(src, el, event, type);
             });
         }
     }

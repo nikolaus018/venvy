@@ -101,7 +101,6 @@ def auth_setup(payload: SetupReq, request: Request, response: Response, session:
     _validate_password_strength(payload.password)
     # Wrong codes count like wrong passwords, so the code can't be guessed.
     fail = _login_gate(_login_rate_key(request))
-    password_hash = hash_password(payload.password)
     # Handlers run in a thread pool: without the lock, two first-run requests
     # could both see an empty user table and each create an admin account.
     with _setup_lock:
@@ -111,6 +110,7 @@ def auth_setup(payload: SetupReq, request: Request, response: Response, session:
             fail()
             raise HTTPException(403, "Wrong setup code. It is in the server log and in the "
                                      ".setup-code file in Venvy's data directory.")
+        password_hash = hash_password(payload.password)
         user = User(username=username, password_hash=password_hash, role="admin")
         session.add(user)
         session.commit()

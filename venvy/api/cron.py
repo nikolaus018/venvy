@@ -116,6 +116,14 @@ def delete_job(app_id: int, job_id: int, session: Session = Depends(get_session)
 async def run_job_now(app_id: int, job_id: int, session: Session = Depends(get_session),
                 user: User = Depends(require_operator), _rl: None = Depends(rate_limit_mutations)):
     """Start the job now, in the background; its result shows in the job list."""
+    from venvy.process import restore_in_progress
+    if restore_in_progress():
+        raise HTTPException(409, "A backup restore is in progress.")
+    app_row = session.get(App, app_id)
+    if not app_row:
+        raise HTTPException(404)
+    if app_row.status == "installing":
+        raise HTTPException(409, "The app is still being installed.")
     job = _job(session, app_id, job_id)
     try:
         scheduler.start_job(job.id, user.username)

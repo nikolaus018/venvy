@@ -22,7 +22,7 @@ from venvy import shared_env
 from venvy.config import TERMINAL_RC_DIR
 from venvy.crypto import _decrypt_secret
 from venvy.db import engine
-from venvy.isolation import _app_username, _ensure_app_user
+from venvy.isolation import _app_username, _ensure_app_user, strip_dangerous_env_vars
 from venvy.models import App
 
 
@@ -30,12 +30,15 @@ from venvy.models import App
 # PTY Terminal
 # ---------------------------------------------------------------------------
 
-def _write_bashrc(app_id: int, jail_root: Path, venv_bin: Path, app_name_safe: str) -> Path:
+def _write_bashrc(app_id: int, jail_root: Path, venv_bin: Path, app_name_safe: str,
+                  term_ids: Optional[tuple] = None) -> Path:
     """Write the terminal's rc file. It lives in Venvy's own directory, not the
     app's: the app can't tamper with it, and Venvy never writes (as root,
     under per-app users) to a path the app controls. The cd "jail" in it is a
     convenience only — the real boundary is the per-app user, when enabled."""
-    TERMINAL_RC_DIR.mkdir(mode=0o755, exist_ok=True)
+    TERMINAL_RC_DIR.mkdir(mode=0o711, exist_ok=True)
+    with contextlib.suppress(OSError):
+        TERMINAL_RC_DIR.chmod(0o711)
     bashrc_path = TERMINAL_RC_DIR / f"app-{app_id}.bashrc"
     activate_script = venv_bin / "activate"
     jail_dir = str(jail_root)
@@ -92,7 +95,11 @@ alias ll='ls -la'
 """
     try:
         bashrc_path.write_text(script, encoding="utf-8")
-        bashrc_path.chmod(0o644)
+        if term_ids:
+            os.chown(bashrc_path, 0, term_ids[1])
+            bashrc_path.chmod(0o640)
+        else:
+            bashrc_path.chmod(0o644)
     except Exception as exc:
         logging.error(f"Failed to write .bashrc: {exc}")
         raise
@@ -162,8 +169,8 @@ class TerminalManager:
         _app_name_safe = re.sub(r"[^A-Za-z0-9_.+\-]", "-", db_app.name)[:24].strip("-") or "app"
 
         try:
-            bashrc_script = _write_bashrc(app_id, jail_root, venv_bin, _app_name_safe)
             term_ids = await asyncio.to_thread(_ensure_app_user, db_app)
+            bashrc_script = _write_bashrc(app_id, jail_root, venv_bin, _app_name_safe, term_ids)
         except Exception as exc:
             logging.error(f"Failed to create bashrc: {exc}")
             await websocket.close()
@@ -194,6 +201,9 @@ class TerminalManager:
                     env[str(k)] = str(v)
         except Exception:
             pass
+        strip_dangerous_env_vars(env)
+        bash_exe = shutil.which("bash") or "/bin/bash"
+        env["SHELL"] = bash_exe
 
         master_fd: int = -1
         slave_fd:  int = -1
@@ -231,11 +241,25 @@ class TerminalManager:
                     # socket, other users' HTTP connections, the DB. A shell (or
                     # anything started from it) must not be able to accept()
                     # Venvy's traffic or keep its port bound after it exits.
+                    closed_via_proc = False
                     try:
-                        max_fd = os.sysconf("SC_OPEN_MAX")
+                        fd_dir = "/proc/self/fd"
+                        if os.path.isdir(fd_dir):
+                            for entry in os.listdir(fd_dir):
+                                if entry.isdigit():
+                                    fd_num = int(entry)
+                                    if fd_num >= 3:
+                                        with contextlib.suppress(OSError):
+                                            os.close(fd_num)
+                            closed_via_proc = True
                     except Exception:
-                        max_fd = 4096
-                    os.closerange(3, max_fd)
+                        pass
+                    if not closed_via_proc:
+                        try:
+                            max_fd = min(os.sysconf("SC_OPEN_MAX"), 65536)
+                        except Exception:
+                            max_fd = 4096
+                        os.closerange(3, max_fd)
 
                     if term_ids:
                         # Drop to the app's own user before anything runs.
@@ -244,7 +268,6 @@ class TerminalManager:
                         os.setuid(term_ids[0])
 
                     os.chdir(str(jail_root))
-                    bash_exe = env.get("SHELL", "/bin/bash")
                     os.execvpe(
                         bash_exe,
                         [bash_exe, "--rcfile", str(bashrc_script)],
@@ -383,10 +406,17 @@ class TerminalManager:
                 await asyncio.gather(*tasks, return_exceptions=True)
                 
                 if pid > 0:
-                    try:
-                        os.kill(pid, signal.SIGHUP)
-                    except OSError:
-                        pass
+                    def _sig_term(sig: int) -> None:
+                        try:
+                            if pid != os.getpgid(0):
+                                os.killpg(pid, sig)
+                            else:
+                                os.kill(pid, sig)
+                        except OSError:
+                            with contextlib.suppress(OSError):
+                                os.kill(pid, sig)
+
+                    _sig_term(signal.SIGHUP)
                     async def _reap() -> None:
                         for _ in range(30):
                             try:
@@ -396,10 +426,7 @@ class TerminalManager:
                             except ChildProcessError:
                                 return
                             await asyncio.sleep(0.1)
-                        try:
-                            os.kill(pid, signal.SIGKILL)
-                        except OSError:
-                            pass
+                        _sig_term(signal.SIGKILL)
                         try:
                             await loop.run_in_executor(None, os.waitpid, pid, 0)
                         except Exception:

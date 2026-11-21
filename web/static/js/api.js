@@ -25,24 +25,29 @@
         // --- CSRF + auth wrapper ---
         const originalFetch = window.fetch;
         window.fetch = async function (resource, init) {
-            init = init || {};
+            const nextInit = init ? { ...init } : {};
             // The session key and the CSRF token are for Venvy's own API only.
             // Anything else fetched from this page (a CDN, an app's URL) must
-            // never be handed them.
+            // never be handed them. Fail closed if URL parsing throws.
             try {
                 const target = new URL(resource instanceof Request ? resource.url : String(resource), window.location.href);
                 if (target.origin !== window.location.origin) return originalFetch.call(this, resource, init);
-            } catch { }
-            const method = (init.method || 'GET').toUpperCase();
-            const headers = new Headers(init.headers || {});
+            } catch {
+                return originalFetch.call(this, resource, init);
+            }
+            const method = (nextInit.method || (resource instanceof Request ? resource.method : 'GET')).toUpperCase();
+            const headers = new Headers(resource instanceof Request ? resource.headers : undefined);
+            if (nextInit.headers) {
+                new Headers(nextInit.headers).forEach((v, k) => headers.set(k, v));
+            }
             const key = getAuthKey();
             if (key) headers.set('x-venvy-key', key);
             if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
                 const csrf = _csrfToken();
                 if (csrf) headers.set('x-csrf-token', csrf);
             }
-            init.headers = headers;
-            return originalFetch.call(this, resource, init);
+            nextInit.headers = headers;
+            return originalFetch.call(this, resource, nextInit);
         };
 
         // Background jobs: long operations answer {job_id}; poll until done.

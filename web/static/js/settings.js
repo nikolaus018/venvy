@@ -214,7 +214,7 @@
                 row.classList.toggle('hidden', versions.length === 0);
                 if (versions.length && sel.options.length !== versions.length + 1) {
                     sel.innerHTML = [['', 'System default']].concat(versions.map(v => [v, `Python ${v}`]))
-                        .map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+                        .map(([v, l]) => `<option value="${escapeHtml(v)}">${escapeHtml(l)}</option>`).join('');
                 }
                 if (!versions.length) sel.value = '';
             }

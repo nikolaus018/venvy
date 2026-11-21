@@ -38,6 +38,8 @@ from venvy.isolation import (
     _as_app_user,
     _app_username,
     _ensure_app_user,
+    _resolve_system_bin,
+    strip_dangerous_env_vars,
 )
 from venvy import monitor, notify, runtimes, shared_env
 from venvy.jobs import _running_tasks
@@ -87,8 +89,8 @@ def _detect_ports_sync(app_pid: int) -> List[int]:
                 if not p.name.isdigit():
                     continue
                 try:
-                    stat = (p / "stat").read_text().split()
-                    ppid = int(stat[3])
+                    rest = (p / "stat").read_text().rsplit(")", 1)[1].split()
+                    ppid = int(rest[1])
                     pid = int(p.name)
                     parent_to_children.setdefault(ppid, []).append(pid)
                 except Exception:
@@ -221,15 +223,8 @@ def _build_app_env(db_app: App) -> Dict[str, str]:
     
     env["PATH"] = ":".join(new_paths + [existing_path]) if existing_path else ":".join(new_paths)
     
-    env.pop("PYTHONPATH", None)
-    env.pop("PYTHONHOME", None)
+    strip_dangerous_env_vars(env)
     env["VIRTUAL_ENV"] = db_app.venv_path
-    
-    for _bad in ("BASH_ENV", "ENV", "PYTHONSTARTUP"):
-        env.pop(_bad, None)
-    for _key in list(env.keys()):
-        if "PYDEVD" in _key or "DEBUGPY" in _key:
-            env.pop(_key, None)
     return {k: str(v) for k, v in env.items()}
 
 
@@ -403,15 +398,17 @@ def _systemd_run_available() -> bool:
     a few seconds; warmed at startup)."""
     global _SYSTEMD_AVAILABLE
     if _SYSTEMD_AVAILABLE is None:
+        sr = _resolve_system_bin("systemd-run")
+        sc = _resolve_system_bin("systemctl")
         available = bool(
-            shutil.which("systemd-run")
-            and shutil.which("systemctl")
+            os.path.isabs(sr)
+            and os.path.isabs(sc)
             and Path("/run/systemd/system").exists()
         )
         if available:
             try:
                 available = subprocess.run(
-                    ["systemd-run", "--scope", "--quiet", "--no-ask-password", "true"],
+                    [sr, "--scope", "--quiet", "--no-ask-password", "true"],
                     stdin=subprocess.DEVNULL, capture_output=True, timeout=15,
                 ).returncode == 0
             except Exception:
@@ -432,7 +429,7 @@ async def _run_systemctl(*args: str, timeout: float = 10) -> None:
     raised, and a call that hangs is killed rather than left behind."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "systemctl", *args,
+            _resolve_system_bin("systemctl"), *args,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
@@ -513,6 +510,8 @@ async def _run_prestart_step(db_app: App, step: "runtimes.Step", log_file: Path)
     except asyncio.TimeoutError:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            await proc.wait()
         _venvy_log(log_file, f"{step.what} timed out after {step.timeout} seconds.")
         raise RuntimeError(f"{step.what} timed out after {step.timeout} seconds.")
     text = out.decode(errors="replace").strip()
@@ -660,7 +659,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             # kill. systemd-run then refuses the name ("Unit … already
             # exists") and the app could never be started again.
             await _clear_stale_scope(unit_name)
-            scope_cmd = ["systemd-run", "--scope", "--quiet", f"--unit={unit_name}"]
+            scope_cmd = [_resolve_system_bin("systemd-run"), "--scope", "--quiet", f"--unit={unit_name}"]
             if db_app.memory_limit_mb:
                 scope_cmd += ["-p", f"MemoryMax={db_app.memory_limit_mb}M"]
             if db_app.cpu_limit_percent:
@@ -770,14 +769,23 @@ async def _kill_pid_tree(pid: int) -> None:
                 pass
         else:
             try:
+                parent_to_children: Dict[int, List[int]] = {}
                 for p in Path("/proc").iterdir():
                     if p.name.isdigit():
                         try:
-                            stat = (p / "stat").read_text().split()
-                            if int(stat[3]) == target_pid:
-                                res.append(int(p.name))
+                            rest = (p / "stat").read_text().rsplit(")", 1)[1].split()
+                            parent_to_children.setdefault(int(rest[1]), []).append(int(p.name))
                         except Exception:
                             pass
+                queue = [target_pid]
+                visited = {target_pid}
+                while queue:
+                    cur = queue.pop(0)
+                    for child in parent_to_children.get(cur, []):
+                        if child not in visited:
+                            visited.add(child)
+                            res.append(child)
+                            queue.append(child)
             except Exception:
                 pass
         return list(set(res))
@@ -819,22 +827,25 @@ async def _kill_pid_tree(pid: int) -> None:
             if await _wait_all_dead(pids, _SIGTERM_GRACE):
                 return
             await _sig_pgid(pgid, signal.SIGKILL)
-            await _wait_all_dead(pids, _SIGKILL_WAIT)
-            return
+            if await _wait_all_dead(pids, _SIGKILL_WAIT):
+                return
     except Exception:
         pass
 
-    # Fallback to individual process teardown if session/PGID check failed
-    for p in pids:
+    # Fallback (and cleanup for descendants that called setsid into their own PGID)
+    survivors = [p for p in pids if _pid_alive(p)]
+    if not survivors:
+        return
+    for p in survivors:
         await _sig_pid(p, signal.SIGTERM)
 
-    if await _wait_all_dead(pids, _SIGTERM_GRACE):
+    if await _wait_all_dead(survivors, _SIGTERM_GRACE):
         return
 
-    for p in pids:
+    for p in survivors:
         if _pid_alive(p):
             await _sig_pid(p, signal.SIGKILL)
-    await _wait_all_dead(pids, _SIGKILL_WAIT)
+    await _wait_all_dead(survivors, _SIGKILL_WAIT)
 
 
 async def stop_app_process_logic(app_id: int, session: Session, manual: bool = False) -> None:
@@ -891,11 +902,11 @@ async def _stop_app_process_inner(app_id: int, session: Session, manual: bool = 
     if db_app.systemd_scope:
         await _run_systemctl("stop", f"{db_app.systemd_scope}.scope", timeout=_STOP_GRACE_SEC + 10)
 
-    # Always also run the signal-based teardown as a fallback/complement — the scope
-    # unit shares the same PID (systemd-run --scope execs in place), so this is a
-    # safe no-op if `systemctl stop` above already tore it down.
+    # Always also run the signal-based teardown as a fallback/complement if
+    # our process is still alive (re-checking pid_start avoids a PID-reuse race).
     try:
-        await _kill_pid_tree(pid)
+        if _app_pid_alive(db_app):
+            await _kill_pid_tree(pid)
     except Exception as exc:
         logging.warning(f"Error killing PID {pid}: {exc}")
     # Only now: cancelling the streamer before the kill (as this used to)

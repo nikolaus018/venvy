@@ -5,6 +5,20 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.9.2
+
+- Apps can no longer escalate to root through `PATH` or dynamic-linker environment variables. Previously, Venvy launched `systemd-run` and `setpriv` by bare name with the app's own `PATH` (which starts with app-writable folders like `venv/bin`) and environment variables, so a hosted app could plant a fake `systemd-run`/`setpriv` binary or an operator could set `LD_PRELOAD` and run code as root before privileges were dropped. Both wrappers are now resolved from a fixed system path, and dynamic-linker/IPC variables (`LD_*`, `DBUS_*`, `SYSTEMD_*`, `GCONV_PATH`, etc.) are rejected and stripped.
+- Package and import-scan commands fail closed if an app's Unix user is missing instead of running as root, and ensure the app user exists first.
+- In `--shared-user` mode, the installer/updater no longer runs database snapshots, backup pruning or `.setup-code` reads as root inside `venvy`-owned directories, closing symlink-based privilege escalation and root file-read paths. The updater also refuses to install a release older than the running version unless `--allow-downgrade` is passed.
+- The frontend's `data-on-*` action dispatcher now restricts calls to an explicit allowlist of UI handlers (blocking wrapped `fetch()`, `apiJson()`, and `mousemove` on state-changing actions) and an explicit allowlist of safe element/event properties (blocking traversal to `localStorage` or cookies). Backup schedule status text is now HTML-escaped before rendering.
+- Entrypoints reject `.`, `..` and leading `-` (preventing static-site directory escape and runtime flag injection); the built-in static server checks symlink containment on `.html`, index, `200.html` and `404.html` fallbacks and blocks `//` open redirects.
+- Backup restore normalises archive paths before checking symlink traversal, clears archive ownership in the pre-PEP-706 fallback, and refuses symlinks at `apps/` and `data.db`.
+- Cloudflare tunnel port checks now inspect listening sockets across all interfaces (not just `localhost`), roll back DNS failures surgically under the ingress lock, match hostnames case-insensitively, and scope zone listings to the configured account.
+- Off-site backup and notification settings no longer reuse masked (`***`) secrets when the destination host/origin changes or SMTP TLS is downgraded to `none`, and outbound webhook/backup HTTP requests no longer follow redirects.
+- App deletion now stops and removes the app's Unix user (using `SIGSTOP` before `SIGKILL` to defeat fork loops) before removing files, aborts if `userdel` fails, and failed app-creation rollbacks also remove orphaned `AppAccess` rows.
+- Hardened `safefs` (FIFO `O_NONBLOCK` check on copy, fixed-length temp filenames, `fchown` before `fchmod` without SUID/SGID bits, recursion depth cap), chunked uploads (per-upload locking, remaining disk-space checks, post-resolution protected-file checks), and the browser terminal (non-enumerable `.terminal` directory/rc files, ignored app `SHELL`, process-group teardown, `/proc/self/fd` closing).
+- Fixed process/concurrency and UI issues: `GET /api/apps` racing `_reap_process`, `rebuild_venv` locking, detached ORM objects in package jobs, subprocess timeout reaping, unbounded in-memory deploy logs, unmasked secrets in scheduled job output/notifications, log-search concurrency limits and `Cache-Control: no-store` on log downloads, `window.open` `noopener,noreferrer`, session-expiry UI cleanup, `fetch` wrapper `Request` handling, and file-open race guards.
+
 ## v4.9.1
 
 - Firefox on desktop draws thin, themed scrollbars like the other browsers. It ignored Venvy's scrollbar styling and showed its own wide grey ones — next to the app list, the file list and every scrolling page — and a scrollbar inside the tab bar and toolbars that are meant to have none.

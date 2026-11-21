@@ -41,6 +41,9 @@ def log_files(app: App) -> List[Path]:
     return files
 
 
+_LOG_SEARCH_SEM = asyncio.Semaphore(4)
+
+
 @router.get("/apps/{app_id}/logs/search")
 async def search_logs(
     app_id: int,
@@ -61,16 +64,17 @@ async def search_logs(
         return {"matches": [], "truncated": False, "scanned_bytes": 0, "files": 0}
     payload = json.dumps({"files": [str(f) for f in files], "query": q, "regex": regex, "case": case,
                           "limit": limit, "context": context}).encode()
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-I", str(_SCRIPT),
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(payload), timeout=20)
-    except asyncio.TimeoutError:
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-        await proc.wait()
-        raise HTTPException(408, "The search took too long — try a simpler pattern or plain text.")
+    async with _LOG_SEARCH_SEM:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-I", str(_SCRIPT),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(payload), timeout=20)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+            raise HTTPException(408, "The search took too long — try a simpler pattern or plain text.")
     try:
         result = json.loads(out or b"{}")
     except ValueError:
@@ -107,5 +111,12 @@ def download_logs(
     files = log_files(app)
     audit_log(user.username, "app_logs_download", f"app '{app.name}' (id={app_id})")
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", app.slug) or "app"
-    return StreamingResponse(_stream(files), media_type="text/plain; charset=utf-8",
-                             headers={"Content-Disposition": f'attachment; filename="{safe}-logs.txt"'})
+    return StreamingResponse(
+        _stream(files),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe}-logs.txt"',
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )

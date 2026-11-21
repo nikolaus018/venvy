@@ -60,15 +60,44 @@ def save(cfg: Optional[dict]) -> None:
         s.commit()
 
 
+def _origin(url: str) -> tuple:
+    p = urllib.parse.urlparse((url or "").strip())
+    return (p.scheme.lower(), p.netloc.lower())
+
+
+def _same_destination(kind: str, new: dict, old: Optional[dict]) -> bool:
+    """True only when *new* sends credentials to the same remote host/origin as *old*,
+    so a masked '***' secret cannot be redirected to an attacker-controlled server."""
+    if not old or old.get("kind") != kind:
+        return False
+    if kind == "webdav":
+        return _origin(new.get("url", "")) == _origin(old.get("url", ""))
+    if kind == "s3":
+        return (
+            _origin(new.get("endpoint", "")) == _origin(old.get("endpoint", ""))
+            and (new.get("bucket") or "") == (old.get("bucket") or "")
+            and (new.get("region") or "us-east-1") == (old.get("region") or "us-east-1")
+        )
+    if kind == "scp":
+        return (
+            (new.get("host") or "").lower() == (old.get("host") or "").lower()
+            and str(new.get("port") or 22) == str(old.get("port") or 22)
+            and (new.get("user") or "") == (old.get("user") or "")
+        )
+    return False
+
+
 def clean(cfg: dict, old: Optional[dict]) -> dict:
-    """Validated settings; a secret sent back as *** keeps its stored value."""
+    """Validated settings; a secret sent back as *** keeps its stored value
+    only when the destination has not changed."""
     kind = cfg.get("kind")
     if kind not in KINDS:
         raise ValueError(f"kind must be one of: {', '.join(KINDS)}")
     out = {k: (v.strip() if isinstance(v, str) and k != "private_key" else v) for k, v in cfg.items() if v is not None}
+    same_dest = _same_destination(kind, out, old)
     for f in SECRET_FIELDS[kind]:
         if out.get(f) == MASK:
-            if old and old.get("kind") == kind and old.get(f):
+            if same_dest and old and old.get(f):
                 out[f] = old[f]
             else:
                 out.pop(f, None)
@@ -198,7 +227,7 @@ async def _upload_s3(path: Path, size: int, cfg: dict, name: str) -> str:
     headers = {**signed, "Content-Type": "application/gzip", "Content-Length": str(size)}
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=600)
     async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as http:
-        async with http.put(url, data=_file_chunks(path), headers=headers) as resp:
+        async with http.put(url, data=_file_chunks(path), headers=headers, allow_redirects=False) as resp:
             if resp.status >= 300:
                 raise RemoteError(f"S3 answered {resp.status}: {(await resp.text())[:300]}")
     return f"s3://{cfg['bucket']}/{_object_key(cfg, name)}"
@@ -209,7 +238,7 @@ async def _upload_webdav(path: Path, size: int, cfg: dict, name: str) -> str:
     auth = aiohttp.BasicAuth(cfg.get("username", ""), cfg.get("password", "")) if cfg.get("username") else None
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=600)
     async with aiohttp.ClientSession(timeout=timeout, auth=auth, **HTTP_CLIENT_LIMITS) as http:
-        async with http.put(url, data=_file_chunks(path), headers={"Content-Length": str(size)}) as resp:
+        async with http.put(url, data=_file_chunks(path), headers={"Content-Length": str(size)}, allow_redirects=False) as resp:
             if resp.status >= 300:
                 raise RemoteError(f"The WebDAV server answered {resp.status}: {(await resp.text())[:300]}")
     return url
@@ -231,6 +260,8 @@ async def _upload_scp(path: Path, cfg: dict, name: str) -> str:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=3600)
         except asyncio.TimeoutError:
             proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
             raise RemoteError("scp timed out after an hour.")
         if proc.returncode != 0:
             raise RemoteError(f"scp failed: {out.decode(errors='replace').strip()[:300]}")

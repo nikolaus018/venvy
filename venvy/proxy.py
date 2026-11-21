@@ -184,8 +184,11 @@ class DomainProxyMiddleware:
         url = f"ws://127.0.0.1:{port}{path}" + (f"?{qs}" if qs else "")
         protocols = [p for p in scope.get("subprotocols", [])]
         fwd = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]
-               if k.decode("latin-1") in ("cookie", "origin", "user-agent", "authorization")}
+               if k.decode("latin-1") in ("host", "cookie", "origin", "user-agent", "authorization")}
         fwd["X-Forwarded-For"] = _client_ip(scope)
+        if "host" in fwd:
+            fwd["X-Forwarded-Host"] = fwd["host"]
+        fwd["X-Forwarded-Proto"] = _proto(scope)
         try:
             upstream = await _http().ws_connect(url, headers=fwd, protocols=protocols, max_msg_size=0, autoclose=False, autoping=False)
         except Exception as exc:

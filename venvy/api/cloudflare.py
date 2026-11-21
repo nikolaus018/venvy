@@ -35,7 +35,7 @@ from venvy.cloudflare import (
 from venvy.crypto import _decrypt_secret
 from venvy.db import get_session
 from venvy.models import App, CfRoute, SystemSetting, User
-from venvy.process import _app_pid_alive, _detect_ports_sync, _verify_port_free, get_server_ipv4
+from venvy.process import _app_pid_alive, _detect_ports_sync, _psutil_net_connections, _verify_port_free, get_server_ipv4
 
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist), Depends(require_app_access)]
@@ -182,6 +182,7 @@ async def list_cf_zones(
     """Return all active zones (domains) on the Cloudflare account."""
     creds      = _get_cf_creds(session)
     api_token  = creds["cf_api_token"]
+    account_id = creds["cf_account_id"]
 
     zones: List[Dict[str, str]] = []
     page        = 1
@@ -193,6 +194,7 @@ async def list_cf_zones(
             url = (
                 f"https://api.cloudflare.com/client/v4/zones"
                 f"?per_page={per_page}&page={page}&status=active"
+                f"&account.id={urllib.parse.quote(account_id, safe='')}"
             )
             try:
                 data = await _cf_request("GET", url, api_token)
@@ -301,6 +303,41 @@ def _publish_refusal(rule: Optional[dict], hostname: str, published: Set[str], u
     return None
 
 
+def _any_host_listener_on_port(port: int) -> bool:
+    """True if anything on the host is listening on TCP *port* on any interface
+    (IPv4 or IPv6, loopback or LAN)."""
+    import socket
+    # 1. psutil covers all interfaces and address families when available.
+    for conn in _psutil_net_connections(kind="tcp"):
+        if getattr(conn, "status", None) == "LISTEN" and conn.laddr and conn.laddr.port == port:
+            return True
+    # 2. Linux /proc/net/tcp{,6} catches every LISTEN socket even without psutil.
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(table, "r") as f:
+                next(f, None)
+                for line in f:
+                    fields = line.split()
+                    if len(fields) >= 4 and fields[3] == "0A":
+                        if int(fields[1].split(":")[1], 16) == port:
+                            return True
+        except OSError:
+            continue
+    # 3. Fallback active probe on both loopback and the host's LAN IPv4 address.
+    if not _verify_port_free(port):
+        return True
+    lan_ip = get_server_ipv4()
+    if lan_ip and lan_ip != "127.0.0.1":
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                if s.connect_ex((lan_ip, port)) == 0:
+                    return True
+        except OSError:
+            pass
+    return False
+
+
 async def _check_publish_port(session: Session, app_row: App, port: int, request: Request) -> None:
     """Only a port that is this app's goes on the internet from here. Otherwise
     any port on the host could: another app's (one this user may not even have
@@ -318,8 +355,8 @@ async def _check_publish_port(session: Session, app_row: App, port: int, request
         # What a stopped app was last seen listening on is history, not its port.
         if port in _app_ports(other, seen=other.status == "running"):
             raise HTTPException(409, f"Port {port} is also another app's port.")
-    if await asyncio.to_thread(_verify_port_free, port):
-        return          # nothing listens there yet
+    if not await asyncio.to_thread(_any_host_listener_on_port, port):
+        return          # nothing listens there yet on any interface
     # (Not the stored detected_ports: with ports set by hand, those are what it holds.)
     listening = (await asyncio.to_thread(_detect_ports_sync, app_row.pid)
                  if app_row.pid and await asyncio.to_thread(_app_pid_alive, app_row) else [])
@@ -384,7 +421,7 @@ async def check_cf_hostname(
         ingress     = result_obj.get("config", {}).get("ingress") or []
 
         for rule in ingress:
-            if rule.get("hostname") == clean:
+            if (rule.get("hostname") or "").lower() == clean:
                 refusal = _publish_refusal(rule, clean, _published_hostnames(session), user, _venvy_port(request))
                 if refusal:
                     return {"conflict": True, "conflict_type": "remote", "blocked": True,
@@ -468,25 +505,39 @@ async def publish_cf_route(
     published = _published_hostnames(session)
     own_port = _venvy_port(request)
 
+    prior_new_rule: List[dict] = []
+    prior_old_rule: List[dict] = []
+
     def change(named: List[dict]) -> List[dict]:
         # Checked against the tunnel as it is now, under the ingress lock:
         # raising here leaves it untouched.
-        current = next((r for r in named if r["hostname"] == new_hostname), None)
+        current = next((r for r in named if (r.get("hostname") or "").lower() == new_hostname), None)
         refused = _publish_refusal(current, new_hostname, published, user, own_port)
         if refused:
             raise HTTPException(*refused)
-        return [r for r in named if r["hostname"] not in hostnames_to_strip] + [{"hostname": new_hostname, "service": service}]
+        prior_new_rule[:] = [current] if current else []
+        if is_hostname_change:
+            old_r = next((r for r in named if (r.get("hostname") or "").lower() == old_hostname), None)
+            prior_old_rule[:] = [old_r] if old_r else []
+        return [r for r in named if (r.get("hostname") or "").lower() not in hostnames_to_strip] + [{"hostname": new_hostname, "service": service}]
 
-    previous_ingress = await _cf_update_ingress(creds, change)
+    await _cf_update_ingress(creds, change)
 
     try:
         dns_record_id = await _cf_upsert_dns_cname(new_zone_id, new_hostname, tunnel_id, api_token)
     except BaseException as exc:
-        # Put the tunnel back exactly as it was — including the old hostname
-        # of this route, which is still what the database says is published.
+        # Surgically undo our change under the ingress lock so concurrent
+        # tunnel edits from other requests are not overwritten.
         logging.warning(f"DNS upsert failed for {new_hostname!r}, rolling back ingress: {exc}")
         try:
-            await _cf_put_ingress(creds, previous_ingress)
+            def _undo(named: List[dict]) -> List[dict]:
+                restored = [r for r in named if (r.get("hostname") or "").lower() != new_hostname]
+                if prior_new_rule:
+                    restored.append(prior_new_rule[0])
+                if is_hostname_change and prior_old_rule and not any((r.get("hostname") or "").lower() == old_hostname for r in restored):
+                    restored.append(prior_old_rule[0])
+                return restored
+            await _cf_update_ingress(creds, _undo)
         except Exception as rb_exc:
             logging.warning(f"Ingress rollback failed: {rb_exc}")
         raise

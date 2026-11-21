@@ -578,11 +578,13 @@
             // task. We just poll until we see the expected final state.
             const expectedFinal = action === 'stop' ? 'stopped' : 'running';
             let polls = 0;
+            if (window._controlPollTimer) { clearInterval(window._controlPollTimer); window._controlPollTimer = null; }
             const pollTimer = setInterval(async () => {
                 polls++;
                 // Stop polling after 30 s regardless
                 if (polls > 30 || activeAppId !== targetAppId) {
                     clearInterval(pollTimer);
+                    if (window._controlPollTimer === pollTimer) window._controlPollTimer = null;
                     return;
                 }
                 try {
@@ -592,7 +594,11 @@
                     _cachedApps = apps;
                     renderAppList(apps);
                     const updated = apps.find(a => a.id === targetAppId);
-                    if (!updated || activeAppId !== targetAppId) { clearInterval(pollTimer); return; }
+                    if (!updated || activeAppId !== targetAppId) {
+                        clearInterval(pollTimer);
+                        if (window._controlPollTimer === pollTimer) window._controlPollTimer = null;
+                        return;
+                    }
                     activeApp = updated;
                     _renderDashboard(activeApp);
 
@@ -600,6 +606,7 @@
                         || (action !== 'stop' && appStatus(updated) === 'crashed');
                     if (settled) {
                         clearInterval(pollTimer);
+                        if (window._controlPollTimer === pollTimer) window._controlPollTimer = null;
                         showToast(
                             updated.status === 'error' || appStatus(updated) === 'crashed' ? 'Action failed — check logs.' :
                                 { start: 'Started ✓', stop: 'Stopped ✓', restart: 'Restarted ✓' }[action] || action,
@@ -630,6 +637,7 @@
                     }
                 } catch (e) { }
             }, 1000);
+            window._controlPollTimer = pollTimer;
         }
 
         function openExternal() {
@@ -638,7 +646,8 @@
                 showToast(activeApp?.status === 'running' ? 'Port not yet detected — try again.' : 'Start the app first, or set a port in Settings.', 'warn', 4000);
                 return;
             }
-            window.open(url, '_blank');
+            if (!/^https?:\/\//i.test(url)) return;
+            window.open(url, '_blank', 'noopener,noreferrer');
         }
 
         async function copyAccessUrl() {

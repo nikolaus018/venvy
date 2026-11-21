@@ -409,7 +409,7 @@ def _create_full_backup_archive(
 
     try:
         report("database")
-        conn = sqlite3.connect(str(DB_FILE))
+        conn = sqlite3.connect(str(DB_FILE), timeout=60)
         try:
             conn.execute("VACUUM INTO ?", (str(tmp_db),))
         finally:
@@ -652,10 +652,21 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
             # single byte. tarfile's own filter="data" (PEP 706) covers this
             # on 3.12+, but this file supports older interpreters too, so
             # check explicitly regardless of Python version.
+            import posixpath
+
+            def _norm_tar_name(raw: str) -> str:
+                n = posixpath.normpath(raw.replace("\\", "/")).lstrip("/")
+                return "" if n == "." else n
+
             total = 0
             members = tar.getmembers()
-            links = {m.name.rstrip("/") for m in members if m.issym() or m.islnk()}
+            links = {_norm_tar_name(m.name) for m in members if m.issym() or m.islnk()}
+            links.discard("")
             for member in members:
+                norm = _norm_tar_name(member.name)
+                if not norm or norm == ".." or norm.startswith("../") or member.name.startswith("/"):
+                    if member.name not in (".", "./"):
+                        raise ValueError(f"Backup archive contains an unsafe path: {member.name}")
                 target = (staging / member.name).resolve()
                 if not is_safe_path(staging, target):
                     raise ValueError(f"Backup archive contains an unsafe path: {member.name}")
@@ -663,7 +674,7 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
                 # the archive. Venvy's own backups never contain that (a real
                 # directory tree can't), so this only ever refuses a crafted
                 # file — and it holds whatever the interpreter's tarfile does.
-                parts = member.name.rstrip("/").split("/")
+                parts = norm.split("/") if norm else []
                 if any("/".join(parts[:i]) in links for i in range(1, len(parts))):
                     raise ValueError(f"Backup archive contains a path through a link: {member.name}")
                 if member.islnk() and not is_safe_path(staging, (staging / member.linkname).resolve()):
@@ -698,6 +709,10 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
                         logging.warning(f"Restore: skipping special file {member.name}")
                         continue
                     member.mode &= 0o755 if member.isdir() else 0o777
+                    member.uid = 0
+                    member.gid = 0
+                    member.uname = ""
+                    member.gname = ""
                     safe.append(member)
                 for member in safe:
                     _tracking_filter_progress(member)
@@ -713,6 +728,8 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
         replaced: Optional[Path] = None
         new_apps_in_place = False
         try:
+            if (staging / "apps").is_symlink():
+                raise ValueError("Backup archive contains a symlink at apps/.")
             if (staging / "apps").is_dir():
                 if APPS_BASE_DIR.exists():
                     replaced = DATA_DIR / f"{_REPLACED_APPS_PREFIX}{secrets.token_hex(4)}"
@@ -782,7 +799,7 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
             raise HTTPException(400, str(e))
         except (tarfile.TarError, OSError, EOFError) as e:
             raise HTTPException(400, f"Backup archive could not be read — restore aborted, nothing was changed: {e}")
-        if not (staging / "data.db").is_file():
+        if (staging / "data.db").is_symlink() or not (staging / "data.db").is_file():
             raise HTTPException(400, "Backup archive is missing data.db — restore aborted, nothing was changed.")
 
         # Stop every running app before touching apps/ or data.db out from under them.

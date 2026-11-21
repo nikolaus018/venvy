@@ -103,7 +103,14 @@ def _file_sha256(root: Path, parts: tuple) -> Optional[str]:
         if st.st_size > _HASH_MAX_BYTES:
             return None
         h = hashlib.sha256()
-        for chunk in iter(lambda: f.read(1 << 20), b""):
+        total = 0
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _HASH_MAX_BYTES:
+                return None
             h.update(chunk)
         return h.hexdigest()
 
@@ -213,6 +220,8 @@ async def upload_file_to_path(
         if not reason:
             try:
                 parts = _app_rel_parts(root, str(target_dir / rel_path))
+                if parts and _is_protected_app_file(parts[-1]):
+                    reason = "protected file"
             except AppPathError:
                 reason = "path escapes app directory"
         if not reason:
@@ -261,6 +270,8 @@ async def upload_file_chunk(
         dest_parts = _app_rel_parts(root, str(target_dir / rel_path))
     except AppPathError:
         raise HTTPException(403, "Upload path escapes app directory.")
+    if dest_parts and _is_protected_app_file(dest_parts[-1]):
+        raise HTTPException(403, "Operation not permitted on this path.")
     if total < 0 or offset < 0 or offset > total:
         raise HTTPException(400, "Invalid offset/total.")
     if total > _UPLOAD_FILE_MAX:

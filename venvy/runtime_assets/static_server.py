@@ -60,7 +60,11 @@ def main() -> None:
                 self.wfile.write(body)
 
         def send_head(self):
-            url_path = urllib.parse.urlsplit(self.path).path
+            parts = urllib.parse.urlsplit(self.path)
+            if parts.netloc or self.path.startswith("//"):
+                self.send_error(404)
+                return None
+            url_path = parts.path
             if self._hidden(url_path):
                 self.send_error(404)
                 return None
@@ -69,22 +73,31 @@ def main() -> None:
                 self.send_error(404)
                 return None
             if not os.path.exists(fs_path) and not url_path.endswith("/"):
-                if os.path.isfile(fs_path + ".html"):
+                html_path = fs_path + ".html"
+                if os.path.isfile(html_path) and self._inside(html_path):
                     self.path = url_path + ".html"
                     return super().send_head()
             if os.path.isdir(fs_path):
                 # Index files only: the stock handler would list the folder.
                 if not url_path.endswith("/"):
                     return super().send_head()      # its redirect to the slash form
-                if not any(os.path.isfile(os.path.join(fs_path, i)) for i in ("index.html", "index.htm")):
+                index_ok = False
+                for i in ("index.html", "index.htm"):
+                    cand = os.path.join(fs_path, i)
+                    if os.path.isfile(cand):
+                        index_ok = self._inside(cand)
+                        break
+                if not index_ok:
                     self.send_error(404)
                     return None
                 return super().send_head()
             if not os.path.exists(fs_path):
-                if os.path.isfile(os.path.join(root, "200.html")):
+                p200 = os.path.join(root, "200.html")
+                if os.path.isfile(p200) and self._inside(p200):
                     self.path = "/200.html"
                     return super().send_head()
-                if os.path.isfile(os.path.join(root, "404.html")):
+                p404 = os.path.join(root, "404.html")
+                if os.path.isfile(p404) and self._inside(p404):
                     self._serve_page("404.html", 404)
                     return None
                 self.send_error(404)

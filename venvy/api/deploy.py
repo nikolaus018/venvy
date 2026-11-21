@@ -228,7 +228,12 @@ async def make_release(
     _rl: None = Depends(rate_limit_mutations),
 ):
     """Mark the app as it is now as a point to return to (a snapshot of its files, or the git commit)."""
+    from venvy.process import restore_in_progress
+    if restore_in_progress():
+        raise HTTPException(409, "A backup restore is in progress.")
     app = _app_or_404(session, app_id)
+    if app.status == "installing":
+        raise HTTPException(409, "The app is still being installed.")
 
     async def _job() -> dict:
         if deploy.is_running(app_id):

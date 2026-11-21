@@ -167,24 +167,28 @@ with server(repo, 55010) as (base, data, srv):
         failed = [f for f in failed if "/api/auth/login" not in f]
         check("no uncaught script errors", not errors, str(errors[:5]))
         check("no failed requests", not failed, str(failed[:5]))
-        # The CSP refuses inline script, and data-on-* only calls Venvy's own functions.
+        # The CSP refuses inline script, and data-on-* only calls allowlisted Venvy UI actions.
         errors.clear()
         pg.evaluate("""() => {
             window.__ran = [];
-            window.__mark = function __mark(x) { window.__ran.push(x); };
+            const origClear = window.clearValue;
+            window.clearValue = function clearValue(x) { window.__ran.push(x); };
             document.body.insertAdjacentHTML('beforeend',
                 '<button id="t-inline" onclick="window.__ran.push(\\'inline\\')">i</button>' +
                 '<button id="t-native" data-on-click="alert(\\'x\\')">n</button>' +
-                '<input id="t-enter" data-on-enter="__mark(\\'enter\\')" data-on-click="__mark(this.id); __mark(\\'\\\\x41\\')">');
+                '<button id="t-fetch" data-on-click="fetch(\\'/api/apps\\')">f</button>' +
+                '<button id="t-prop" data-on-click="clearValue(this.ownerDocument.cookie)">p</button>' +
+                '<input id="t-enter" data-on-enter="clearValue(\\'enter\\')" data-on-click="clearValue(this.id); clearValue(\\'\\\\x41\\')">');
         }""")
         pg.wait_for_timeout(100)
         pg.evaluate("""() => {      // the sign-in screen covers the page by now: no pointer clicks
-            for (const id of ['t-inline', 't-native', 't-enter']) document.getElementById(id).click();
+            for (const id of ['t-inline', 't-native', 't-fetch', 't-prop', 't-enter']) document.getElementById(id).click();
             for (const key of ['a', 'Enter']) document.getElementById('t-enter').dispatchEvent(new KeyboardEvent('keydown', { key }));
         }""")
         pg.wait_for_timeout(300)
         check("injected inline handler does not run", "inline" not in pg.evaluate("window.__ran"))
-        check("data-on-* runs Venvy functions with parsed args", pg.evaluate("window.__ran") == ["t-enter", "A", "enter"], str(pg.evaluate("window.__ran")))
-        check("data-on-* refuses browser built-ins", any("not one of Venvy's functions" in e for e in errors), str(errors[:5]))
+        check("data-on-* runs allowlisted Venvy functions with parsed args", pg.evaluate("window.__ran") == ["t-enter", "A", "enter"], str(pg.evaluate("window.__ran")))
+        check("data-on-* refuses browser built-ins and fetch", sum(1 for e in errors if "not one of Venvy's functions" in e) >= 2, str(errors[:5]))
+        check("data-on-* refuses arbitrary property traversal", any("disallowed property path" in e for e in errors), str(errors[:5]))
         br.close()
 print("FAILED" if fails else "ALL OK", fails); sys.exit(1 if fails else 0)

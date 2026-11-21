@@ -132,9 +132,12 @@ class _Log:
     app's deploy log file. With persist=False (a snapshot taken outside a
     deploy) nothing is written, so the last deploy's log is not wiped out."""
 
+    _MAX_LOG_LINES = 2000
+
     def __init__(self, app_id: int, secrets: List[str], persist: bool = True):
         self.app_id = app_id
-        self.secrets = [s for s in secrets if s]
+        # Longest first: a secret that contains another must not be left half masked.
+        self.secrets = sorted({s for s in secrets if s}, key=len, reverse=True)
         self.lines: List[str] = []
         self.persist = persist
         self.fh = None
@@ -144,10 +147,11 @@ class _Log:
             self.fh = open(self.path, "w", encoding="utf-8")
 
     def __call__(self, line: str) -> None:
-        # Longest first: a secret that contains another must not be left half masked.
-        for s in sorted(self.secrets, key=len, reverse=True):
+        for s in self.secrets:
             line = line.replace(s, "***")
         self.lines.append(line)
+        if len(self.lines) > self._MAX_LOG_LINES:
+            del self.lines[:len(self.lines) - self._MAX_LOG_LINES]
         if self.persist and self.app_id in _state:
             _state[self.app_id]["log"] = self.lines
         if self.fh is not None:
@@ -739,8 +743,10 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
             # this ran (put_git leaves pruning to the deploy then).
             with contextlib.suppress(Exception):
                 _prune_releases(app_id)
-            _record(app_id, last_deploy_status=status, last_deploy_at=utc_now(),
-                    last_deploy_commit=commit_sha if status == "ok" else None)
+            rec = {"last_deploy_status": status, "last_deploy_at": utc_now()}
+            if status == "ok":
+                rec["last_deploy_commit"] = commit_sha
+            _record(app_id, **rec)
             _state[app_id].update(running=False, status=status, finished=utc_now().isoformat())
             row = _app(app_id)
             name = row.name if row else f"App {app_id}"
