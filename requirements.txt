@@ -1,6 +1,6 @@
 # What Venvy itself needs to run. Versions are the ones the test suite
 # passes with; install.sh installs exactly these into Venvy's own venv.
-fastapi==0.162.7
+fastapi==0.165.0
 uvicorn[standard]==0.54.0
 sqlmodel==0.0.50
 aiofiles==25.1.0
