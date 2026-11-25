@@ -18,7 +18,7 @@ stops without one.
 - Venvy now refuses to start, with the reason in its log, when per-app users are requested but the host lacks `setpriv`/`useradd`, instead of answering every request with an error.
 - Git deploys keep using the host's `https_proxy`/`all_proxy` while still ignoring a proxy written into the app's own `.git/config`.
 - Resending the first chunk of an upload no longer hangs it, and an abandoned backup upload no longer keeps its disk space reserved after it is cleaned up.
-- Files created or uploaded in an app's folder are now `0640` (owner and group only) instead of `0644`, and a file path leaving the app's folder by `..` or as an absolute path is refused before anything on disk is looked up.
+- Files created or uploaded in an app's folder are now `0600` (the app's own user only) instead of `0644`, and a file path leaving the app's folder by `..` or as an absolute path is refused before anything on disk is looked up.
 - Fixed frontend bugs and UX issues: backup restore confirmation guard, toast auto-dismiss loop, disk-full (507) upload reporting, auth form and cache clearing on logout/session expiry, terminal reconnect races, stale app selection races during async fetches, service worker offline fallback and cache cleanup (`venvy-v4`), keyboard shortcuts for viewers, and pinch-to-zoom accessibility.
 
 ## v4.9.4

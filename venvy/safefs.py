@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import List, Optional
 
 _FS_MAX_DEPTH = 64
-# New files in an app's folder: the app's user (owner) and group, nobody else.
-APP_FILE_MODE = 0o640
+# New files in an app's folder: readable and writable by the app's own user
+# (their owner) only. Venvy itself works on them as that user or as root.
+APP_FILE_MODE = 0o600
 _FS_COPY_MAX_BYTES = 10 * 1024 ** 3
 _FS_MIN_FREE_BYTES = 256 * 1024 * 1024
 
@@ -104,7 +105,9 @@ def _app_rel_parts(root: Path, rel_path: str, follow_last: bool = True) -> tuple
         # looked up. Symlinks are dealt with below, once resolved.
         root_s = str(root_r)
         joined = os.path.normpath(os.path.join(root_s, rel_path or ""))
-        if joined != root_s and not joined.startswith(root_s.rstrip(os.sep) + os.sep):
+        if joined == root_s:
+            return ()
+        if not joined.startswith(root_s.rstrip(os.sep) + os.sep):
             raise AppPathError(403, "Path is outside the app directory.")
         cand = Path(joined)
         if follow_last or cand.name in ("", ".", ".."):
