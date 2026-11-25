@@ -21,6 +21,7 @@ from venvy.config import (
     _ALLOWED_ORIGINS,
     APPS_BASE_DIR,
     ASSETS_DIR,
+    SESSION_TTL_SECONDS,
     WEB_DIR,
     utc_now,
     _VENVY_BOOT_TIME,
@@ -169,6 +170,8 @@ async def lifespan(app: FastAPI):
     scheduler_task_handle.cancel()
     await asyncio.gather(supervisor_task_handle, metrics_task_handle, scheduler_task_handle, return_exceptions=True)
     await proxy.close()
+    from venvy import monitor as _monitor
+    await _monitor.close_probe_session()
 
     logging.info("Venvy shutting down — stopping all managed apps…")
     await terminal_manager.close_for_app(None, timeout=3.0)
@@ -283,11 +286,18 @@ def _content_security_policy(host: str) -> str:
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add conservative security headers to every response."""
+    """Add conservative security headers to every response and refresh sliding session cookies."""
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        _add_security_headers(response, request_is_https(request))
+        https = request_is_https(request)
+        _add_security_headers(response, https)
         response.headers.setdefault("Content-Security-Policy", _content_security_policy(request.headers.get("host", "")))
+        refresh_tok = getattr(request.state, "refresh_session_cookie", None)
+        if refresh_tok:
+            response.set_cookie(
+                "session", refresh_tok, httponly=True, path="/",
+                max_age=SESSION_TTL_SECONDS, samesite="strict", secure=https,
+            )
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)
@@ -307,6 +317,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
                 # This answer never reaches SecurityHeadersMiddleware below.
                 response = JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
                 _add_security_headers(response, request_is_https(request))
+                response.headers.setdefault("Content-Security-Policy", _content_security_policy(request.headers.get("host", "")))
                 return response
         response = await call_next(request)
         if "csrf_token" not in request.cookies:

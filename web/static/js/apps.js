@@ -244,6 +244,7 @@
             if (localUrl) {
                 // Always show local IP:port — clean, always useful, never confusing
                 const portStr = app.port;
+                const safeHref = /^https?:\/\//i.test(localUrl) ? localUrl : '#';
                 card.style.cssText = `border-radius:var(--radius-md);padding:1rem;background:var(--green-dim);border:1px solid var(--green-border)`;
                 card.innerHTML = `
                 <div class="flex items-start justify-between gap-3">
@@ -258,7 +259,7 @@
                         <button data-on-click="copyAccessUrl()" title="Copy local URL" class="p-1.5 rounded-lg transition active:scale-95" style="color:var(--text3)">
                             <i data-feather="copy" class="w-3.5 h-3.5"></i>
                         </button>
-                        <a href="${escapeHtml(localUrl)}" target="_blank" rel="noopener" title="Open local" class="p-1.5 rounded-lg transition active:scale-95 flex items-center" style="color:var(--text3)">
+                        <a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer" title="Open local" class="p-1.5 rounded-lg transition active:scale-95 flex items-center" style="color:var(--text3)">
                             <i data-feather="external-link" class="w-3.5 h-3.5"></i>
                         </a>
                     </div>
@@ -286,6 +287,23 @@
         }
 
         // ── Select App ───────────────────────────────────────────────────────────
+        function _formatAppPorts(app) {
+            if (!app) return '';
+            try {
+                const parsed = JSON.parse(app.manual_ports || '[]');
+                if (Array.isArray(parsed) && parsed.length > 0) return parsed.join(', ');
+            } catch { }
+            return app.port ? String(app.port) : '';
+        }
+
+        function _resetPerAppLogUi() {
+            _logRaw = ''; _logRenderedKey = ''; _logFollow = true;
+            const lv = document.getElementById('log-viewer');
+            if (lv) lv.dataset.rawText = '';
+            clearLogSearch();
+            if (typeof resetLogSearchPanel === 'function') resetLogSearchPanel();
+        }
+
         // Tracks in-flight port poll so switching apps cancels the old one cleanly
         let _portPollTimer = null;
 
@@ -327,8 +345,7 @@
             if (_portPollTimer) { clearInterval(_portPollTimer); _portPollTimer = null; }
 
             // Reset per-app log state so the previous app's output never bleeds through.
-            _logRaw = ''; _logRenderedKey = ''; _logFollow = true;
-            clearLogSearch();
+            _resetPerAppLogUi();
 
 
             activeAppId = id;
@@ -392,9 +409,9 @@
             // (activeApp is null here if the refresh above failed with nothing cached)
             if (activeApp && activeApp.status === 'running' && !activeApp.port) {
                 let _polls = 0;
-                _portPollTimer = setInterval(async () => {
+                const timer = setInterval(async () => {
                     _polls++;
-                    if (activeAppId !== id || _polls >= 60) { clearInterval(_portPollTimer); _portPollTimer = null; return; }
+                    if (activeAppId !== id || _polls >= 60) { clearInterval(timer); if (_portPollTimer === timer) _portPollTimer = null; return; }
                     try {
                         const r = await fetch(`${API}/apps`);
                         if (!r.ok) return;
@@ -403,11 +420,15 @@
                         if (updated && activeAppId === id) {
                             activeApp = updated;
                             _updateNetworkCard(activeApp);
-                            document.getElementById('setting-port').value = activeApp.port || '';
-                            if (activeApp.port) { clearInterval(_portPollTimer); _portPollTimer = null; }
+                            const portInp = document.getElementById('setting-port');
+                            if (portInp && document.activeElement !== portInp && !isSettingsDirty()) {
+                                portInp.value = _formatAppPorts(activeApp);
+                            }
+                            if (activeApp.port) { clearInterval(timer); if (_portPollTimer === timer) _portPollTimer = null; }
                         }
                     } catch (e) { }
                 }, 2000);
+                _portPollTimer = timer;
             }
         }
 
@@ -415,13 +436,14 @@
         // when it turns out to be gone (deleted elsewhere, or by a restore).
         function deselectApp(message) {
             if (_portPollTimer) { clearInterval(_portPollTimer); _portPollTimer = null; }
+            if (window._controlPollTimer) { clearInterval(window._controlPollTimer); window._controlPollTimer = null; }
             if (logInterval) { clearInterval(logInterval); logInterval = null; }
             _termDestroy();
             _termAppId = null;
             activeAppId = null; activeApp = null;
             _resetEditor();
             currentBrowserPath = ''; fileClipboard = null;
-            _logRaw = ''; _logRenderedKey = '';
+            _resetPerAppLogUi();
             // Nothing left that could be unsaved.
             document.getElementById('save-status-dot')?.classList.add('hidden');
             document.querySelector('#tabbtn-settings .settings-dirty-dot')?.remove();
@@ -461,7 +483,7 @@
             if (!isCurrentlyDirty) {
                 document.getElementById('setting-policy').value = app.restart_policy || 'never';
                 document.getElementById('setting-boot').checked = app.start_on_boot;
-                document.getElementById('setting-port').value = app.port || '';
+                document.getElementById('setting-port').value = _formatAppPorts(app);
                 envEditor.load(app);
                 renderSettingsExtras(app);
                 document.getElementById('setting-health-path').value = app.healthcheck_path || '';
@@ -616,9 +638,9 @@
                         if ((action === 'start' || action === 'restart') && updated.status === 'running') {
                             if (_portPollTimer) { clearInterval(_portPollTimer); _portPollTimer = null; }
                             let _pp = 0;
-                            _portPollTimer = setInterval(async () => {
+                            const pTimer = setInterval(async () => {
                                 _pp++;
-                                if (activeAppId !== targetAppId || _pp >= 60) { clearInterval(_portPollTimer); _portPollTimer = null; return; }
+                                if (activeAppId !== targetAppId || _pp >= 60) { clearInterval(pTimer); if (_portPollTimer === pTimer) _portPollTimer = null; return; }
                                 try {
                                     const pr = await fetch(`${API}/apps`);
                                     if (!pr.ok) return;
@@ -628,11 +650,14 @@
                                         activeApp = pu;
                                         _updateNetworkCard(activeApp);
                                         const portInp = document.getElementById('setting-port');
-                                        if (portInp) portInp.value = activeApp.port || '';
-                                        if (activeApp.port) { clearInterval(_portPollTimer); _portPollTimer = null; }
+                                        if (portInp && document.activeElement !== portInp && !isSettingsDirty()) {
+                                            portInp.value = _formatAppPorts(activeApp);
+                                        }
+                                        if (activeApp.port) { clearInterval(pTimer); if (_portPollTimer === pTimer) _portPollTimer = null; }
                                     }
                                 } catch (e) { }
                             }, 2000);
+                            _portPollTimer = pTimer;
                         }
                     }
                 } catch (e) { }

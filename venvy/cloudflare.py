@@ -62,9 +62,12 @@ async def _cf_request(method: str, url: str, token: str, payload: Optional[dict]
     }
     timeout = aiohttp.ClientTimeout(total=10)
     try:
-        async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as session:
-            async with session.request(method, url, headers=headers, json=payload) as resp:
-                data = await resp.json()
+        async with aiohttp.ClientSession(timeout=timeout, cookie_jar=aiohttp.DummyCookieJar(), **HTTP_CLIENT_LIMITS) as session:
+            async with session.request(method, url, headers=headers, json=payload, allow_redirects=False) as resp:
+                try:
+                    data = await resp.json(content_type=None)
+                except ValueError:
+                    raise HTTPException(502, f"Cloudflare API returned a non-JSON response (HTTP {resp.status}).")
                 if not isinstance(data, dict):
                     raise HTTPException(502, f"Cloudflare API returned an unexpected response (HTTP {resp.status}).")
                 # Cloudflare also reports failures as 200 with success=false.
@@ -96,25 +99,21 @@ _CATCH_ALL = [{"service": "http_status:404"}]
 async def _cf_update_ingress(creds: dict, change: Callable[[List[dict]], List[dict]]) -> List[dict]:
     """Rewrite the tunnel's hostname rules: *change* receives the current
     named rules and returns the new ones; the catch-all rule is kept (or
-    added) at the end, where Cloudflare requires it. Returns the complete
-    ingress list as it was before, for callers that may need to put it back
-    with _cf_put_ingress()."""
+    added) at the end, where Cloudflare requires it, and other top-level
+    config keys (e.g. warp-routing, originRequest) are preserved."""
     cfg_url = _cf_tunnel_cfg_url(creds)
     async with _ingress_lock:
         current = await _cf_request("GET", cfg_url, creds["cf_api_token"])
-        ingress = ((current.get("result") or {}).get("config") or {}).get("ingress") or []
+        config = dict(((current.get("result") or {}).get("config") or {}))
+        ingress = config.get("ingress") or []
         named = [r for r in ingress if r.get("hostname")]
         catch_all = [r for r in ingress if not r.get("hostname")]
-        new_ingress = change(named) + (catch_all or _CATCH_ALL)
-        await _cf_request("PUT", cfg_url, creds["cf_api_token"], {"config": {"ingress": new_ingress}})
+        updated_named = change(named)
+        # Always keep exact hostnames ahead of any wildcard rules (cloudflared matches top-down).
+        updated_named.sort(key=lambda r: (1 if str(r.get("hostname") or "").startswith("*.") else 0))
+        config["ingress"] = updated_named + (catch_all or _CATCH_ALL)
+        await _cf_request("PUT", cfg_url, creds["cf_api_token"], {"config": config})
     return ingress
-
-
-async def _cf_put_ingress(creds: dict, ingress: List[dict]) -> None:
-    """Write a complete ingress list as it is (used to undo an update)."""
-    async with _ingress_lock:
-        await _cf_request("PUT", _cf_tunnel_cfg_url(creds), creds["cf_api_token"],
-                          {"config": {"ingress": ingress or _CATCH_ALL}})
 
 
 def _cf_tunnel_cfg_url(creds: dict) -> str:
@@ -122,8 +121,10 @@ def _cf_tunnel_cfg_url(creds: dict) -> str:
             f"/cfd_tunnel/{creds['cf_tunnel_id']}/configurations")
 
 
+# Plain hostnames only (no leading `*.` wildcards that can hijack other tenants'
+# or Venvy's own subdomains in cloudflared's first-match-wins ingress table).
 _CF_HOSTNAME_RE = re.compile(
-    r"\A(?:\*\.)?(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+    r"\A(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 def _clean_cf_hostname(raw: str) -> str:
@@ -244,12 +245,17 @@ async def _cf_delete_dns_cname(
     zone_id: str,
     hostname: str,
     api_token: str,
+    tunnel_id: Optional[str] = None,
 ) -> None:
-    """Delete the CNAME DNS record for *hostname* in the given zone, if it exists."""
+    """Delete the CNAME DNS record for *hostname* in the given zone (scoped to
+    *tunnel_id* when provided so unrelated CNAMEs are left intact)."""
     list_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=CNAME&name={urllib.parse.quote(hostname, safe='')}"
+    expected_target = f"{tunnel_id}.cfargotunnel.com".lower() if tunnel_id else None
     try:
         existing = await _cf_request("GET", list_url, api_token)
         for rec in existing.get("result", []):
+            if expected_target and (rec.get("content") or "").lower().rstrip(".") != expected_target:
+                continue
             await _cf_request(
                 "DELETE",
                 f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{rec['id']}",

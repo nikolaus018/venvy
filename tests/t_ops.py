@@ -131,7 +131,7 @@ with server(repo, 55021, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv)
     tk = cl.req("POST", "/api/tokens", json={"name": "x"}).json()
     # a token made by a restricted user is restricted too
     otk = ops.req("POST", "/api/tokens", json={"name": "ops-ci"}).json()["token"]
-    check("a restricted user's token is restricted", [a["id"] for a in bearer(otk).get("/api/apps").json()] == [a1, mine["app_id"]] or
+    check("a restricted user's token is restricted",
           {a["id"] for a in bearer(otk).get("/api/apps").json()} == {a1, mine["app_id"]})
     check("... and cannot reach other apps", bearer(otk).get(f"/api/apps/{a2}/files/tree").status_code == 404)
     check("restore all apps", cl.req("PUT", f"/api/users/{uid}/access", json={"all_apps": True, "app_ids": []}).status_code == 200
@@ -182,7 +182,7 @@ with server(repo, 55021, env={"VENVY_METRICS_FLUSH_SEC": "5"}) as (base, d, srv)
     cl.req("POST", f"/api/apps/{lg_app}/files/op", json={"operation": "save", "path": "main.py", "content": f'print("{bomb}", flush=True)\nimport time; time.sleep(30)\n'})
     cl.req("POST", f"/api/apps/{lg_app}/control?action=start"); cl.wait_status(lg_app, "running"); time.sleep(1.5)
     r = httpx.get(base + f"/api/apps/{lg_app}/logs/search", params={"q": "(a+)+$", "regex": "true"}, headers={"x-venvy-key": cl.key}, cookies=cl.c.cookies, timeout=40)
-    check("a catastrophic regex times out instead of hanging Venvy", r.status_code in (408, 200) and time.time() - t0 < 60, str(r.status_code))
+    check("a catastrophic regex times out instead of hanging Venvy", r.status_code == 408 and time.time() - t0 < 60, str(r.status_code))
     check("... and Venvy still answers", httpx.get(base + "/api/health", timeout=5).status_code == 200)
     dl = cl.req("GET", f"/api/apps/{lg_app}/logs/download")
     check("download has all logs", dl.status_code == 200 and "NEEDLE-OLD" in dl.text and "attachment" in dl.headers["content-disposition"])

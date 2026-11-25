@@ -31,17 +31,23 @@ def _clean_app_name(name: str) -> str:
 
 def sanitize_slug(name: str) -> str:
     s = name.lower().strip()
-    s = re.sub(r"[\s\W-]+", "-", s)
+    s = re.sub(r"[\s\W-]+", "-", s).strip("-")
     return s or "app"
+
+
+_URL_USERINFO_RE = re.compile(r"\A((?:https|ssh)://)[^/@]+@")
+
+
+def _redact_git_url(url: str) -> str:
+    return _URL_USERINFO_RE.sub(r"\1***@", url or "")
 
 
 def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
     """Return App as dict — injects local_url + access_url + live metrics.
 
     env_json is encrypted at rest and holds real secrets (DB passwords, API
-    keys, etc. for the hosted app). reveal_secrets=False redacts it instead
-    of decrypting, for callers where the requester's role shouldn't see
-    plaintext env vars (e.g. a read-only viewer browsing the app list)."""
+    keys, etc. for the hosted app). reveal_secrets=False redacts env_json,
+    build_command, and git_url credentials for read-only viewer callers."""
     # A commit expires the row, and model_dump() reads the instance's dict
     # without reloading: after list_apps() marked a crashed app stopped, the
     # app came back with no id, name or status at all.
@@ -63,7 +69,10 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
         d["env_unreadable"] = not env_ok
     else:
         d["env_json"] = "{}"
-        d["env_redacted"] = bool(app_row.env_json)
+        d["env_redacted"] = app_row.env_json not in ("", "{}")
+        d["build_command"] = ""
+        if d.get("git_url"):
+            d["git_url"] = _redact_git_url(d["git_url"])
     local_url = f"http://{get_server_ipv4()}:{app_row.port}" if app_row.port else None
     d["local_url"] = local_url
     # Exited by itself with an error, or was killed by something other than
@@ -85,7 +94,7 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
         d["access_url"] = None
         d["url_source"] = None
     for key in ("created_at", "updated_at", "last_start_time", "last_stop_time",
-                "last_manually_stopped_at"):
+                "last_manually_stopped_at", "last_deploy_at"):
         val = d.get(key)
         if isinstance(val, datetime.datetime):
             d[key] = val.isoformat()

@@ -2,7 +2,9 @@
 import asyncio
 import contextlib
 import json
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Iterator, List
@@ -26,6 +28,10 @@ _SCRIPT = ASSETS_DIR / "venvy" / "runtime_assets" / "search_logs.py"
 _ROTATED = re.compile(r"\.(\d+)\Z")
 
 
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+
+
 def log_files(app: App) -> List[Path]:
     """The app's log files, oldest first (rotated ones, then the current one)."""
     current = _app_log_file(app)
@@ -33,10 +39,10 @@ def log_files(app: App) -> List[Path]:
     with contextlib.suppress(OSError):
         for p in current.parent.iterdir():
             m = _ROTATED.search(p.name)
-            if p.name.startswith(current.name + ".") and m and p.is_file():
+            if p.name.startswith(current.name + ".") and m and not p.is_symlink() and p.is_file():
                 found.append((int(m.group(1)), p))
     files = [p for _, p in sorted(found)]
-    if current.is_file():
+    if not current.is_symlink() and current.is_file():
         files.append(current)
     return files
 
@@ -88,7 +94,14 @@ async def search_logs(
 def _stream(files: List[Path]) -> Iterator[bytes]:
     for f in files:
         try:
-            with open(f, "rb") as fh:
+            fd = os.open(f, os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC)
+        except OSError:
+            continue
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                os.close(fd)
+                continue
+            with os.fdopen(fd, "rb") as fh:
                 while True:
                     chunk = fh.read(1 << 20)
                     if not chunk:

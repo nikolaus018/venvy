@@ -5,15 +5,18 @@ key sent as X-Venvy-Key), roles, one-time download tickets, the login and
 mutation rate limiters, and working out which client a request came from.
 """
 import base64
+import collections
 import contextlib
 import datetime
 import hashlib
 import hmac
+import ipaddress
 import logging
 import os
 import re
 import secrets
 import struct
+import sys
 import threading
 import time
 import urllib.parse
@@ -109,7 +112,10 @@ def _resolve_client_ip(request: Union[Request, HTTPConnection]) -> str:
     if _from_trusted_proxy(request):
         cf_ip = (request.headers.get("cf-connecting-ip", "") or "").strip()
         if cf_ip:
-            return cf_ip
+            try:
+                return str(ipaddress.ip_address(cf_ip))
+            except ValueError:
+                pass
     return peer or "unknown"
 
 
@@ -137,16 +143,18 @@ def _from_hosted_app(request: Union[Request, HTTPConnection]) -> bool:
     past the IP allowlist and the per-IP login lockout. The socket's owner
     tells them apart: Linux keeps it in /proc/net/tcp. An app runs as its
     own venvy-app-<id> user, or, installed with --shared-user, as Venvy's
-    own (which the installed cloudflared never is). A checkout run by hand
-    says neither, and there cloudflared may well be the same user: no
-    telling. Unknown (not Linux, no such socket): False."""
+    own (which the installed cloudflared never is). Under Linux per-app
+    isolation, an unverifiable loopback socket fails closed."""
     if request.client is None or not request.client.port or not request.scope.get("server"):
         return False
     uid = _socket_owner(request.client.host, request.client.port, *request.scope["server"][:2])
-    if uid is None:
-        return False
     from venvy.isolation import _isolation_active
-    if not _isolation_active():
+    isolated = _isolation_active()
+    if uid is None:
+        if isolated and sys.platform.startswith("linux") and request.client.host in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return True
+        return False
+    if not isolated:
         return os.getenv("VENVY_APP_USERS") == "0" and uid == os.geteuid() != 0
     import pwd
     try:
@@ -157,12 +165,13 @@ def _from_hosted_app(request: Union[Request, HTTPConnection]) -> bool:
 
 def _proc_address(text: str) -> tuple:
     """("127.0.0.1", 54783) from /proc/net/tcp's "0100007F:D5EF": the address
-    in 32-bit words of host byte order (little-endian here), the port in hex.
+    in 32-bit words of host byte order, the port in hex.
     A v4-mapped IPv6 address reads as its IPv4 one."""
-    import ipaddress
     host, port = text.split(":")
     raw = bytes.fromhex(host)
-    ip = ipaddress.ip_address(b"".join(raw[i:i + 4][::-1] for i in range(0, len(raw), 4)))
+    if sys.byteorder == "little":
+        raw = b"".join(raw[i:i + 4][::-1] for i in range(0, len(raw), 4))
+    ip = ipaddress.ip_address(raw)
     if ip.version == 6 and ip.ipv4_mapped:
         ip = ip.ipv4_mapped
     return str(ip), int(port, 16)
@@ -172,7 +181,6 @@ def _socket_owner(client_host: str, client_port: int, server_host: str, server_p
                   tables: tuple = ("/proc/net/tcp", "/proc/net/tcp6")) -> Optional[int]:
     """The uid that owns the client end of the TCP connection from
     client_host:client_port to server_host:server_port, or None."""
-    import ipaddress
 
     def norm(h: str) -> str:
         try:
@@ -192,6 +200,9 @@ def _socket_owner(client_host: str, client_port: int, server_host: str, server_p
                         continue
                     try:
                         if (_proc_address(fields[1]), _proc_address(fields[2])) == want:
+                            # TIME_WAIT sockets in /proc/net/tcp report uid=0; ignore non-active states.
+                            if fields[3] == "06":
+                                return None
                             return int(fields[7])
                     except ValueError:
                         continue
@@ -227,6 +238,9 @@ def check_ip_allowlist(request: HTTPConnection) -> None:
 # Auth helpers
 # ---------------------------------------------------------------------------
 
+_MAX_PASSWORD_LEN = 1024
+
+
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     dk = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=16384, r=8, p=1, maxmem=0)
@@ -234,6 +248,8 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    if not plain or len(plain) > _MAX_PASSWORD_LEN:
+        return False
     try:
         raw = base64.b64decode(hashed.encode("utf-8"))
         salt = raw[:16]
@@ -256,6 +272,8 @@ _DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(16))
 def _validate_password_strength(password: str) -> None:
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
+    if len(password) > _MAX_PASSWORD_LEN:
+        raise HTTPException(status_code=400, detail=f"Password must be at most {_MAX_PASSWORD_LEN} characters long.")
     if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
         raise HTTPException(status_code=400, detail="Password must contain both letters and numbers.")
 
@@ -306,6 +324,9 @@ def _new_session(session: Session, request: Request, response: Response, user: U
 # the machine can read: it is written to DATA_DIR/.setup-code (0600), logged
 # at startup, and printed by install.sh.
 
+_setup_code_lock = threading.Lock()
+
+
 def _new_setup_code() -> str:
     raw = secrets.token_hex(8)
     return "-".join(raw[i:i + 4] for i in range(0, 16, 4))
@@ -321,21 +342,41 @@ def ensure_setup_code(session: Session) -> Optional[str]:
     if session.exec(select(User)).first() is not None:
         clear_setup_code()
         return None
-    try:
-        code = SETUP_CODE_FILE.read_text().strip()
-        if len(_normalize_setup_code(code)) == 16:
-            return code
-    except OSError:
-        pass
-    code = _new_setup_code()
-    tmp = SETUP_CODE_FILE.with_name(f"{SETUP_CODE_FILE.name}.{secrets.token_hex(4)}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(code + "\n")
-    os.replace(tmp, SETUP_CODE_FILE)
-    logging.warning(f"No admin account yet. To create it, open Venvy and enter the setup code "
-                    f"{code} (also in {SETUP_CODE_FILE}).")
-    return code
+    with _setup_code_lock:
+        try:
+            code = SETUP_CODE_FILE.read_text().strip()
+            if len(_normalize_setup_code(code)) == 16:
+                return code
+        except OSError:
+            pass
+        code = _new_setup_code()
+        tmp = SETUP_CODE_FILE.with_name(f"{SETUP_CODE_FILE.name}.{secrets.token_hex(4)}.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created = False
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(code + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                os.link(tmp, SETUP_CODE_FILE)
+                created = True
+            except FileExistsError:
+                pass
+            except OSError:
+                if not SETUP_CODE_FILE.exists():
+                    os.replace(tmp, SETUP_CODE_FILE)
+                    created = True
+        finally:
+            tmp.unlink(missing_ok=True)
+        if not created:
+            with contextlib.suppress(OSError):
+                existing = SETUP_CODE_FILE.read_text().strip()
+                if len(_normalize_setup_code(existing)) == 16:
+                    return existing
+        logging.warning(f"No admin account yet. To create it, open Venvy and enter the setup code "
+                        f"{code} (also in {SETUP_CODE_FILE}).")
+        return code
 
 
 def check_setup_code(session: Session, supplied: Optional[str]) -> bool:
@@ -351,8 +392,21 @@ def clear_setup_code() -> None:
         SETUP_CODE_FILE.unlink()
 
 
-def _load_session(session: Session, cookie_token: Optional[str]) -> Optional[UserSession]:
-    """Return the live UserSession for a cookie value, sliding its expiry."""
+def _slide_session_if_needed(session: Session, db_session: UserSession) -> bool:
+    """Slide expiry window if less than 7 days remain. Returns True if slid."""
+    now = utc_now()
+    remaining = (_make_tz_aware(db_session.expires_at) - now).total_seconds()
+    if remaining < 60 * 60 * 24 * 7:
+        db_session.expires_at = now + datetime.timedelta(seconds=SESSION_TTL_SECONDS)
+        session.add(db_session)
+        with contextlib.suppress(Exception):
+            session.commit()
+        return True
+    return False
+
+
+def _load_session(session: Session, cookie_token: Optional[str], slide: bool = False) -> Optional[UserSession]:
+    """Return the live UserSession for a cookie value (without sliding unless requested)."""
     if not cookie_token:
         return None
     db_session = session.get(UserSession, _hash_token(cookie_token))
@@ -361,23 +415,29 @@ def _load_session(session: Session, cookie_token: Optional[str]) -> Optional[Use
     now = utc_now()
     if now > _make_tz_aware(db_session.expires_at):
         session.delete(db_session)
-        session.commit()
+        with contextlib.suppress(Exception):
+            session.commit()
         return None
-    # Slide expiry window if less than 7 days remain.
-    remaining = (_make_tz_aware(db_session.expires_at) - now).total_seconds()
-    if remaining < 60 * 60 * 24 * 7:
-        db_session.expires_at = now + datetime.timedelta(seconds=SESSION_TTL_SECONDS)
-        session.add(db_session)
-        session.commit()
+    if slide:
+        _slide_session_if_needed(session, db_session)
     return db_session
 
 
-def _authenticate(session: Session, cookie_token: Optional[str], auth_key: Optional[str]) -> Optional[User]:
-    db_session = _load_session(session, cookie_token)
+def _authenticate(
+    session: Session,
+    cookie_token: Optional[str],
+    auth_key: Optional[str],
+    request: Optional[Request] = None,
+) -> Optional[User]:
+    db_session = _load_session(session, cookie_token, slide=False)
     if not db_session or not db_session.key_hash or not auth_key:
         return None
     if not secrets.compare_digest(db_session.key_hash, _hash_token(auth_key)):
         return None
+    # Slide expiry only after BOTH secrets match so a cookie-only caller
+    # cannot extend session lifetime or trigger DB writes.
+    if _slide_session_if_needed(session, db_session) and request is not None:
+        request.state.refresh_session_cookie = cookie_token
     return session.get(User, db_session.user_id)
 
 
@@ -404,24 +464,37 @@ def _authenticate_token(session: Session, request: Request, raw: str) -> User:
     user = session.get(User, row.user_id)
     if not user:
         raise bad
-    if row.scope == "read" and request.method not in _SAFE_METHODS:
+    if row.scope != "full" and request.method not in _SAFE_METHODS:
         raise HTTPException(status_code=403, detail="This API token is read-only.")
     if not row.last_used_at or (now - _make_tz_aware(row.last_used_at)).total_seconds() > _TOKEN_TOUCH_SEC:
         row.last_used_at = now
         session.add(row)
-        session.commit()
+        with contextlib.suppress(Exception):
+            session.commit()
     request.state.via_token = True
     return user
 
 
 def get_current_user(request: Request, session: Session = Depends(get_session)) -> User:
+    cached = getattr(request.state, "_auth_user", None)
+    if cached is not None:
+        # Ensure the cached ORM instance is usable in this session.
+        if cached in session:
+            return cached
+        refreshed = session.get(User, cached.id)
+        if refreshed is not None:
+            request.state._auth_user = refreshed
+            return refreshed
     authz = request.headers.get("authorization", "")
     if authz[:7].lower() == "bearer ":
         # A token request never falls back to the cookie: it is judged on the token alone.
-        return _authenticate_token(session, request, authz[7:].strip())
-    user = _authenticate(session, request.cookies.get("session"), request.headers.get("x-venvy-key"))
+        user = _authenticate_token(session, request, authz[7:].strip())
+        request.state._auth_user = user
+        return user
+    user = _authenticate(session, request.cookies.get("session"), request.headers.get("x-venvy-key"), request=request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated.")
+    request.state._auth_user = user
     return user
 
 
@@ -462,22 +535,20 @@ def require_app_access(request: Request, session: Session = Depends(get_session)
     """Router-level dependency: a route with an {app_id} in its path is only for users who may use that app.
     404 rather than 403, so an app's existence is not revealed."""
     ticket = request.query_params.get("ticket")
-    if ticket:
+    is_download_route = request.method == "GET" and request.url.path.rstrip("/").endswith("/download")
+    if ticket and is_download_route:
         # A download link. Look at whose ticket it is without using it up
-        # (get_download_user does that). Any route takes ?ticket=, so a bad
-        # one must not get a request past this check either.
+        # (get_download_user does that).
         with _download_tickets_lock:
             entry = _download_tickets.get(_hash_token(ticket))
         if entry and entry[1] >= time.monotonic():
             user = session.get(User, entry[0])
             if user:
                 _check_path_app_access(request, session, user)
-        # And whoever the request is signed in as, if anyone: a route that
-        # doesn't take tickets acts as that user, not as the ticket's.
         try:
             user = get_current_user(request, session)
         except HTTPException:
-            return        # not signed in: a download route checks the ticket itself
+            return        # not signed in: the download route checks the ticket itself
         _check_path_app_access(request, session, user)
         return
     _check_path_app_access(request, session, get_current_user(request, session))
@@ -509,7 +580,7 @@ def get_download_user(request: Request, session: Session = Depends(get_session))
         entry = _download_tickets.pop(_hash_token(ticket), None)
     user = session.get(User, entry[0]) if entry else None
     # The ticket must also come with this browser's session cookie.
-    db_session = _load_session(session, request.cookies.get("session"))
+    db_session = _load_session(session, request.cookies.get("session"), slide=False)
     if not user or not db_session or db_session.user_id != user.id:
         raise HTTPException(status_code=401, detail="Download link expired — try again.")
     _check_path_app_access(request, session, user)
@@ -568,17 +639,18 @@ _LOGIN_STRIKE_MEMORY_SEC = 24 * 3600
 
 
 def _login_rate_key(request: Request) -> str:
-    return _resolve_client_ip(request)
+    return "ip:" + _resolve_client_ip(request)
 
 
 def _check_login_rate(key: str) -> None:
+    now = time.monotonic()
     with _login_lock:
         entry = _login_attempts.get(key)
         if not entry:
             return
         locked_until = entry.get('locked_until')
-        if locked_until and time.time() < locked_until:
-            remaining = int(locked_until - time.time()) + 1
+        if locked_until and now < locked_until:
+            remaining = int(locked_until - now) + 1
             raise HTTPException(
                 429,
                 f'Too many failed attempts. Try again in {remaining} seconds.',
@@ -596,7 +668,7 @@ def _make_room_for_login_entry() -> None:
     not recording new keys any more (as before) let anyone who filled the
     table with made-up usernames guess every other one without a limit.
     Caller holds _login_lock."""
-    now = time.time()
+    now = time.monotonic()
 
     def weight(item):
         entry = item[1]
@@ -608,16 +680,17 @@ def _make_room_for_login_entry() -> None:
 
 
 def _record_login_failure(key: str, max_tries: int = _LOGIN_MAX_TRIES) -> None:
+    now = time.monotonic()
     with _login_lock:
         if key not in _login_attempts and len(_login_attempts) >= _LOGIN_MAX_TRACKED:
             _make_room_for_login_entry()
         entry = _login_attempts.setdefault(key, {'count': 0, 'locked_until': None})
         entry['count'] += 1
-        entry['last'] = time.time()
+        entry['last'] = now
         if entry['count'] >= max_tries:
             entry['strikes'] = entry.get('strikes', 0) + 1
             lockout = min(_LOGIN_LOCKOUT_MAX_SEC, _LOGIN_LOCKOUT_SEC * 2 ** (entry['strikes'] - 1))
-            entry['locked_until'] = time.time() + lockout
+            entry['locked_until'] = now + lockout
             entry['count'] = 0
 
 
@@ -647,7 +720,7 @@ def _purge_login_attempts() -> None:
     the count every two minutes and let a client guess indefinitely at four
     tries per sweep without ever being locked out. One that has been locked
     out before is kept for a day of quiet, so the next lockout is longer."""
-    now = time.time()
+    now = time.monotonic()
     with _login_lock:
         for key, entry in list(_login_attempts.items()):
             if entry.get('strikes'):
@@ -666,7 +739,7 @@ def _purge_login_attempts() -> None:
 # script hammering the host, not to throttle normal interactive use. The file
 # manager sends one request per item, so selecting a few hundred files and
 # deleting or moving them has to fit under it.
-_mutation_hits: dict = {}
+_mutation_hits: Dict[str, collections.deque] = {}
 
 
 _mutation_lock = threading.Lock()
@@ -678,20 +751,32 @@ _MUTATION_MAX_PER_WINDOW = 600
 _MUTATION_WINDOW_SEC = 60
 
 
+_MUTATION_MAX_TRACKED = 50_000
+
+
 def rate_limit_mutations(request: Request) -> None:
     """Dependency: raise 429 if this IP has made too many mutating requests recently."""
     key = _resolve_client_ip(request)
-    now = time.time()
+    now = time.monotonic()
+    cutoff = now - _MUTATION_WINDOW_SEC
     with _mutation_lock:
-        hits = _mutation_hits.setdefault(key, [])
-        cutoff = now - _MUTATION_WINDOW_SEC
+        if key not in _mutation_hits and len(_mutation_hits) >= _MUTATION_MAX_TRACKED:
+            # Drop stale entries first; if still full, evict the oldest key.
+            stale = [k for k, h in _mutation_hits.items() if not h or h[-1] < cutoff]
+            for k in stale:
+                _mutation_hits.pop(k, None)
+            if len(_mutation_hits) >= _MUTATION_MAX_TRACKED:
+                oldest = min(_mutation_hits.items(), key=lambda item: item[1][-1] if item[1] else 0.0)[0]
+                _mutation_hits.pop(oldest, None)
+        hits = _mutation_hits.setdefault(key, collections.deque())
         while hits and hits[0] < cutoff:
-            hits.pop(0)
+            hits.popleft()
         if len(hits) >= _MUTATION_MAX_PER_WINDOW:
+            retry_after = max(1, int(hits[0] + _MUTATION_WINDOW_SEC - now) + 1)
             raise HTTPException(
                 429,
                 "Too many requests. Please slow down.",
-                headers={"Retry-After": str(_MUTATION_WINDOW_SEC), "X-Retry-After": str(_MUTATION_WINDOW_SEC)},
+                headers={"Retry-After": str(retry_after), "X-Retry-After": str(retry_after)},
             )
         hits.append(now)
 
@@ -699,7 +784,7 @@ def rate_limit_mutations(request: Request) -> None:
 def _purge_mutation_hits() -> None:
     """Forget clients whose window has emptied (called periodically). Without
     it the table kept one entry for every address that ever made a request."""
-    cutoff = time.time() - _MUTATION_WINDOW_SEC
+    cutoff = time.monotonic() - _MUTATION_WINDOW_SEC
     with _mutation_lock:
         for key in [k for k, hits in _mutation_hits.items() if not hits or hits[-1] < cutoff]:
             _mutation_hits.pop(key, None)

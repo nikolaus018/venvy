@@ -110,47 +110,53 @@ if case == "terminal_db":
 
 if case == "key_perms":
     # The key must never exist with wider permissions, even under a lax umask.
+    import shutil, subprocess
     with server(repo, PORT, env={}) as (base, d, srv):
         pass
     data = tempfile.mkdtemp(prefix="venvy-t-")
-    import subprocess
-    code = (
-        "import os, sys, threading; os.umask(0); sys.argv=['main.py'];"
-        f"sys.path.insert(0, {repo!r});"
-        "import importlib.util as u;"
-        f"spec=u.spec_from_file_location('m', os.path.join({repo!r}, {os.environ.get('SMOKE_ENTRY', 'main.py')!r}));"
-        "m=u.module_from_spec(spec); spec.loader.exec_module(m);"
-        "import venvy.crypto as c;"
-        "out=[];"
-        "ts=[threading.Thread(target=lambda: out.append(c._encrypt_secret('x'))) for _ in range(16)];"
-        "[t.start() for t in ts]; [t.join() for t in ts];"
-        "c._fernet_instance=None;"
-        "print(oct(os.stat('.venvy_key').st_mode & 0o777), all(c._decrypt_secret(o)=='x' for o in out))"
-    )
-    r = subprocess.run([sys.executable, "-c", code], cwd=data, capture_output=True, text=True)
-    print(r.stdout.strip() or r.stderr[-800:])
-    done(r.stdout.strip() == "0o600 True")
+    try:
+        code = (
+            "import os, sys, threading; os.umask(0); sys.argv=['main.py'];"
+            f"sys.path.insert(0, {repo!r});"
+            "import importlib.util as u;"
+            f"spec=u.spec_from_file_location('m', os.path.join({repo!r}, {os.environ.get('SMOKE_ENTRY', 'main.py')!r}));"
+            "m=u.module_from_spec(spec); spec.loader.exec_module(m);"
+            "import venvy.crypto as c;"
+            "out=[];"
+            "ts=[threading.Thread(target=lambda: out.append(c._encrypt_secret('x'))) for _ in range(16)];"
+            "[t.start() for t in ts]; [t.join() for t in ts];"
+            "c._fernet_instance=None;"
+            "print(oct(os.stat('.venvy_key').st_mode & 0o777), all(c._decrypt_secret(o)=='x' for o in out))"
+        )
+        r = subprocess.run([sys.executable, "-c", code], cwd=data, capture_output=True, text=True)
+        print(r.stdout.strip() or r.stderr[-800:])
+        done(r.stdout.strip() == "0o600 True")
+    finally:
+        shutil.rmtree(data, ignore_errors=True)
 
 if case == "crashed_app_listing":
     # GET /api/apps marks an app whose process is gone as stopped and commits;
     # the expired row used to serialize without its id, name or status.
-    import subprocess
+    import shutil, subprocess
     data = tempfile.mkdtemp(prefix="venvy-t-")
-    code = (
-        "import sys; sys.path.insert(0, sys.argv[1]);"
-        "from sqlmodel import Session, select;"
-        "from venvy.db import create_db_and_tables, engine;"
-        "from venvy.models import App, User;"
-        "from venvy.api.apps import list_apps;"
-        "create_db_and_tables();"
-        "s = Session(engine); u = User(username='a', password_hash='x', role='admin'); s.add(u); s.commit(); s.refresh(u);"
-        "s.add(App(user_id=u.id, name='dead', slug='dead', app_dir='/nonexistent', venv_path='/nonexistent/venv',"
-        " entrypoint='main.py', runtime='python', status='running', pid=2**22 + 12345)); s.commit(); s.close();"
-        "s = Session(engine); out = list_apps(session=s, user=s.exec(select(User)).first());"
-        "print(out[0].get('id'), out[0].get('name'), out[0].get('status'))"
-    )
-    r = subprocess.run([sys.executable, "-c", code, repo], cwd=data, capture_output=True, text=True)
-    print(r.stdout.strip() or r.stderr[-800:])
-    done(r.stdout.strip().endswith("1 dead stopped"))
+    try:
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]);"
+            "from sqlmodel import Session, select;"
+            "from venvy.db import create_db_and_tables, engine;"
+            "from venvy.models import App, User;"
+            "from venvy.api.apps import list_apps;"
+            "create_db_and_tables();"
+            "s = Session(engine); u = User(username='a', password_hash='x', role='admin'); s.add(u); s.commit(); s.refresh(u);"
+            "s.add(App(user_id=u.id, name='dead', slug='dead', app_dir='/nonexistent', venv_path='/nonexistent/venv',"
+            " entrypoint='main.py', runtime='python', status='running', pid=2**22 + 12345)); s.commit(); s.close();"
+            "s = Session(engine); out = list_apps(session=s, user=s.exec(select(User)).first());"
+            "print(out[0].get('id'), out[0].get('name'), out[0].get('status'))"
+        )
+        r = subprocess.run([sys.executable, "-c", code, repo], cwd=data, capture_output=True, text=True)
+        print(r.stdout.strip() or r.stderr[-800:])
+        done(r.stdout.strip().endswith("1 dead stopped"))
+    finally:
+        shutil.rmtree(data, ignore_errors=True)
 
 raise SystemExit("unknown case")

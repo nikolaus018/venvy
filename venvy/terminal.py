@@ -7,9 +7,11 @@ import logging
 import os
 import pty
 import re
-import shutil
+import secrets
+import shlex
 import signal
 import struct
+import subprocess
 import termios
 import time
 from pathlib import Path
@@ -20,9 +22,19 @@ from sqlmodel import Session
 
 from venvy import shared_env
 from venvy.config import TERMINAL_RC_DIR
-from venvy.crypto import _decrypt_secret
+from venvy.crypto import _try_decrypt_secret
 from venvy.db import engine
-from venvy.isolation import _app_username, _ensure_app_user, strip_dangerous_env_vars
+from venvy.isolation import (
+    _app_username,
+    _as_app_user,
+    _clean_root_env,
+    _ensure_app_user,
+    _exec_env_argv,
+    _isolation_active,
+    _prepare_exec_env,
+    _resolve_system_bin,
+    strip_dangerous_env_vars,
+)
 from venvy.models import App
 
 
@@ -32,23 +44,24 @@ from venvy.models import App
 
 def _write_bashrc(app_id: int, jail_root: Path, venv_bin: Path, app_name_safe: str,
                   term_ids: Optional[tuple] = None) -> Path:
-    """Write the terminal's rc file. It lives in Venvy's own directory, not the
-    app's: the app can't tamper with it, and Venvy never writes (as root,
-    under per-app users) to a path the app controls. The cd "jail" in it is a
-    convenience only — the real boundary is the per-app user, when enabled."""
+    """Write the terminal's rc file atomically. It lives in Venvy's own
+    directory, not the app's: the app can't tamper with it, and Venvy never
+    writes (as root, under per-app users) to a path the app controls. The cd
+    "jail" in it is a convenience only — the real boundary is the per-app user,
+    when enabled."""
     TERMINAL_RC_DIR.mkdir(mode=0o711, exist_ok=True)
     with contextlib.suppress(OSError):
         TERMINAL_RC_DIR.chmod(0o711)
     bashrc_path = TERMINAL_RC_DIR / f"app-{app_id}.bashrc"
-    activate_script = venv_bin / "activate"
-    jail_dir = str(jail_root)
+    activate_quoted = shlex.quote(str(venv_bin / "activate"))
+    jail_quoted = shlex.quote(str(jail_root))
 
     script = f"""#!/bin/bash
 # Activate virtual environment
-if [ -f "{activate_script}" ]; then source "{activate_script}"; fi
+if [ -f {activate_quoted} ]; then source {activate_quoted}; fi
 
 # ── Venvy Terminal Jail ───────────────────────────────────────────────────────
-export JAIL_DIR="{jail_dir}"
+export JAIL_DIR={jail_quoted}
 
 # Override cd to block navigation outside the app directory
 function cd() {{
@@ -93,14 +106,21 @@ export PS1='\\[\\e[0;32m\\]{app_name_safe}\\[\\e[0m\\] \\[\\e[1;34m\\]${{VENVY_W
 alias ls='ls --color=auto'
 alias ll='ls -la'
 """
+    tmp = TERMINAL_RC_DIR / f".app-{app_id}-{secrets.token_hex(6)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
     try:
-        bashrc_path.write_text(script, encoding="utf-8")
-        if term_ids:
-            os.chown(bashrc_path, 0, term_ids[1])
-            bashrc_path.chmod(0o640)
-        else:
-            bashrc_path.chmod(0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(script)
+            f.flush()
+            if term_ids:
+                os.fchown(f.fileno(), 0, term_ids[1])
+                os.fchmod(f.fileno(), 0o640)
+            else:
+                os.fchmod(f.fileno(), 0o644)
+        os.replace(tmp, bashrc_path)
     except Exception as exc:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
         logging.error(f"Failed to write .bashrc: {exc}")
         raise
     return bashrc_path
@@ -150,132 +170,124 @@ class TerminalManager:
         """Run a shell for *app_id* on *websocket* until either side closes.
         still_allowed() is polled while it is open; when it turns False the
         terminal is closed."""
+        del user_id
         if user_role not in ("admin", "operator"):
             await websocket.close(code=1008, reason="Operator or admin privileges required for terminal access.")
-            return
-        # Read the app and let go of the DB straight away — see terminal_ws().
-        with Session(engine) as session:
-            db_app = session.get(App, app_id)
-        if not db_app:
-            await websocket.close(code=1008, reason="App not found.")
             return
         if self.open_count() >= _MAX_TERMINALS:
             await websocket.close(code=1013, reason="Too many terminals are open — close one and try again.")
             return
 
-        jail_root = Path(db_app.app_dir).resolve()
-        venv_bin  = Path(db_app.venv_path) / "bin"
-
-        _app_name_safe = re.sub(r"[^A-Za-z0-9_.+\-]", "-", db_app.name)[:24].strip("-") or "app"
-
-        try:
-            term_ids = await asyncio.to_thread(_ensure_app_user, db_app)
-            bashrc_script = _write_bashrc(app_id, jail_root, venv_bin, _app_name_safe, term_ids)
-        except Exception as exc:
-            logging.error(f"Failed to create bashrc: {exc}")
-            await websocket.close()
-            return
-
-        _raw_env: Dict[str, str] = {
-            "TERM":             "xterm-256color",
-            "LANG":             os.environ.get("LANG", "en_US.UTF-8"),
-            "HOME":             os.environ.get("HOME", "/tmp"),
-            "USER":             os.environ.get("USER", ""),
-            "LOGNAME":          os.environ.get("LOGNAME", ""),
-            "SHELL":            shutil.which("bash") or "/bin/bash",
-            "PATH":             f"{venv_bin}:/usr/local/bin:/usr/bin:/bin",
-            "VIRTUAL_ENV":      db_app.venv_path,
-            "PYTHONUNBUFFERED": "1",
-        }
-        if term_ids:
-            _raw_env.update(HOME=str(jail_root), USER=_app_username(app_id), LOGNAME=_app_username(app_id))
-        env: Dict[str, str] = {k: v for k, v in _raw_env.items() if v}
-        # The same variables the app, its jobs and its build get: the shared
-        # ones, then the app's own (which win). A `manage.py migrate` typed
-        # here used to run without the DATABASE_URL every app was given.
-        env.update(shared_env.load())
-        try:
-            _extra = json.loads(_decrypt_secret(db_app.env_json) or "{}")
-            if isinstance(_extra, dict):
-                for k, v in _extra.items():
-                    env[str(k)] = str(v)
-        except Exception:
-            pass
-        strip_dangerous_env_vars(env)
-        bash_exe = shutil.which("bash") or "/bin/bash"
-        env["SHELL"] = bash_exe
-
-        master_fd: int = -1
-        slave_fd:  int = -1
-        pid:       int = -1
-
+        # Reserve the slot immediately (before any await) so concurrent
+        # connections cannot exceed _MAX_TERMINALS and close_for_app() sees us.
         stop = asyncio.Event()
         self._open.setdefault(app_id, set()).add(stop)
 
+        master_fd: int = -1
+        slave_fd: int = -1
+        proc: Optional[subprocess.Popen] = None
+
         try:
+            # Read the app off the event loop and let go of the DB straight away.
+            def _load_app_and_shared():
+                with Session(engine) as session:
+                    return session.get(App, app_id), shared_env.load()
+
+            db_app, shared_vars = await asyncio.to_thread(_load_app_and_shared)
+            if not db_app or stop.is_set():
+                await websocket.close(code=1008, reason="App not found.")
+                return
+
+            jail_root = Path(db_app.app_dir).resolve()
+            venv_bin = Path(db_app.venv_path) / "bin"
+            _app_name_safe = re.sub(r"[^A-Za-z0-9_.+\-]", "-", db_app.name)[:24].strip("-") or "app"
+
+            try:
+                term_ids = await asyncio.to_thread(_ensure_app_user, db_app)
+                bashrc_script = await asyncio.to_thread(
+                    _write_bashrc, app_id, jail_root, venv_bin, _app_name_safe, term_ids
+                )
+            except Exception as exc:
+                logging.error(f"Failed to create bashrc: {exc}")
+                await websocket.close()
+                return
+
+            if stop.is_set():
+                await websocket.close()
+                return
+
+            bash_exe = _resolve_system_bin("bash")
+            base_path = f"{venv_bin}:/usr/local/bin:/usr/bin:/bin"
+            _raw_env: Dict[str, str] = {
+                "TERM": "xterm-256color",
+                "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+                "HOME": os.environ.get("HOME", "/tmp"),
+                "USER": os.environ.get("USER", ""),
+                "LOGNAME": os.environ.get("LOGNAME", ""),
+                "SHELL": bash_exe,
+                "PATH": base_path,
+                "VIRTUAL_ENV": db_app.venv_path,
+                "PYTHONUNBUFFERED": "1",
+            }
+            env: Dict[str, str] = {k: v for k, v in _raw_env.items() if v}
+            # Merge shared and app-specific variables first, then restore protected
+            # identity/PATH/SHELL settings so app vars can't break or hijack them.
+            env.update(shared_vars)
+            env_ok, env_plain = _try_decrypt_secret(db_app.env_json)
+            if not env_ok:
+                with contextlib.suppress(Exception):
+                    await websocket.send_text(
+                        "\r\n\x1b[33m⚠ App environment variables could not be decrypted (.venvy_key mismatch).\x1b[0m\r\n"
+                    )
+            else:
+                try:
+                    _extra = json.loads(env_plain or "{}")
+                    if isinstance(_extra, dict):
+                        for k, v in _extra.items():
+                            env[str(k)] = str(v)
+                except Exception:
+                    pass
+            strip_dangerous_env_vars(env)
+            if term_ids:
+                env.update(HOME=str(jail_root), USER=_app_username(app_id), LOGNAME=_app_username(app_id))
+            # Always keep venv_bin and system bins on PATH.
+            existing_path = env.get("PATH", "")
+            env["PATH"] = f"{base_path}:{existing_path}" if existing_path and existing_path != base_path else base_path
+            env["SHELL"] = bash_exe
+            env["VIRTUAL_ENV"] = db_app.venv_path
+
             master_fd, slave_fd = pty.openpty()
 
             rows, cols = size if size and 0 < size[0] < 1000 and 0 < size[1] < 1000 else (50, 220)
+            with contextlib.suppress(OSError):
+                fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+            # Spawn via subprocess.Popen (_posixsubprocess / C-level fork+exec)
+            # + exec_env.py --ctty: zero Python code runs between fork and exec,
+            # avoiding multi-threaded fork deadlocks, and root `setpriv` never
+            # receives untrusted app environment variables.
+            env_tf, env_fd = _prepare_exec_env(env)
             try:
-                fcntl.ioctl(master_fd, termios.TIOCSWINSZ,
-                            struct.pack("HHHH", rows, cols, 0, 0))
-            except OSError:
-                pass
-
-            pid = os.fork()
-
-            if pid == 0:
-                try:
-                    signal.signal(signal.SIGINT,  signal.SIG_DFL)
-                    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-                    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-
-                    os.setsid()
-                    fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
-
-                    os.dup2(slave_fd, 0)
-                    os.dup2(slave_fd, 1)
-                    os.dup2(slave_fd, 2)
-
-                    # Close everything else inherited from Venvy — its listening
-                    # socket, other users' HTTP connections, the DB. A shell (or
-                    # anything started from it) must not be able to accept()
-                    # Venvy's traffic or keep its port bound after it exits.
-                    closed_via_proc = False
-                    try:
-                        fd_dir = "/proc/self/fd"
-                        if os.path.isdir(fd_dir):
-                            for entry in os.listdir(fd_dir):
-                                if entry.isdigit():
-                                    fd_num = int(entry)
-                                    if fd_num >= 3:
-                                        with contextlib.suppress(OSError):
-                                            os.close(fd_num)
-                            closed_via_proc = True
-                    except Exception:
-                        pass
-                    if not closed_via_proc:
-                        try:
-                            max_fd = min(os.sysconf("SC_OPEN_MAX"), 65536)
-                        except Exception:
-                            max_fd = 4096
-                        os.closerange(3, max_fd)
-
-                    if term_ids:
-                        # Drop to the app's own user before anything runs.
-                        os.setgroups([])
-                        os.setgid(term_ids[1])
-                        os.setuid(term_ids[0])
-
-                    os.chdir(str(jail_root))
-                    os.execvpe(
-                        bash_exe,
-                        [bash_exe, "--rcfile", str(bashrc_script)],
-                        env,
-                    )
-                except Exception:
-                    pass
-                os._exit(1)
+                inner_argv = _exec_env_argv(env_fd, [bash_exe, "--rcfile", str(bashrc_script)], ctty=True)
+                if _isolation_active():
+                    spawn_argv = _as_app_user(db_app, inner_argv)
+                    spawn_env = _clean_root_env()
+                else:
+                    spawn_argv = inner_argv
+                    spawn_env = _clean_root_env()
+                proc = subprocess.Popen(
+                    spawn_argv,
+                    cwd=str(jail_root),
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    close_fds=True,
+                    pass_fds=(env_fd,),
+                    start_new_session=True,
+                    env=spawn_env,
+                )
+            finally:
+                env_tf.close()
 
             os.close(slave_fd)
             slave_fd = -1
@@ -340,6 +352,9 @@ class TerminalManager:
 
             async def writer() -> None:
                 try:
+                    if first_input:
+                        # Typed before the size arrived (see terminal_ws): not lost.
+                        await _pty_write(first_input.encode("utf-8"))
                     while not stop.is_set():
                         try:
                             data = await asyncio.wait_for(
@@ -357,11 +372,13 @@ class TerminalManager:
                             try:
                                 msg = json.loads(data[1:])
                                 if "cols" in msg and "rows" in msg:
-                                    fcntl.ioctl(
-                                        master_fd, termios.TIOCSWINSZ,
-                                        struct.pack("HHHH",
-                                                    int(msg["rows"]), int(msg["cols"]), 0, 0),
-                                    )
+                                    r_val = int(msg["rows"])
+                                    c_val = int(msg["cols"])
+                                    if 1 <= r_val < 1000 and 1 <= c_val < 1000:
+                                        fcntl.ioctl(
+                                            master_fd, termios.TIOCSWINSZ,
+                                            struct.pack("HHHH", r_val, c_val, 0, 0),
+                                        )
                             except Exception:
                                 pass
                             continue
@@ -389,9 +406,6 @@ class TerminalManager:
                         return
                 await stop.wait()
 
-            if first_input:
-                # Typed before the size arrived (see terminal_ws): not lost.
-                await _pty_write(first_input.encode("utf-8"))
             t1 = asyncio.create_task(reader())
             t2 = asyncio.create_task(writer())
             t3 = asyncio.create_task(watchdog())
@@ -404,8 +418,15 @@ class TerminalManager:
                 for t in tasks:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
-                
-                if pid > 0:
+
+                # Close master_fd first so the shell receives immediate SIGHUP/EOF.
+                if master_fd != -1:
+                    with contextlib.suppress(OSError):
+                        os.close(master_fd)
+                    master_fd = -1
+
+                if proc is not None and proc.poll() is None:
+                    pid = proc.pid
                     def _sig_term(sig: int) -> None:
                         try:
                             if pid != os.getpgid(0):
@@ -417,58 +438,35 @@ class TerminalManager:
                                 os.kill(pid, sig)
 
                     _sig_term(signal.SIGHUP)
-                    async def _reap() -> None:
-                        for _ in range(30):
-                            try:
-                                wpid, _ = os.waitpid(pid, os.WNOHANG)
-                                if wpid != 0:
-                                    return
-                            except ChildProcessError:
-                                return
-                            await asyncio.sleep(0.1)
+                    for _ in range(30):
+                        if proc.poll() is not None:
+                            break
+                        await asyncio.sleep(0.1)
+                    if proc.poll() is None:
                         _sig_term(signal.SIGKILL)
-                        try:
-                            await loop.run_in_executor(None, os.waitpid, pid, 0)
-                        except Exception:
-                            pass
-                    await _reap()
-                    # Reaped: the number may be handed to an unrelated process
-                    # now, so the fallback kill below must not use it.
-                    pid = -1
-
-                if master_fd != -1:
-                    try:
-                        os.close(master_fd)
-                    except OSError:
-                        pass
-                    master_fd = -1
+                        with contextlib.suppress(Exception):
+                            await loop.run_in_executor(None, proc.wait, 5)
+                    proc = None
 
         except Exception as exc:
             logging.error(f"PTY execution error: {exc}")
         finally:
             for fd in (slave_fd, master_fd):
                 if fd != -1:
-                    try:
+                    with contextlib.suppress(OSError):
                         os.close(fd)
-                    except OSError:
-                        pass
-            if pid > 0:
-                # Only reached when setup failed before the normal teardown.
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
+            if proc is not None and proc.poll() is None:
+                with contextlib.suppress(OSError):
+                    os.killpg(proc.pid, signal.SIGKILL)
                 with contextlib.suppress(Exception):
-                    await asyncio.to_thread(os.waitpid, pid, 0)
+                    await asyncio.to_thread(proc.wait, 5)
             stops = self._open.get(app_id)
             if stops is not None:
                 stops.discard(stop)
                 if not stops:
                     self._open.pop(app_id, None)
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.close()
-            except Exception:
-                pass
 
 
 terminal_manager = TerminalManager()

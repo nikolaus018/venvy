@@ -198,9 +198,9 @@ _PY_VERSION_RE = re.compile(r"3\.\d{1,2}")
 
 
 def python_versions() -> List[str]:
-    """Minor versions of Python 3 installed next to the default one (['3.10', '3.12'])."""
+    """Minor versions of Python 3 installed next to the default one (['3.11', '3.12'])."""
     path = tool_search_path()
-    return [f"3.{minor}" for minor in range(8, 16) if shutil.which(f"python3.{minor}", path=path)]
+    return [f"3.{minor}" for minor in range(8, 20) if shutil.which(f"python3.{minor}", path=path)]
 
 
 def python_binary(version: Optional[str]) -> str:
@@ -273,12 +273,28 @@ def needs_port(key: str, entrypoint: str) -> bool:
 # Running the app
 # ---------------------------------------------------------------------------
 
+def _safe_subdir(app_dir: Path, name: str) -> Optional[Path]:
+    """Return app_dir/name only if it is a real directory strictly inside app_dir (never a symlink)."""
+    cand = app_dir / name
+    if cand.is_symlink() or not cand.is_dir():
+        return None
+    try:
+        real_root = app_dir.resolve()
+        real_cand = cand.resolve()
+        if real_cand == real_root or real_root in real_cand.parents:
+            return cand
+    except OSError:
+        pass
+    return None
+
+
 def static_docroot(app_dir: Path, entrypoint: str) -> Path:
     if entrypoint:
         return app_dir / entrypoint
     for name in _STATIC_DOCROOTS:
-        if (app_dir / name).is_dir():
-            return app_dir / name
+        sub = _safe_subdir(app_dir, name)
+        if sub is not None:
+            return sub
     return app_dir
 
 
@@ -306,13 +322,13 @@ def start_command(key: str, app_dir: Path, entrypoint: str, port: Optional[int],
             return pre + ["rackup", "--host", "0.0.0.0", "--port", str(port), entrypoint]
         return pre + ["ruby", entrypoint]
     if key == "php":
-        docroot = app_dir / "public" if (app_dir / "public").is_dir() else app_dir
+        docroot = _safe_subdir(app_dir, "public") or app_dir
         router = entrypoint or str(_ASSET_DIR / "router.php")
         return ["php", "-S", f"0.0.0.0:{port}", "-t", str(docroot), router]
     if key == "static":
         docroot = static_docroot(app_dir, entrypoint)
         cmd = ["python3", "-I", str(_ASSET_DIR / "static_server.py"),
-               "--dir", str(docroot), "--host", "0.0.0.0", "--port", str(port)]
+               "--dir", str(docroot), "--root", str(app_dir), "--host", "0.0.0.0", "--port", str(port)]
         if docroot == app_dir:
             cmd += ["--deny", "logs,venv,node_modules"]
         return cmd
@@ -425,7 +441,7 @@ def setup_steps(key: str, app_dir: Path) -> List[Step]:
 # ---------------------------------------------------------------------------
 
 _NPM_NAME = r"(@[a-z0-9][a-z0-9_.\-]*/)?[A-Za-z0-9][A-Za-z0-9_.\-]*"
-_VERSION = r"[A-Za-z0-9_.+~^<>=*\-]+"
+_VERSION = r"[A-Za-z0-9_.+~^<>=*][A-Za-z0-9_.+~^<>=*\-]*"
 _RE = {
     "npm": re.compile(rf"{_NPM_NAME}(@{_VERSION})?"),
     "npm_name": re.compile(_NPM_NAME),
@@ -533,7 +549,31 @@ def _strip_jsonc(text: str) -> str:
         else:
             out.append(c)
         i += 1
-    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+    # Strip trailing commas outside string literals so strings like ",}" stay intact.
+    stripped = "".join(out)
+    res, j, m, in_str = [], 0, len(stripped), False
+    while j < m:
+        c = stripped[j]
+        if in_str:
+            res.append(c)
+            if c == "\\" and j + 1 < m:
+                res.append(stripped[j + 1]); j += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True; res.append(c)
+        elif c == ",":
+            k = j + 1
+            while k < m and stripped[k] in " \t\r\n":
+                k += 1
+            if k < m and stripped[k] in "}]":
+                j += 1
+                continue
+            res.append(c)
+        else:
+            res.append(c)
+        j += 1
+    return "".join(res)
 
 
 def _deps(data: dict, *sections: str) -> List[dict]:

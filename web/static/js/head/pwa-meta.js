@@ -18,8 +18,8 @@
                 document.currentScript.parentNode.appendChild(link);
             } catch (e) { }
 
-            // Generate iOS startup images for the installed PWA splash screen.
-            try {
+            // Generate iOS startup images for the installed PWA splash screen (iOS only).
+            if (/iPad|iPhone|iPod/.test(navigator.userAgent || '')) try {
                 const splashSpecs = [
                     [320, 568, '(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2)'],
                     [320, 480, '(device-width: 320px) and (device-height: 480px) and (-webkit-device-pixel-ratio: 1)'],

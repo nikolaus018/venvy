@@ -100,37 +100,47 @@
             } catch (e) { tbody.innerHTML = `<tr><td colspan="${isPythonRuntime ? 3 : 2}" class="text-center py-8 text-sm" style="color:var(--red)">Network error loading packages.</td></tr>`; }
         }
         async function installPackage() {
+            const appId = activeAppId;
+            if (!appId) return;
             const input = document.getElementById('pkg-input');
             const btn = document.getElementById('pkg-install-btn');
             const name = input.value.trim();
             if (!name) return;
             btn.disabled = true; btn.innerText = "Installing...";
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}/packages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+                const res = await fetch(`${API}/apps/${appId}/packages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
                 await waitForJob(res);
-                showToast(`Installed ${name}!`, 'success'); input.value = ''; loadPackages();
+                showToast(`Installed ${name}!`, 'success');
+                if (appId === activeAppId) { input.value = ''; loadPackages(); }
             } catch (e) { showToast("Install failed: " + e.message, 'error'); }
             finally { btn.disabled = false; btn.innerText = "Install"; }
         }
         async function uninstallPackage(name) {
             document.getElementById('remove-pkg-name').textContent = name;
-            document.getElementById('remove-pkg-modal').dataset.pkg = name;
+            const modal = document.getElementById('remove-pkg-modal');
+            modal.dataset.pkg = name;
+            modal.dataset.appId = String(activeAppId || '');
             openModal('remove-pkg-modal');
         }
         async function confirmRemovePackage() {
-            const name = document.getElementById('remove-pkg-modal').dataset.pkg;
+            const modal = document.getElementById('remove-pkg-modal');
+            const name = modal.dataset.pkg;
+            const appId = Number(modal.dataset.appId) || activeAppId;
             closeModal('remove-pkg-modal');
-            if (!name) return;
+            if (!name || !appId) return;
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}/packages/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                const res = await fetch(`${API}/apps/${appId}/packages/${encodeURIComponent(name)}`, { method: 'DELETE' });
                 await waitForJob(res);
-                showToast(`Removed ${name}`, 'success'); loadPackages();
+                showToast(`Removed ${name}`, 'success');
+                if (appId === activeAppId) loadPackages();
             } catch (e) { showToast('Remove failed: ' + e.message, 'error'); }
         }
 
         // ── Import Scanner ────────────────────────────────────────────────────────
         let _missingPackages = [];
         async function scanImports() {
+            const appId = activeAppId;
+            if (!appId) return;
             const btn = document.getElementById('scan-btn');
             const results = document.getElementById('scan-results');
             const missingSection = document.getElementById('scan-missing-section');
@@ -140,9 +150,10 @@
             btn.disabled = true;
             btn.innerHTML = '<svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Scanning…';
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}/scan-imports`);
+                const res = await fetch(`${API}/apps/${appId}/scan-imports`);
                 if (!res.ok) throw new Error('Scan failed');
                 const data = await res.json();
+                if (appId !== activeAppId) return;
                 _missingPackages = data.missing || [];
                 results.classList.remove('hidden');
                 missingSection.classList.add('hidden'); okSection.classList.add('hidden'); missingList.innerHTML = '';
@@ -168,7 +179,7 @@
                     });
                 }
                 _featherReplace();
-            } catch (e) { showToast('Scan error: ' + e.message, 'error'); }
+            } catch (e) { if (appId === activeAppId) showToast('Scan error: ' + e.message, 'error'); }
             finally {
                 btn.disabled = false;
                 btn.innerHTML = '<i data-feather="search" class="w-3.5 h-3.5"></i> Scan';
@@ -176,13 +187,15 @@
             }
         }
         async function installSingle(name, btnEl) {
-            const btn = btnEl; if (!btn) return;
+            const appId = activeAppId;
+            const btn = btnEl; if (!btn || !appId) return;
             btn.disabled = true; btn.textContent = '…';
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}/packages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+                const res = await fetch(`${API}/apps/${appId}/packages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
                 const ok = await waitForJob(res).then(() => true, err => { showToast('Install failed: ' + err.message, 'error'); return false; });
+                if (appId !== activeAppId) return;
                 if (ok) {
-                    btn.closest('li').remove();
+                    btn.closest('li')?.remove();
                     const remaining = document.getElementById('scan-missing-list').children.length;
                     if (remaining === 0) { document.getElementById('scan-missing-section').classList.add('hidden'); document.getElementById('scan-ok-section').classList.remove('hidden'); }
                     else document.getElementById('scan-missing-count').textContent = remaining;
@@ -193,17 +206,23 @@
             } catch (e) { showToast('Error: ' + e.message, 'error'); btn.disabled = false; btn.textContent = 'Install'; }
         }
         async function installAllMissing() {
-            if (!_missingPackages.length) return;
+            const appId = activeAppId;
+            if (!appId || !_missingPackages.length) return;
+            const pkgs = [..._missingPackages];
             const btn = document.getElementById('install-all-btn');
             btn.disabled = true;
             btn.innerHTML = '<svg class="w-3 h-3 animate-spin inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Installing…';
             const failed = [];
-            for (const pkg of _missingPackages) {
+            for (const pkg of pkgs) {
                 try {
-                    const res = await fetch(`${API}/apps/${activeAppId}/packages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: pkg }) });
+                    const res = await fetch(`${API}/apps/${appId}/packages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: pkg }) });
                     await waitForJob(res);
                 } catch (e) { failed.push(pkg); }
             }
+            btn.disabled = false;
+            btn.innerHTML = '<i data-feather="download" class="w-3 h-3"></i> Install All';
+            _featherReplace();
+            if (appId !== activeAppId) return;
             if (failed.length) {
                 showToast('Could not install: ' + failed.join(', '), 'error', 5000);
                 _missingPackages = failed;
@@ -214,7 +233,5 @@
                 document.getElementById('scan-ok-section').classList.remove('hidden');
                 _missingPackages = [];
             }
-            btn.disabled = false;
-            btn.innerHTML = '<i data-feather="download" class="w-3 h-3"></i> Install All';
-            _featherReplace(); loadPackages();
+            loadPackages();
         }

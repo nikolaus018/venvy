@@ -47,8 +47,8 @@ def create_token(req: TokenReq, session: Session = Depends(get_session), user: U
                  _rl: None = Depends(rate_limit_mutations)):
     """Make a token. The token itself is in this response and nowhere else — Venvy keeps only its hash."""
     name = req.name.strip()
-    if not name or len(name) > 60:
-        raise HTTPException(400, "A token needs a name of up to 60 characters.")
+    if not name or len(name) > 60 or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise HTTPException(400, "A token needs a name of up to 60 characters with no control characters.")
     if req.scope not in ("full", "read"):
         raise HTTPException(400, "scope must be full or read.")
     if req.expires_days is not None and not (1 <= req.expires_days <= 3650):
@@ -67,7 +67,12 @@ def create_token(req: TokenReq, session: Session = Depends(get_session), user: U
 
 
 @router.delete("/tokens/{token_id}")
-def delete_token(token_id: int, session: Session = Depends(get_session), user: User = Depends(get_session_user)):
+def delete_token(
+    token_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_session_user),
+    _rl: None = Depends(rate_limit_mutations),
+):
     row = session.get(ApiToken, token_id)
     if not row or (row.user_id != user.id and user.role != "admin"):
         raise HTTPException(404)

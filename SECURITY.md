@@ -30,7 +30,7 @@ With the installer's default of **one Unix user per app**:
 | Password guessing | scrypt hashes; per-address and per-username lockouts that grow from 5 minutes to an hour; the same response time for unknown users; optional TOTP with replay protection. |
 | Session theft through a hosted app on another port of the same host | A session needs the HttpOnly cookie **and** a per-session key kept in Venvy's own `localStorage`, which other ports can't read. |
 | Cross-site requests and injected markup | CSRF tokens on every change; a Content-Security-Policy without inline script; event handlers that can only call Venvy's own functions. |
-| A stolen database or backup | App variables, the Cloudflare token, TOTP and webhook secrets are encrypted with a key kept beside the database (not in it); session cookies and API tokens are stored as hashes only. |
+| A stolen database file | App variables, the Cloudflare token, TOTP and webhook secrets are encrypted with a key kept beside the database (not in it); session cookies and API tokens are stored as hashes only. Full backups (`full-*.tar.gz`) bundle `.venvy_key` alongside the database so they can be restored self-contained — treat full backup archives as sensitive secrets. |
 | A first-run install found by someone else before its owner | Creating the first admin needs a one-time code printed by the installer and stored root-only on the server. |
 | A tampered release or update | Releases are signed with an Ed25519 key that is never on GitHub. The installer and the updater install nothing that doesn't verify (see below). |
 
@@ -69,10 +69,10 @@ SHA-256 of the key (DER): `b803bd57d71eb69dd05f0bedf68aad7a8be6af56d35abea6fbc0d
 It is also `RELEASE_PUBKEY` in [install.sh](install.sh). Compare it in more than one place
 (this file, `install.sh`, a release you installed before) before you rely on it.
 
-To install without running anything you haven't checked (OpenSSL 3, as on Debian 12 and Ubuntu 22.04):
+To install without running anything you haven't checked (OpenSSL 3, as on Debian 12+ and Ubuntu 24.04+):
 
 ```bash
-V=v4.8.2   # the release you want
+V=v4.9.5   # the release you want
 B=https://github.com/nikolaus018/venvy/releases/download/$V
 mkdir venvy-$V && cd venvy-$V
 for f in venvy.tar.gz venvy.tar.gz.sha256 venvy.tar.gz.sha256.sig; do curl -fsSLO "$B/$f"; done

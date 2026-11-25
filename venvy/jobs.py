@@ -27,20 +27,25 @@ _jobs: Dict[str, dict] = {}
 _JOB_TTL_SEC = 3600
 
 
-def _start_job(user: "User", kind: str, fn) -> dict:
+def _start_job(user: "User", kind: str, fn, app_id=None, min_role: str = "viewer") -> dict:
     """Run coroutine function *fn* in the background; return {"job_id"}."""
     now = time.time()
     for jid in [j for j, v in _jobs.items() if v["status"] != "running" and now - v["updated"] > _JOB_TTL_SEC]:
         _jobs.pop(jid, None)
     job_id = secrets.token_hex(16)
-    job = {"id": job_id, "kind": kind, "user_id": user.id, "status": "running",
-           "result": None, "error": None, "code": None, "created": now, "updated": now}
+    job = {
+        "id": job_id, "kind": kind, "user_id": user.id, "app_id": app_id, "min_role": min_role,
+        "status": "running", "result": None, "error": None, "code": None, "created": now, "updated": now,
+    }
     _jobs[job_id] = job
 
     async def _run():
         try:
             job["result"] = await fn()
             job["status"] = "done"
+        except asyncio.CancelledError:
+            job.update(status="error", error="Job cancelled.", code=499)
+            raise
         except HTTPException as exc:
             job.update(status="error", error=exc.detail, code=exc.status_code)
         except Exception as exc:

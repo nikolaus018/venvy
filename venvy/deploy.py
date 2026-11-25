@@ -45,7 +45,11 @@ SNAPSHOT_EXCLUDES = ("./venv", "./node_modules", "./target", "./vendor/bundle", 
 
 _BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/\-]{0,100}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,40}")
-_URL_RE = re.compile(r"(https://[A-Za-z0-9.\-]+(:\d+)?/\S+|ssh://\S+|[A-Za-z0-9._\-]+@[A-Za-z0-9.\-]+:\S+)")
+_URL_RE = re.compile(
+    r"(https://[A-Za-z0-9][A-Za-z0-9.\-]*(?::\d+)?/\S+"
+    r"|ssh://(?:[A-Za-z0-9._\-]+@)?[A-Za-z0-9][A-Za-z0-9.\-]*(?::\d+)?/\S+"
+    r"|[A-Za-z0-9._\-]+@[A-Za-z0-9][A-Za-z0-9.\-]*:\S+)"
+)
 # A repository on this same machine (a bare repo you push to over ssh, say).
 # Off by default: a local path lets the app's user read any repository it can reach.
 ALLOW_LOCAL_GIT = os.getenv("VENVY_ALLOW_LOCAL_GIT", "0") == "1"
@@ -146,6 +150,11 @@ class _Log:
             self.path = DEPLOY_LOG_DIR / f"{app_id}.log"
             self.fh = open(self.path, "w", encoding="utf-8")
 
+    def add_secrets(self, *values: str) -> None:
+        """Add secrets and keep longest-first order without duplicates."""
+        merged = set(self.secrets) | {v for v in values if v}
+        self.secrets = sorted(merged, key=len, reverse=True)
+
     def __call__(self, line: str) -> None:
         for s in self.secrets:
             line = line.replace(s, "***")
@@ -170,15 +179,23 @@ class _Log:
 _MASK_MIN_LEN = 6
 
 
-def _env_secrets(app: App) -> List[str]:
+def _env_secrets(app: App, strict: bool = False) -> List[str]:
     """The values of the app's own and the shared environment variables: a build
     runs with them, and whatever it prints ends up in the deploy log."""
     from venvy import shared_env
-    values = list(shared_env.load().values())
-    with contextlib.suppress(ValueError, TypeError):
-        own = json.loads(_decrypt_secret(app.env_json) or "{}")
-        if isinstance(own, dict):
-            values += [str(v) for v in own.values()]
+    from venvy.crypto import _try_decrypt_secret
+    values = list(shared_env.load(strict=strict).values())
+    ok, plain = _try_decrypt_secret(app.env_json)
+    if strict and not ok:
+        raise RuntimeError("Could not decrypt app environment variables.")
+    if ok and plain:
+        try:
+            own = json.loads(plain)
+            if isinstance(own, dict):
+                values += [str(v) for v in own.values()]
+        except (ValueError, TypeError):
+            if strict:
+                raise
     return sorted({v for v in values if len(v) >= _MASK_MIN_LEN}, key=len, reverse=True)
 
 
@@ -200,21 +217,26 @@ def _git_env(app: App, log: _Log) -> Dict[str, str]:
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GIT_ALLOW_PROTOCOL"] = "https:ssh" + (":file" if ALLOW_LOCAL_GIT else "")   # never ext::
     env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     url = app.git_url or ""
-    userinfo = re.match(r"https://([^/@]+)@", url)
+    userinfo = re.match(r"(?:https|ssh)://([^/@]+)@", url)
     if userinfo:
-        log.secrets.append(userinfo.group(1))
+        log.add_secrets(userinfo.group(1))
     auth = {}
     if app.git_auth:
         with contextlib.suppress(ValueError):
             auth = json.loads(_decrypt_secret(app.git_auth) or "{}")
     if url.startswith("https://") and auth.get("token"):
-        host = url.split("/")[2]
+        import urllib.parse as _up
+        parsed = _up.urlsplit(url)
+        host = parsed.hostname or ""
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
         basic = base64.b64encode(f"x-access-token:{auth['token']}".encode()).decode()
         env["GIT_CONFIG_COUNT"] = "1"
         env["GIT_CONFIG_KEY_0"] = f"http.https://{host}/.extraHeader"
         env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {basic}"
-        log.secrets += [auth["token"], basic]
+        log.add_secrets(auth["token"], basic)
     elif is_ssh_url(url):
         key = DEPLOY_KEY_DIR / str(app.id) / "id_ed25519"
         known = DEPLOY_KEY_DIR / str(app.id) / "known_hosts"
@@ -226,33 +248,77 @@ def _git_env(app: App, log: _Log) -> Dict[str, str]:
     return env
 
 
+_DEPLOY_MAX_LINE_BYTES = 64 * 1024
+
+
 async def _run(app: App, argv: List[str], log: _Log, env: Dict[str, str], cwd: str,
                timeout: int, what: str) -> str:
     """Run argv as the app's user, logging its output; returns it. Raises DeployError."""
+    from venvy.isolation import _clean_root_env, _exec_env_argv, _isolation_active, _prepare_exec_env
     log(f"$ {what}")
+    env_tf = None
     try:
+        if _isolation_active():
+            env_tf, env_fd = _prepare_exec_env(env)
+            spawn_argv = _as_app_user(app, _exec_env_argv(env_fd, argv))
+            spawn_env = _clean_root_env()
+            pass_fds = (env_fd,)
+        else:
+            spawn_argv = list(argv)
+            spawn_env = env
+            pass_fds = ()
         proc = await asyncio.create_subprocess_exec(
-            *_as_app_user(app, argv),
+            *spawn_argv,
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            env=env, cwd=cwd, start_new_session=True)
+            env=spawn_env, cwd=cwd, start_new_session=True, pass_fds=pass_fds)
     except FileNotFoundError:
         raise DeployError(f"{argv[0]} is not installed on this host.")
+    finally:
+        if env_tf is not None:
+            env_tf.close()
     out: List[str] = []
 
     async def pump() -> None:
         assert proc.stdout is not None
-        async for raw in proc.stdout:
-            line = raw.decode(errors="replace").rstrip()
-            out.append(line)
-            log("  " + line)
+        pending = b""
+        while True:
+            chunk = await proc.stdout.read(8192)
+            if not chunk:
+                if pending:
+                    line = pending.decode(errors="replace").rstrip("\r\n")
+                    out.append(line)
+                    log("  " + line)
+                return
+            pending += chunk
+            while True:
+                idx = pending.find(b"\n")
+                if idx != -1:
+                    raw_line = pending[:idx]
+                    pending = pending[idx + 1:]
+                elif len(pending) >= _DEPLOY_MAX_LINE_BYTES:
+                    raw_line = pending[:_DEPLOY_MAX_LINE_BYTES]
+                    pending = pending[_DEPLOY_MAX_LINE_BYTES:]
+                else:
+                    break
+                line = raw_line.decode(errors="replace").rstrip("\r\n")
+                out.append(line)
+                log("  " + line)
 
     try:
         await asyncio.wait_for(asyncio.gather(pump(), proc.wait()), timeout=timeout)
     except asyncio.TimeoutError:
-        with contextlib.suppress(ProcessLookupError):
+        with contextlib.suppress(ProcessLookupError, OSError):
             os.killpg(proc.pid, signal.SIGKILL)
-        await proc.wait()
+        with contextlib.suppress(Exception):
+            await proc.wait()
         raise DeployError(f"{what} timed out after {timeout} seconds.")
+    except BaseException:
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(Exception):
+                await proc.wait()
+        raise
     if proc.returncode != 0:
         raise DeployError(f"{what} failed (exit code {proc.returncode}).")
     return "\n".join(out)
@@ -290,7 +356,9 @@ async def generate_deploy_key(app: App) -> str:
             f, st = _fs_open_file(d, ("known_hosts",))
             with f:
                 if st.st_size <= 1024 * 1024:
-                    (work / "known_hosts").write_bytes(f.read())
+                    data = f.read(1024 * 1024 + 1)
+                    if len(data) <= 1024 * 1024:
+                        (work / "known_hosts").write_bytes(data)
         if ids:
             for p in (work / "id_ed25519", work / "id_ed25519.pub", work / "known_hosts", work):
                 with contextlib.suppress(FileNotFoundError):
@@ -327,7 +395,10 @@ def public_key(app_id: int) -> Optional[str]:
     with f:
         if st.st_size > 16 * 1024:
             return None
-        return f.read().decode("utf-8", errors="replace").strip() or None
+        data = f.read(16 * 1024 + 1)
+        if len(data) > 16 * 1024:
+            return None
+        return data.decode("utf-8", errors="replace").strip() or None
 
 
 def forget_keys(app_id: int) -> None:
@@ -353,7 +424,8 @@ def _is_repo(app: App) -> bool:
 
 
 async def _git(app: App, log: _Log, args: List[str], timeout: int = 600) -> str:
-    return await _run(app, ["git", *args], log, _git_env(app, log), app.app_dir, timeout, "git " + " ".join(args))
+    safe_git = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "http.proxy=", *args]
+    return await _run(app, safe_git, log, _git_env(app, log), app.app_dir, timeout, "git " + " ".join(args))
 
 
 async def current_commit(app: App) -> Optional[Tuple[str, str]]:
@@ -380,7 +452,7 @@ async def _checkout_remote(app: App, log: _Log) -> None:
     branch = app.git_branch
     if await _has_remote(app):
         await _git(app, log, ["remote", "remove", "origin"])
-    await _git(app, log, ["remote", "add", "origin", app.git_url or ""])
+    await _git(app, log, ["remote", "add", "origin", "--", app.git_url or ""])
     await _git(app, log, ["fetch", "--prune", "--tags", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"])
     await _git(app, log, ["checkout", "-f", "-B", branch, f"refs/remotes/origin/{branch}"])
 
@@ -433,13 +505,22 @@ async def _snapshot(app: App, log: _Log, dest_dir: Optional[Path] = None) -> Tup
                     break
                 size += len(chunk)
                 if size > SNAPSHOT_MAX_BYTES:
-                    proc.kill()
+                    with contextlib.suppress(ProcessLookupError, OSError):
+                        proc.kill()
                     await proc.wait()
                     dest.unlink(missing_ok=True)
                     raise DeployError("The app's files are too large to snapshot (over 2 GB).")
-                f.write(chunk)
+                await asyncio.to_thread(f.write, chunk)
         await proc.wait()
         await err_task
+    except BaseException:
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
+        dest.unlink(missing_ok=True)
+        raise
     finally:
         if not err_task.done():
             err_task.cancel()
@@ -451,6 +532,9 @@ async def _snapshot(app: App, log: _Log, dest_dir: Optional[Path] = None) -> Tup
     return name, size
 
 
+_RESTORE_KEEP_TOP = {"venv", "node_modules", "target", "logs", ".git", ".cache", "vendor"}
+
+
 async def _restore_snapshot(app: App, archive: str, log: _Log, src_dir: Optional[Path] = None) -> None:
     path = (src_dir or RELEASES_DIR / str(app.id)) / archive
     if not path.is_file() or Path(archive).name != archive:
@@ -459,23 +543,53 @@ async def _restore_snapshot(app: App, archive: str, log: _Log, src_dir: Optional
     proc = await asyncio.create_subprocess_exec(
         *_as_app_user(app, ["tar", "-xzf", "-", "-C", app.app_dir, "--no-same-owner"]),
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
-        env=_app_tool_env(app))
-    assert proc.stdin is not None
-    with open(path, "rb") as f:
+        env=_app_tool_env(app), start_new_session=True)
+    assert proc.stdin is not None and proc.stderr is not None
+    err_buf = bytearray()
+
+    async def drain_stderr() -> None:
+        assert proc.stderr is not None
         while True:
-            chunk = await asyncio.to_thread(f.read, 1 << 20)
-            if not chunk:
-                break
-            try:
-                proc.stdin.write(chunk)
-                await proc.stdin.drain()
-            except (BrokenPipeError, ConnectionResetError):
-                break
-    with contextlib.suppress(Exception):
-        proc.stdin.close()
-    _, err = await proc.communicate()
+            data = await proc.stderr.read(65536)
+            if not data:
+                return
+            if len(err_buf) < 64 * 1024:
+                err_buf.extend(data)
+
+    async def feed_stdin() -> None:
+        assert proc.stdin is not None
+        try:
+            with open(path, "rb") as f:
+                while True:
+                    chunk = await asyncio.to_thread(f.read, 1 << 20)
+                    if not chunk:
+                        break
+                    try:
+                        proc.stdin.write(chunk)
+                        await proc.stdin.drain()
+                    except (BrokenPipeError, ConnectionResetError):
+                        break
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdin.close()
+
+    try:
+        await asyncio.wait_for(asyncio.gather(feed_stdin(), drain_stderr(), proc.wait()), timeout=600)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError, OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        raise DeployError("Restoring snapshot timed out.")
+    except BaseException:
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(Exception):
+                await proc.wait()
+        raise
     if proc.returncode != 0:
-        raise DeployError(f"tar failed: {err.decode(errors='replace')[:300]}")
+        raise DeployError(f"tar failed: {bytes(err_buf).decode(errors='replace')[:300]}")
 
 
 def keep_limit(app_id: int) -> int:
@@ -486,12 +600,13 @@ def keep_limit(app_id: int) -> int:
     return max(1, min(n, MAX_KEEP_RELEASES))
 
 
-def _delete_release_rows(s: Session, app_id: int, rows) -> int:
+def _delete_release_rows(s: Session, app_id: int, rows) -> List[Path]:
+    to_unlink: List[Path] = []
     for r in rows:
-        if r.archive:
-            (RELEASES_DIR / str(app_id) / r.archive).unlink(missing_ok=True)
+        if r.archive and Path(r.archive).name == r.archive:
+            to_unlink.append(RELEASES_DIR / str(app_id) / r.archive)
         s.delete(r)
-    return len(rows)
+    return to_unlink
 
 
 def _prune_releases(app_id: int, protect: Optional[int] = None) -> int:
@@ -500,9 +615,12 @@ def _prune_releases(app_id: int, protect: Optional[int] = None) -> int:
     keep = keep_limit(app_id)
     with Session(engine) as s:
         rows = s.exec(select(Release).where(Release.app_id == app_id).order_by(Release.id.desc())).all()
-        n = _delete_release_rows(s, app_id, [r for r in rows[keep:] if r.id != protect])
+        pruned = [r for r in rows[keep:] if r.id != protect]
+        to_unlink = _delete_release_rows(s, app_id, pruned)
         s.commit()
-    return n
+    for p in to_unlink:
+        p.unlink(missing_ok=True)
+    return len(pruned)
 
 
 def delete_release(app_id: int, release_id: int) -> bool:
@@ -511,8 +629,10 @@ def delete_release(app_id: int, release_id: int) -> bool:
         rel = s.get(Release, release_id)
         if not rel or rel.app_id != app_id:
             return False
-        _delete_release_rows(s, app_id, [rel])
+        to_unlink = _delete_release_rows(s, app_id, [rel])
         s.commit()
+    for p in to_unlink:
+        p.unlink(missing_ok=True)
     return True
 
 
@@ -574,8 +694,9 @@ async def _install_and_build(app: App, log: _Log, build: bool = True) -> None:
     for step in steps:
         await _run(app, step.argv, log, env, app.app_dir if step.in_app_dir else "/", step.timeout, step.what)
     if build and app.build_command:
+        # Don't echo the raw build command into logs; it may carry inline secrets.
         await _run(app, ["sh", "-c", app.build_command], log, _app_env_for_commands(app), app.app_dir, 1800,
-                   f"build: {app.build_command}")
+                   "build: (command)")
 
 
 async def _restart(app_id: int, log: _Log, start_if_stopped: bool) -> None:
@@ -705,6 +826,7 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
                 if target is None and (before or before_archive):
                     with contextlib.suppress(Exception):
                         await go_back()
+                        await _install_and_build(app, log)
                 raise
 
             now = await current_commit(app)
@@ -738,14 +860,15 @@ async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Opti
             log(f"Finished: {status}")
             log.close()
             if status == "ok":
-                _add_release(app_id, "deploy", commit_sha, message, None, 0, by)
+                _add_release(app_id, "rollback" if target is not None else "deploy", commit_sha, message, None, 0, by)
             # A rollback target spared above, or a lower keep_releases saved while
             # this ran (put_git leaves pruning to the deploy then).
             with contextlib.suppress(Exception):
                 _prune_releases(app_id)
             _record(app_id, last_deploy_status=status, last_deploy_at=utc_now(),
                     last_deploy_commit=commit_sha if status == "ok" else None)
-            _state[app_id].update(running=False, status=status, finished=utc_now().isoformat())
+            if app_id in _state:
+                _state[app_id].update(running=False, status=status, finished=utc_now().isoformat())
             row = _app(app_id)
             name = row.name if row else f"App {app_id}"
             audit_log(by, "app_deploy" if not target else "app_rollback", f"app '{name}' (id={app_id}): {status}")
@@ -780,8 +903,9 @@ def verify_webhook(headers, body: bytes, secret: str) -> bool:
         # Compared as bytes: compare_digest() raises on a str that isn't ASCII,
         # which turned a garbled header into a 500 instead of a 401.
         return hmac.compare_digest(sig.lower().encode("utf-8"), want.encode("ascii"))
-    for candidate in (headers.get("x-gitlab-token"), headers.get("x-venvy-secret"),
-                      (headers.get("authorization") or "").removeprefix("Bearer ").strip() or None):
+    auth_hdr = headers.get("authorization") or ""
+    bearer = auth_hdr[7:].strip() if auth_hdr[:7].lower() == "bearer " else None
+    for candidate in (headers.get("x-gitlab-token"), headers.get("x-venvy-secret"), bearer):
         if candidate and hmac.compare_digest(candidate.encode(), secret.encode()):
             return True
     return False

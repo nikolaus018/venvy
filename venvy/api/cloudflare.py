@@ -23,7 +23,6 @@ from venvy.auth import (
 from venvy.cloudflare import (
     _cf_delete_dns_cname,
     _cf_find_zone_id,
-    _cf_put_ingress,
     _cf_request,
     _cf_tunnel_cfg_url,
     _cf_update_ingress,
@@ -33,7 +32,7 @@ from venvy.cloudflare import (
     _sanitize_cf_value,
 )
 from venvy.crypto import _decrypt_secret
-from venvy.db import get_session
+from venvy.db import engine, get_session
 from venvy.models import App, CfRoute, SystemSetting, User
 from venvy.process import _app_pid_alive, _detect_ports_sync, _psutil_net_connections, _verify_port_free, get_server_ipv4
 
@@ -46,6 +45,7 @@ router = APIRouter(
 async def test_cf_credentials(
     _: User = Depends(check_admin),
     session: Session = Depends(get_session),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     """Verify saved Cloudflare integration credentials and permissions."""
     import urllib.request as _ur
@@ -474,6 +474,7 @@ async def publish_cf_route(
     account_id = creds["cf_account_id"]
     tunnel_id  = creds["cf_tunnel_id"]
     api_token  = creds["cf_api_token"]
+    app_name   = app_row.name
 
     existing_route = session.exec(select(CfRoute).where(
         CfRoute.app_id == app_id,
@@ -485,6 +486,8 @@ async def publish_cf_route(
         else None
     )
     is_hostname_change = old_hostname is not None and old_hostname != new_hostname
+    # Release the DB connection before external Cloudflare HTTP calls.
+    session.close()
 
     # The zone is looked up before anything is changed: a hostname on a
     # domain that is not in this Cloudflare account can't be published, and
@@ -498,26 +501,28 @@ async def publish_cf_route(
             f"has Zone:Read + DNS:Edit permissions."
         )
 
-    hostnames_to_strip = {new_hostname}
-    if is_hostname_change:
-        hostnames_to_strip.add(old_hostname)
+    hostnames_to_strip = {new_hostname.lower()}
+    if is_hostname_change and old_hostname:
+        hostnames_to_strip.add(old_hostname.lower())
     service = f"http://{get_server_ipv4()}:{req.local_port}"
-    published = _published_hostnames(session)
     own_port = _venvy_port(request)
 
     prior_new_rule: List[dict] = []
     prior_old_rule: List[dict] = []
 
     def change(named: List[dict]) -> List[dict]:
-        # Checked against the tunnel as it is now, under the ingress lock:
-        # raising here leaves it untouched.
-        current = next((r for r in named if (r.get("hostname") or "").lower() == new_hostname), None)
-        refused = _publish_refusal(current, new_hostname, published, user, own_port)
+        # Re-checked under the ingress lock against fresh DB state:
+        # raising here leaves the tunnel untouched.
+        with Session(engine) as s:
+            _check_route_owner(s, new_hostname, app_id, user)
+            published = {h.lower() for h in _published_hostnames(s)}
+        current = next((r for r in named if (r.get("hostname") or "").lower() == new_hostname.lower()), None)
+        refused = _publish_refusal(current, new_hostname.lower(), published, user, own_port)
         if refused:
             raise HTTPException(*refused)
         prior_new_rule[:] = [current] if current else []
-        if is_hostname_change:
-            old_r = next((r for r in named if (r.get("hostname") or "").lower() == old_hostname), None)
+        if is_hostname_change and old_hostname:
+            old_r = next((r for r in named if (r.get("hostname") or "").lower() == old_hostname.lower()), None)
             prior_old_rule[:] = [old_r] if old_r else []
         return [r for r in named if (r.get("hostname") or "").lower() not in hostnames_to_strip] + [{"hostname": new_hostname, "service": service}]
 
@@ -531,10 +536,10 @@ async def publish_cf_route(
         logging.warning(f"DNS upsert failed for {new_hostname!r}, rolling back ingress: {exc}")
         try:
             def _undo(named: List[dict]) -> List[dict]:
-                restored = [r for r in named if (r.get("hostname") or "").lower() != new_hostname]
+                restored = [r for r in named if (r.get("hostname") or "").lower() != new_hostname.lower()]
                 if prior_new_rule:
                     restored.append(prior_new_rule[0])
-                if is_hostname_change and prior_old_rule and not any((r.get("hostname") or "").lower() == old_hostname for r in restored):
+                if is_hostname_change and old_hostname and prior_old_rule and not any((r.get("hostname") or "").lower() == old_hostname.lower() for r in restored):
                     restored.append(prior_old_rule[0])
                 return restored
             await _cf_update_ingress(creds, _undo)
@@ -543,11 +548,11 @@ async def publish_cf_route(
         raise
 
     # Only now that the new name works: drop the old one's DNS record.
-    if is_hostname_change:
+    if is_hostname_change and old_hostname:
         try:
             old_zone_id = await _cf_find_zone_id(old_hostname, account_id, api_token)
             if old_zone_id:
-                await _cf_delete_dns_cname(old_zone_id, old_hostname, api_token)
+                await _cf_delete_dns_cname(old_zone_id, old_hostname, api_token, tunnel_id=tunnel_id)
                 logging.info(f"Removed old DNS CNAME: {old_hostname}")
         except Exception as exc:
             logging.warning(f"Could not delete old DNS CNAME for {old_hostname!r}: {exc}")
@@ -555,30 +560,37 @@ async def publish_cf_route(
     # The tunnel has one rule per hostname, and it now points here. Any other
     # route that claimed this hostname — another app's, or this app's on a
     # different port — no longer exists.
-    conflicting = session.exec(
-        select(CfRoute).where(CfRoute.hostname == new_hostname)
-    ).all()
-    for c in conflicting:
-        if existing_route is not None and c.id == existing_route.id:
-            continue
-        if c.app_id != app_id:
-            other_app = session.get(App, c.app_id)
-            if other_app and other_app.external_url == f"https://{new_hostname}":
-                other_app.external_url = None
-                session.add(other_app)
-        c.cf_route_id = None
-        c.hostname    = ""
-        session.add(c)
-        logging.info(f"Cleared stale CfRoute ownership of {new_hostname!r} from app {c.app_id}")
+    with Session(engine) as s:
+        existing_route = s.exec(select(CfRoute).where(
+            CfRoute.app_id == app_id,
+            CfRoute.local_port == req.local_port,
+        )).first()
+        conflicting = s.exec(
+            select(CfRoute).where(CfRoute.hostname == new_hostname)
+        ).all()
+        for c in conflicting:
+            if existing_route is not None and c.id == existing_route.id:
+                continue
+            if c.app_id != app_id:
+                other_app = s.get(App, c.app_id)
+                if other_app and other_app.external_url == f"https://{new_hostname}":
+                    other_app.external_url = None
+                    s.add(other_app)
+            c.cf_route_id = None
+            c.hostname    = ""
+            s.add(c)
+            logging.info(f"Cleared stale CfRoute ownership of {new_hostname!r} from app {c.app_id}")
 
-    route = existing_route or CfRoute(app_id=app_id, local_port=req.local_port)
-    route.hostname    = new_hostname
-    route.cf_route_id = new_hostname
-    session.add(route)
-    app_row.external_url = f"https://{new_hostname}"
-    session.add(app_row)
-    session.commit()
-    audit_log(user.username, "tunnel_publish", f"app '{app_row.name}' (id={app_id}) -> {new_hostname}")
+        route = existing_route or CfRoute(app_id=app_id, local_port=req.local_port)
+        route.hostname    = new_hostname
+        route.cf_route_id = new_hostname
+        s.add(route)
+        fresh_app = s.get(App, app_id)
+        if fresh_app:
+            fresh_app.external_url = f"https://{new_hostname}"
+            s.add(fresh_app)
+        s.commit()
+    audit_log(user.username, "tunnel_publish", f"app '{app_name}' (id={app_id}) -> {new_hostname}")
 
     return {
         "ok":            True,
@@ -611,36 +623,45 @@ async def unpublish_cf_route(
 
     creds      = _get_cf_creds(session)
     account_id = creds["cf_account_id"]
+    tunnel_id  = creds["cf_tunnel_id"]
     api_token  = creds["cf_api_token"]
     hostname   = route.hostname
+    route_id   = route.id
+    app_name   = app_row.name
+    session.close()
 
-    await _cf_update_ingress(creds, lambda named: [r for r in named if r["hostname"] != hostname])
+    await _cf_update_ingress(
+        creds,
+        lambda named: [r for r in named if (r.get("hostname") or "").lower() != hostname.lower()],
+    )
 
     try:
         zone_id = await _cf_find_zone_id(hostname, account_id, api_token)
         if zone_id:
-            await _cf_delete_dns_cname(zone_id, hostname, api_token)
+            await _cf_delete_dns_cname(zone_id, hostname, api_token, tunnel_id=tunnel_id)
             logging.info(f"DNS CNAME deleted for {hostname}")
         else:
             logging.warning(f"Zone not found for {hostname!r} during unpublish — DNS record may remain.")
     except Exception as exc:
         logging.warning(f"Could not delete DNS record for {hostname}: {exc}")
 
-    route.cf_route_id = None
-    route.hostname    = ""
-    session.add(route)
-
-    other_active = session.exec(select(CfRoute).where(
-        CfRoute.app_id == app_id,
-        CfRoute.id != route.id,
-        CfRoute.cf_route_id != None
-    )).first()
-
-    # external_url may be the hostname that was just removed; point it at a
-    # route that still exists rather than leaving a dead link behind.
-    app_row.external_url = f"https://{other_active.hostname}" if other_active else None
-    session.add(app_row)
-
-    session.commit()
-    audit_log(user.username, "tunnel_unpublish", f"app '{app_row.name}' (id={app_id})")
+    with Session(engine) as s:
+        fresh_route = s.get(CfRoute, route_id)
+        if fresh_route:
+            fresh_route.cf_route_id = None
+            fresh_route.hostname    = ""
+            s.add(fresh_route)
+        other_active = s.exec(select(CfRoute).where(
+            CfRoute.app_id == app_id,
+            CfRoute.id != route_id,
+            CfRoute.cf_route_id != None
+        )).first()
+        fresh_app = s.get(App, app_id)
+        if fresh_app:
+            # external_url may be the hostname that was just removed; point it at a
+            # route that still exists rather than leaving a dead link behind.
+            fresh_app.external_url = f"https://{other_active.hostname}" if other_active else None
+            s.add(fresh_app)
+        s.commit()
+    audit_log(user.username, "tunnel_unpublish", f"app '{app_name}' (id={app_id})")
     return {"ok": True}

@@ -85,6 +85,11 @@
             $id('upd-reload').classList.toggle('hidden', !(d.state === 'ok' && from && d.current !== from));
         }
 
+        function stopUpdateWatch() {
+            if (_updateWatch) { clearInterval(_updateWatch); _updateWatch = null; }
+            _updateFrom = null;
+        }
+
         function _watchUpdate() {
             if (_updateWatch) return;
             // Kept across the restart: the new Venvy reports "running" until update.sh is done.
@@ -92,6 +97,10 @@
             _updateWatch = setInterval(async () => {
                 const r = await apiJson('GET', '/system/update');
                 if (!r.ok) {
+                    if (r.status === 401 || r.status === 403) {
+                        stopUpdateWatch();
+                        return;
+                    }
                     // Expected for a while: the installer has stopped Venvy to switch it over.
                     _paintUpdate({ state: 'running', log: [] }, 'Venvy is restarting with the new version…');
                     return;

@@ -13,6 +13,7 @@ from venvy import own_hosts
 from venvy.audit import audit_log
 from venvy.auth import (
     _authenticate,
+    _authenticate_token,
     check_ip_allowlist,
     check_setup_code,
     clear_setup_code,
@@ -31,7 +32,9 @@ from venvy.auth import (
     _login_rate_key,
     _login_user_key,
     _new_session,
+    rate_limit_mutations,
     _record_login_failure,
+    request_is_https,
     _totp_generate_secret,
     _totp_uri,
     _totp_verify,
@@ -82,7 +85,14 @@ class UserLoginReq(BaseModel):
 @router.get("/status")
 def auth_status(request: Request, session: Session = Depends(get_session)):
     user_exists = session.exec(select(User)).first() is not None
-    user = _authenticate(session, request.cookies.get("session"), request.headers.get("x-venvy-key"))
+    auth_header = request.headers.get("authorization") or ""
+    if auth_header[:7].lower() == "bearer ":
+        try:
+            user = _authenticate_token(session, request, auth_header[7:].strip())
+        except HTTPException:
+            user = None
+    else:
+        user = _authenticate(session, request.cookies.get("session"), request.headers.get("x-venvy-key"))
     return {
         "user_exists": user_exists,
         "authenticated": user is not None,
@@ -170,7 +180,8 @@ def login(
     _clear_login_rate(user_key)
     _clear_login_rate(rate_key)
     auth_key = _new_session(session, request, response, user)
-    own_hosts.remember(request.headers.get("host", ""))
+    if user.role == "admin":
+        own_hosts.remember(request.headers.get("host", ""))
     audit_log(user.username, "login", f"from {rate_key}")
     return {"ok": True, "username": user.username, "role": user.role, "auth_key": auth_key}
 
@@ -183,11 +194,16 @@ def logout(
 ):
     token = request.cookies.get("session")
     if token:
-        db_session = session.get(UserSession, _hash_token(token))
-        if db_session:
-            session.delete(db_session)
-            session.commit()
-    response.delete_cookie("session", path="/")
+        user = _authenticate(session, token, request.headers.get("x-venvy-key"))
+        if user:
+            db_session = session.get(UserSession, _hash_token(token))
+            if db_session:
+                session.delete(db_session)
+                session.commit()
+            audit_log(user.username, "logout")
+    response.delete_cookie(
+        "session", path="/", httponly=True, samesite="strict", secure=request_is_https(request),
+    )
     return {"ok": True}
 
 
@@ -254,15 +270,17 @@ def totp_setup_begin(
         # which asks for the password — a borrowed session alone must not be
         # able to re-enrol 2FA onto someone else's phone.
         raise HTTPException(400, "Two-factor authentication is already enabled. Disable it first to set up a new authenticator.")
-    secret = _totp_generate_secret()
     key = f"totp_pending_{user.id}"
     setting = session.get(SystemSetting, key)
-    if setting:
-        setting.value = _encrypt_secret(secret)
-    else:
-        setting = SystemSetting(key=key, value=_encrypt_secret(secret))
-    session.add(setting)
-    session.commit()
+    secret = _decrypt_secret(setting.value) if setting and setting.value else ""
+    if not secret:
+        secret = _totp_generate_secret()
+        if setting:
+            setting.value = _encrypt_secret(secret)
+        else:
+            setting = SystemSetting(key=key, value=_encrypt_secret(secret))
+        session.add(setting)
+        session.commit()
     uri = _totp_uri(secret, user.username)
     return {"ok": True, "secret": secret, "uri": uri}
 
@@ -272,16 +290,22 @@ def totp_setup_confirm(
     req: TotpSetupReq,
     session: Session = Depends(get_session),
     user: User = Depends(get_session_user),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     """Verify the 6-digit code against the pending secret, then enable TOTP."""
+    if user.totp_enabled:
+        raise HTTPException(400, "Two-factor authentication is already enabled.")
     key = f"totp_pending_{user.id}"
     setting = session.get(SystemSetting, key)
     if not setting or not setting.value:
         raise HTTPException(400, "No pending TOTP setup. Start setup first.")
+    wrong_code = _login_gate(f"totp_confirm:{user.id}")
     secret = _decrypt_secret(setting.value)
     step = _totp_verify(secret, req.totp_code)
     if step is None:
+        wrong_code()
         raise HTTPException(400, "Incorrect code — try again.")
+    _clear_login_rate(f"totp_confirm:{user.id}")
     user.totp_secret = _encrypt_secret(secret)
     user.totp_enabled = True
     user.totp_last_counter = step

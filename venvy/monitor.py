@@ -36,6 +36,26 @@ _health: Dict[int, dict] = {}
 # restart a health check triggers, so the "healthy again" message still comes.
 _reported_unhealthy: set = set()
 _probe_tasks: set = set()      # held so a running probe is not garbage-collected
+_health_restart_backoff: Dict[int, tuple] = {}   # app_id -> (count, not_before)
+_probe_session: Optional[aiohttp.ClientSession] = None
+
+
+def _get_probe_session() -> aiohttp.ClientSession:
+    global _probe_session
+    if _probe_session is None or _probe_session.closed:
+        _probe_session = aiohttp.ClientSession(
+            cookie_jar=aiohttp.DummyCookieJar(),
+            timeout=aiohttp.ClientTimeout(total=_PROBE_TIMEOUT_SEC),
+            **HTTP_CLIENT_LIMITS,
+        )
+    return _probe_session
+
+
+async def close_probe_session() -> None:
+    global _probe_session
+    if _probe_session and not _probe_session.closed:
+        await _probe_session.close()
+    _probe_session = None
 
 
 def health_info(app_id: int) -> Optional[dict]:
@@ -49,6 +69,7 @@ def health_info(app_id: int) -> Optional[dict]:
 def forget_health(app_id: int) -> None:
     _health.pop(app_id, None)
     _reported_unhealthy.discard(app_id)
+    _health_restart_backoff.pop(app_id, None)
 
 
 def forget_app(app_id: int) -> None:
@@ -77,11 +98,10 @@ async def probe(port: int, path: str) -> dict:
     """One request to the app. Healthy is any answer below 400."""
     url = f"http://127.0.0.1:{port}{path}"
     try:
-        timeout = aiohttp.ClientTimeout(total=_PROBE_TIMEOUT_SEC)
-        async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as http:
-            async with http.get(url, allow_redirects=False) as resp:
-                ok = resp.status < 400
-                return {"ok": ok, "code": resp.status, "error": None if ok else f"HTTP {resp.status}"}
+        http = _get_probe_session()
+        async with http.get(url, allow_redirects=False) as resp:
+            ok = resp.status < 400
+            return {"ok": ok, "code": resp.status, "error": None if ok else f"HTTP {resp.status}"}
     except asyncio.TimeoutError:
         return {"ok": False, "code": None, "error": f"no answer within {int(_PROBE_TIMEOUT_SEC)} s"}
     except Exception as exc:
@@ -91,8 +111,10 @@ async def probe(port: int, path: str) -> dict:
 async def _check_app(app_id: int, restart) -> None:
     h = _health[app_id]
     try:
-        with Session(engine) as s:
-            app = s.get(App, app_id)
+        def _load():
+            with Session(engine) as s:
+                return s.get(App, app_id)
+        app = await asyncio.to_thread(_load)
         if not app or app.status != "running" or not app.healthcheck_path or not app.port:
             return
         res = await probe(app.port, app.healthcheck_path)
@@ -104,6 +126,7 @@ async def _check_app(app_id: int, restart) -> None:
         if res["ok"]:
             was_bad = h["status"] == "unhealthy"
             h.update(status="healthy", failures=0)
+            _health_restart_backoff.pop(app.id, None)
             if was_bad or h.get("since") is None:
                 h["since"] = now
             if app.id in _reported_unhealthy:
@@ -124,6 +147,12 @@ async def _check_app(app_id: int, restart) -> None:
             from venvy import deploy as _deploy
             if _deploy.is_running(app.id):
                 return
+            mono = time.monotonic()
+            count, not_before = _health_restart_backoff.get(app.id, (0, 0.0))
+            if mono < not_before:
+                return
+            delay = min(300.0, 10.0 * (2 ** count))
+            _health_restart_backoff[app.id] = (count + 1, mono + delay)
             logging.warning(f"Restarting '{app.name}' after {h['failures']} failed health checks.")
             h["failures"] = 0
             await restart(app.id)
@@ -135,9 +164,11 @@ async def _check_app(app_id: int, restart) -> None:
 
 async def health_tick(restart) -> None:
     """Start the probes that are due. `restart` is a coroutine function taking an app id."""
-    try:
+    def _running_apps():
         with Session(engine) as s:
-            apps = s.exec(select(App).where(App.status == "running")).all()
+            return s.exec(select(App).where(App.status == "running")).all()
+    try:
+        apps = await asyncio.to_thread(_running_apps)
     except Exception:
         return
     running = {a.id for a in apps}
@@ -169,26 +200,59 @@ async def health_tick(restart) -> None:
 _disk_cache: Dict[int, tuple] = {}      # app_id -> (monotonic, bytes)
 
 
+_DIR_SIZE_MAX_DEPTH = 64
+_DIR_SIZE_MAX_ENTRIES = 500_000
+
+
 def dir_size(path: Path) -> int:
-    """Bytes of the files under *path*, without following symlinks."""
+    """Bytes of the files under *path*, walking strictly by dir_fd with
+    O_NOFOLLOW so an app swapping a folder for a symlink can never make root
+    traverse or measure host directories."""
+    import stat as _stat
+    from venvy.safefs import _O_NOFOLLOW_DIR
+
+    try:
+        root_fd = os.open(path.resolve(), _O_NOFOLLOW_DIR)
+    except OSError:
+        return 0
+
     total = 0
-    stack = [str(path)]
-    while stack:
-        cur = stack.pop()
-        try:
-            with os.scandir(cur) as it:
-                for entry in it:
-                    try:
-                        if entry.is_symlink():
+    seen_entries = 0
+    stack = [(root_fd, 0)]
+    try:
+        while stack:
+            dfd, depth = stack.pop()
+            try:
+                with os.scandir(dfd) as it:
+                    for entry in it:
+                        seen_entries += 1
+                        if seen_entries > _DIR_SIZE_MAX_ENTRIES:
+                            return total
+                        try:
+                            st = entry.stat(follow_symlinks=False)
+                        except OSError:
                             continue
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
-                        else:
-                            total += entry.stat(follow_symlinks=False).st_size
-                    except OSError:
-                        continue
-        except OSError:
-            continue
+                        if _stat.S_ISLNK(st.st_mode):
+                            continue
+                        if _stat.S_ISDIR(st.st_mode):
+                            if depth < _DIR_SIZE_MAX_DEPTH:
+                                try:
+                                    sub_fd = os.open(entry.name, _O_NOFOLLOW_DIR, dir_fd=dfd)
+                                    stack.append((sub_fd, depth + 1))
+                                except OSError:
+                                    continue
+                        elif _stat.S_ISREG(st.st_mode):
+                            total += st.st_size
+            except OSError:
+                pass
+            finally:
+                os.close(dfd)
+    finally:
+        for rem_fd, _ in stack:
+            try:
+                os.close(rem_fd)
+            except OSError:
+                pass
     return total
 
 
@@ -246,8 +310,11 @@ async def _flush(acc: Dict[int, List[float]]) -> None:
     if psutil:
         with_path = DATA_DIR if DATA_DIR.exists() else Path("/")
         host_disk = await asyncio.to_thread(lambda: psutil.disk_usage(str(with_path)).percent)
-    with Session(engine) as s:
-        apps = {a.id: a for a in s.exec(select(App)).all()}
+    def _load_apps():
+        with Session(engine) as s:
+            return {a.id: a for a in s.exec(select(App)).all()}
+
+    apps = await asyncio.to_thread(_load_apps)
     for app in apps.values():
         if app.id in acc or app.id not in _disk_cache:
             await refresh_disk(app)
@@ -261,27 +328,36 @@ async def _flush(acc: Dict[int, List[float]]) -> None:
     for app in apps.values():
         if app.id not in acc and cached_disk(app.id):
             samples.append(MetricSample(app_id=app.id, ts=now, cpu=0.0, mem=0.0, disk=float(cached_disk(app.id))))
-    with Session(engine) as s:
-        for smp in samples:
-            s.add(smp)
-        s.commit()
+
+    def _write_samples():
+        with Session(engine) as s:
+            for smp in samples:
+                s.add(smp)
+            s.commit()
+
+    await asyncio.to_thread(_write_samples)
     await asyncio.to_thread(evaluate_alerts, {k: (v[0] / v[2], v[1] / v[2]) for k, v in acc.items() if v[2]}, host_disk, apps)
     if time.monotonic() - _last_purge > 3600:
         _last_purge = time.monotonic()
         cutoff = utc_now() - datetime.timedelta(days=HISTORY_RETENTION_DAYS)
-        with Session(engine) as s:
-            s.exec(delete(MetricSample).where(MetricSample.ts < cutoff))
-            s.commit()
-        try:
-            from venvy.audit import purge_audit
-            purge_audit()
-        except Exception as exc:
-            logging.warning(f"Purging the audit trail failed: {exc}")
+
+        def _purge_old():
+            with Session(engine) as s:
+                s.exec(delete(MetricSample).where(MetricSample.ts < cutoff))
+                s.commit()
+            try:
+                from venvy.audit import purge_audit
+                purge_audit()
+            except Exception as exc:
+                logging.warning(f"Purging the audit trail failed: {exc}")
+
+        await asyncio.to_thread(_purge_old)
 
 
 def history(app_id: int, minutes: int, points: int = 240) -> List[dict]:
     """Samples of the last *minutes*, averaged into at most *points* buckets."""
     minutes = max(1, min(minutes, HISTORY_RETENTION_DAYS * 1440))
+    points = max(1, min(points, 1000))
     since = utc_now() - datetime.timedelta(minutes=minutes)
     with Session(engine) as s:
         rows = s.exec(select(MetricSample).where(MetricSample.app_id == app_id, MetricSample.ts >= since)

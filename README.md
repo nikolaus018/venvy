@@ -154,8 +154,9 @@ otherwise on the first start (or with "Install from manifest" in the Packages ta
 
 ## How it is built
 
-A FastAPI backend with SQLite, and a framework-free frontend. No build step anywhere: the
-server runs from source, and the browser loads plain scripts.
+A FastAPI backend with SQLite, and a framework-free frontend. The server runs from source and the
+browser loads plain scripts; Tailwind CSS (`web/static/css/tailwind.css`) is prebuilt with
+`scripts/build-css.sh` and committed.
 
 ```
 main.py            entry point
@@ -171,7 +172,7 @@ web/
   index.html  partials/                  page skeleton and per-view markup, assembled server-side
   static/css  static/js                  styles; one script per feature
 docs/              API reference (API.md) and the screenshots
-scripts/           release signing, Tailwind build, UI emulator, screenshot retake
+scripts/           release signing, Tailwind build, deploy CLI (ship.py), UI emulator, screenshot retake
 tests/             end-to-end suite
 install.sh         installer and updater
 ```
@@ -204,8 +205,8 @@ that decrypts every app's secrets, or another app. For that, the Venvy service r
 
 `--shared-user` runs everything as one `venvy` user instead: apps are kept away from the rest of
 the system, but not from each other or from Venvy's own data, and an operator's terminal can read
-the database. An existing install keeps the mode it was installed with; switch with
-`--app-users` or `--shared-user` (or `VENVY_APP_USERS` in `/etc/venvy/venvy.env`).
+the database. An existing install keeps the mode it was installed with; re-run the installer with
+`--app-users` or `--shared-user` to switch modes (so the service user and file ownership are updated together).
 
 Apps share the host's network. They can reach Venvy on its port like anyone else, but can't pass
 for another client there: a connection from loopback is only taken to be cloudflared's (and its

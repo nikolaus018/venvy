@@ -1,17 +1,21 @@
 """Per-app Unix users (VENVY_APP_USERS=1 — the installer's default — Linux, Venvy running as root)."""
 import contextlib
+import json
 import logging
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 from venvy import runtimes
-from venvy.config import APP_LOGS_DIR, APPS_BASE_DIR, DATA_DIR, child_base_env
+from venvy.config import APP_LOGS_DIR, APPS_BASE_DIR, ASSETS_DIR, DATA_DIR, child_base_env
 from venvy.models import App
 
 
@@ -31,24 +35,49 @@ _APP_USERS_REQUESTED = os.getenv("VENVY_APP_USERS", "0") == "1"
 
 
 _APP_USERS_ACTIVE: Optional[bool] = None
+_ROOT_WARNED = False
+_user_create_lock = threading.Lock()
+
+_SYSTEM_BIN_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+_EXEC_ENV_HELPER = ASSETS_DIR / "venvy" / "runtime_assets" / "exec_env.py"
+
+
+def _resolve_system_bin(name: str) -> str:
+    """Resolve a system binary from a fixed trusted PATH so an app's PATH
+    can never hijack root-privileged wrappers like systemd-run or setpriv."""
+    # Never the bare name: exec would look it up in the app's PATH. A path that
+    # does not exist makes the launch fail instead.
+    return shutil.which(name, path=_SYSTEM_BIN_PATH) or f"/usr/bin/{name}"
 
 
 def _isolation_active() -> bool:
-    global _APP_USERS_ACTIVE
+    global _APP_USERS_ACTIVE, _ROOT_WARNED
     if _APP_USERS_ACTIVE is None:
         ok = _APP_USERS_REQUESTED
+        missing_reason = None
         if ok and not sys.platform.startswith("linux"):
-            logging.error("VENVY_APP_USERS=1 is only supported on Linux — running without per-app users.")
+            missing_reason = "VENVY_APP_USERS=1 is only supported on Linux."
             ok = False
         if ok and os.geteuid() != 0:
-            logging.error("VENVY_APP_USERS=1 needs Venvy to run as root — running without per-app users.")
+            missing_reason = "VENVY_APP_USERS=1 needs Venvy to run as root."
             ok = False
-        if ok and not (shutil.which("useradd") and shutil.which("userdel") and shutil.which("setpriv")):
-            logging.error("VENVY_APP_USERS=1 needs useradd, userdel and setpriv — running without per-app users.")
+        if ok and not all(shutil.which(b, path=_SYSTEM_BIN_PATH) for b in ("useradd", "userdel", "setpriv")):
+            missing_reason = "VENVY_APP_USERS=1 needs useradd, userdel and setpriv in system directories."
             ok = False
+        if missing_reason:
+            if os.geteuid() == 0 and sys.platform.startswith("linux"):
+                # Fail closed: never silently run hosted apps as root when isolation was requested.
+                raise RuntimeError(f"{missing_reason} Refusing to run hosted apps as root.")
+            logging.error(f"{missing_reason} Running without per-app users.")
         _APP_USERS_ACTIVE = ok
         if ok:
             logging.info("Per-app Unix users: ON")
+        elif not _APP_USERS_REQUESTED and os.geteuid() == 0 and not _ROOT_WARNED:
+            _ROOT_WARNED = True
+            logging.critical(
+                "Venvy is running as root with VENVY_APP_USERS=0: hosted apps and terminals "
+                "will run as root. Switch isolation modes only with install.sh --shared-user / --app-users."
+            )
     return _APP_USERS_ACTIVE
 
 
@@ -70,14 +99,22 @@ def _app_ids(app_row: "App") -> Optional[tuple]:
 
 def _chown_tree(path: Path, uid: int, gid: int) -> None:
     """Give *path* and everything under it to uid:gid without ever following
-    a symlink. The tree belongs to the app, which can rearrange it while we
-    walk: os.fwalk() hands out a directory fd per level and verifies each
-    directory it enters is the one it listed, so a directory swapped for a
-    symlink mid-walk is skipped instead of leading root's chown elsewhere."""
+    a symlink or handing over a foreign hard link. The tree belongs to the app,
+    which can rearrange it while we walk: os.fwalk() hands out a directory fd
+    per level and verifies each directory it enters is the one it listed, so a
+    directory swapped for a symlink mid-walk is skipped instead of leading
+    root's chown elsewhere."""
     os.lchown(path, uid, gid)
     if path.is_dir() and not path.is_symlink():
         for _dirpath, dirs, files, dirfd in os.fwalk(path, follow_symlinks=False):
             for n in dirs + files:
+                try:
+                    st = os.stat(n, dir_fd=dirfd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISREG(st.st_mode) and st.st_nlink > 1 and st.st_uid != uid:
+                    logging.warning(f"Skipping foreign hard link during chown: {n!r} (uid={st.st_uid})")
+                    continue
                 with contextlib.suppress(FileNotFoundError):
                     os.chown(n, uid, gid, dir_fd=dirfd, follow_symlinks=False)
 
@@ -90,14 +127,22 @@ def _ensure_app_user(app_row: "App") -> Optional[tuple]:
     name = _app_username(app_row.id)
     ids = _app_ids(app_row)
     if ids is None:
-        subprocess.run(
-            ["useradd", "--system", "--user-group", "--no-create-home",
-             "--home-dir", app_row.app_dir, "--shell", "/usr/sbin/nologin", name],
-            check=True, capture_output=True, timeout=30,
-        )
-        ids = _app_ids(app_row)
-        if ids is None:
-            raise RuntimeError(f"Could not create user {name}")
+        with _user_create_lock:
+            ids = _app_ids(app_row)
+            if ids is None:
+                res = subprocess.run(
+                    [_resolve_system_bin("useradd"), "--system", "--user-group", "--no-create-home",
+                     "--home-dir", app_row.app_dir, "--shell", "/usr/sbin/nologin", name],
+                    capture_output=True, timeout=30,
+                )
+                # Exit code 9 = username already exists (benign race).
+                if res.returncode not in (0, 9):
+                    raise RuntimeError(
+                        f"Could not create user {name}: {res.stderr.decode(errors='replace').strip()}"
+                    )
+                ids = _app_ids(app_row)
+                if ids is None:
+                    raise RuntimeError(f"Could not create user {name}")
     uid, gid = ids
     app_dir = Path(app_row.app_dir)
     # Parents: traversable, not listable, so apps can't enumerate each other.
@@ -107,10 +152,11 @@ def _ensure_app_user(app_row: "App") -> Optional[tuple]:
     for parent in (DATA_DIR, APPS_BASE_DIR, app_dir.parent):
         with contextlib.suppress(OSError):
             parent.chmod(0o711)
-    if app_dir.exists() and app_dir.stat().st_uid != uid:
+    if app_dir.exists() and not app_dir.is_symlink() and app_dir.stat().st_uid != uid:
         _chown_tree(app_dir, uid, gid)
     with contextlib.suppress(OSError):
-        app_dir.chmod(0o700)
+        if not app_dir.is_symlink():
+            app_dir.chmod(0o700)
     return ids
 
 
@@ -138,30 +184,24 @@ def _user_pids(uid: int, include_zombies: bool = False) -> list:
     return pids
 
 
-_SYSTEM_BIN_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
-
-# Dynamic-linker, glibc, and systemd/D-Bus variables that would be honoured by
-# root-privileged wrappers (systemd-run, setpriv) or alter loader behaviour
-# before privileges are dropped.
+# Dynamic-linker, crypto/TLS, glibc, shell-hook, and systemd/D-Bus variables
+# that could alter privileged wrappers or loader/library behaviour.
 _DANGEROUS_ENV_EXACT = frozenset({
     "GCONV_PATH", "LOCPATH", "HOSTALIASES", "GETCONF_DIR", "NLSPATH",
     "RESOLV_HOST_CONF", "RES_OPTIONS", "LOCALDOMAIN", "TZDIR",
-    "BASH_ENV", "ENV", "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME",
+    "BASH_ENV", "ENV", "CDPATH", "IFS", "SHELLOPTS", "TERMINFO", "TERMINFO_DIRS",
+    "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT",
     "MALLOC_CHECK_", "MALLOC_TRACE",
+    "NOTIFY_SOCKET", "TMPDIR",
 })
-_DANGEROUS_ENV_PREFIXES = ("LD_", "DBUS_", "SYSTEMD_", "GLIBC_TUNABLES")
-
-
-def _resolve_system_bin(name: str) -> str:
-    """Resolve a system binary from a fixed trusted PATH so an app's PATH
-    can never hijack root-privileged wrappers like systemd-run or setpriv."""
-    # Never the bare name: exec would look it up in the app's PATH. A path that
-    # does not exist makes the launch fail instead.
-    return shutil.which(name, path=_SYSTEM_BIN_PATH) or f"/usr/bin/{name}"
+_DANGEROUS_ENV_PREFIXES = (
+    "LD_", "DBUS_", "SYSTEMD_", "GLIBC_TUNABLES", "MALLOC_",
+    "OPENSSL_", "P11_KIT_", "XDG_", "LISTEN_", "KRB5_", "SSL_", "CURL_", "BASH_FUNC_",
+)
 
 
 def is_dangerous_env_var(name: str) -> bool:
-    """True if *name* is a loader, IPC, or shell-hook variable apps must not set."""
+    """True if *name* is a loader, crypto/IPC, or shell-hook variable apps must not set."""
     up = name.upper()
     return (
         up in _DANGEROUS_ENV_EXACT
@@ -175,6 +215,40 @@ def strip_dangerous_env_vars(env: dict) -> None:
     """Remove dangerous loader/IPC/hook variables from *env* in place."""
     for key in [k for k in env if is_dangerous_env_var(k)]:
         env.pop(key, None)
+
+
+def _clean_root_env() -> Dict[str, str]:
+    """Minimal trusted environment for root-privileged wrappers (`systemd-run`,
+    `setpriv`) so untrusted app variables never reach UID 0 code."""
+    return {
+        "PATH": _SYSTEM_BIN_PATH,
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "HOME": "/root",
+    }
+
+
+def _prepare_exec_env(env: Dict[str, str]):
+    """Write *env* as JSON to an unlinked inheritable temp file so a post-drop
+    helper can load it after privileges are dropped. Returns `(file_obj, fd)`.
+    Caller must close `file_obj` after spawning the child."""
+    tf = tempfile.TemporaryFile()
+    try:
+        tf.write(json.dumps({str(k): str(v) for k, v in env.items()}).encode("utf-8"))
+        tf.flush()
+        tf.seek(0)
+        fd = tf.fileno()
+        os.set_inheritable(fd, True)
+        return tf, fd
+    except BaseException:
+        tf.close()
+        raise
+
+
+def _exec_env_argv(env_fd: int, argv: List[str], ctty: bool = False) -> List[str]:
+    """Command invoking `exec_env.py` to apply the env from *env_fd* and exec *argv*."""
+    py = _resolve_system_bin("python3") if _isolation_active() else sys.executable
+    flags = ["--ctty"] if ctty else []
+    return [py, "-I", str(_EXEC_ENV_HELPER), *flags, str(env_fd), *argv]
 
 
 def _kill_user_processes(uid: int) -> bool:
@@ -213,8 +287,10 @@ def _delete_app_user(app_id: int) -> bool:
     if uid == 0:
         return False
     cleared = False
-    with contextlib.suppress(Exception):
+    try:
         cleared = _kill_user_processes(uid)
+    except Exception as exc:
+        logging.error(f"Error stopping processes for user {name} (uid={uid}): {exc}")
     if not cleared:
         logging.error(f"Processes for user {name} (uid={uid}) did not exit; refusing to remove user.")
         return False
@@ -236,7 +312,7 @@ def _chown_app_dir(app_row: "App") -> None:
     ran on its behalf may have left other owners behind."""
     ids = _app_ids(app_row)
     app_dir = Path(app_row.app_dir)
-    if ids and app_dir.exists():
+    if ids and app_dir.exists() and not app_dir.is_symlink():
         _chown_tree(app_dir, *ids)
 
 
@@ -248,13 +324,22 @@ def _as_app_user(app_row: "App", argv: list) -> list:
     uvloop — the event loop uvicorn uses in production — rejects those
     ("unexpected kwargs: user, group, extra_groups"), which made every venv,
     pip and git run fail under per-app users. setpriv execs the command, so
-    the PID the caller gets is the command's own."""
+    the PID the caller gets is the command's own. `--no-new-privs` blocks
+    setuid/setgid host binaries from elevating privileges."""
     if not _isolation_active():
         return list(argv)
     ids = _app_ids(app_row)
     if not ids:
         raise RuntimeError(f"App user for app {app_row.id} does not exist.")
-    return [_resolve_system_bin("setpriv"), f"--reuid={ids[0]}", f"--regid={ids[1]}", "--clear-groups", "--", *argv]
+    return [
+        _resolve_system_bin("setpriv"),
+        f"--reuid={ids[0]}",
+        f"--regid={ids[1]}",
+        "--clear-groups",
+        "--no-new-privs",
+        "--",
+        *argv,
+    ]
 
 
 def _app_tool_env(app_row: "App") -> Dict[str, str]:
@@ -267,6 +352,7 @@ def _app_tool_env(app_row: "App") -> Dict[str, str]:
     env.update(runtimes.tool_env(app_row.runtime, Path(app_row.app_dir)))
     if _app_ids(app_row):
         env.update(HOME=app_row.app_dir, USER=_app_username(app_row.id), LOGNAME=_app_username(app_row.id))
+    strip_dangerous_env_vars(env)
     return env
 
 

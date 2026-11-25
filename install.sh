@@ -21,6 +21,7 @@
 #   --with-all        all of the runtimes above, and Rust
 #   --shared-user     run every app as the one 'venvy' user, without per-app
 #                     users (the default for a new install is one user per app)
+#   --allow-downgrade allow installing a release older than the current one
 #   --uninstall       remove the service and code (data and config are kept)
 #
 # Run it again at any time to update: it downloads the release, verifies its
@@ -68,6 +69,9 @@ MCowBQYDK2VwAyEAajX9BBDJMsBY6qPPyBa9/svuCnIenVQIx7WhO2tGpUM=
 -----END PUBLIC KEY-----'
 
 VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; WITH_NODE=0; WITH_GO=0; WITH_BUN=0; WITH_DENO=0; WITH_PHP=0; WITH_RUBY=0; WITH_JAVA=0; APP_USERS=""; UNINSTALL=0; ALLOW_DOWNGRADE=0
+HOST_ARG=0; PORT_ARG=0; APP_USERS_ARG=0
+TMP=""; WORK=""
+trap 'rm -rf "${TMP:-}" "${WORK:-}"' EXIT
 
 # Printed from here rather than read back out of this file: piped into bash
 # from curl there is no file to read.
@@ -107,8 +111,8 @@ die()  { printf '\033[1;31m[venvy]\033[0m %s\n' "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --host)      [ $# -ge 2 ] || die "--host needs a value"; HOST="$2"; shift 2 ;;
-    --port)      [ $# -ge 2 ] || die "--port needs a value"; PORT="$2"; shift 2 ;;
+    --host)      [ $# -ge 2 ] || die "--host needs a value"; HOST="$2"; HOST_ARG=1; shift 2 ;;
+    --port)      [ $# -ge 2 ] || die "--port needs a value"; PORT="$2"; PORT_ARG=1; shift 2 ;;
     --version)   [ $# -ge 2 ] || die "--version needs a value"; VERSION="$2"; shift 2 ;;
     --with-rust) WITH_RUST=1; shift ;;
     --with-node) WITH_NODE=1; shift ;;
@@ -119,8 +123,8 @@ while [ $# -gt 0 ]; do
     --with-ruby) WITH_RUBY=1; shift ;;
     --with-java) WITH_JAVA=1; shift ;;
     --with-all)  WITH_RUST=1; WITH_NODE=1; WITH_GO=1; WITH_BUN=1; WITH_DENO=1; WITH_PHP=1; WITH_RUBY=1; WITH_JAVA=1; shift ;;
-    --app-users) APP_USERS=1; shift ;;     # the default for a new install; kept for scripts
-    --shared-user) APP_USERS=0; shift ;;
+    --app-users) APP_USERS=1; APP_USERS_ARG=1; shift ;;     # the default for a new install; kept for scripts
+    --shared-user) APP_USERS=0; APP_USERS_ARG=1; shift ;;
     --allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)   usage; exit 0 ;;
@@ -131,18 +135,14 @@ done
 [ "$(id -u)" -eq 0 ] || die "This needs root. Run:  curl -fsSL <url> | sudo bash"
 command -v apt-get   >/dev/null 2>&1 || die "This installer supports Debian and Ubuntu (apt-get not found)."
 command -v systemctl >/dev/null 2>&1 || die "systemd is required (systemctl not found)."
-if [ -n "$PORT" ]; then
-  case "$PORT" in ''|*[!0-9]*) die "--port must be a number" ;; esac
-  [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "--port must be between 1 and 65535"
-fi
-case "$HOST" in *[!0-9A-Za-z.:_-]*) die "--host contains unexpected characters" ;; esac
-case "$VERSION" in *[!0-9A-Za-z._-]*) die "--version contains unexpected characters" ;; esac
+case "$VERSION" in ''|.|..|*[!0-9A-Za-z._-]*) die "--version contains unexpected characters" ;; esac
 
 # ── Uninstall ────────────────────────────────────────────────────────────────
 if [ "$UNINSTALL" -eq 1 ]; then
   DATA_DIR="$(systemctl show -p WorkingDirectory --value venvy.service 2>/dev/null || true)"
   say "Stopping and removing the Venvy service..."
   systemctl disable --now venvy.service venvy-update.path >/dev/null 2>&1 || true
+  systemctl stop venvy-update.service >/dev/null 2>&1 || true
   rm -f "$UNIT_FILE" "$UPDATE_UNIT" "$UPDATE_PATH_UNIT" "$UPDATE_SCRIPT" "$RELEASE_KEY_FILE"
   rm -rf "$UPDATE_DIR"
   systemctl daemon-reload
@@ -165,29 +165,41 @@ fi
 if [ -z "$DATA_DIR" ] && [ -f "$CODE_DIR/data.db" ]; then DATA_DIR="$CODE_DIR"; fi
 EXISTING_DATA=1
 if [ -z "$DATA_DIR" ]; then DATA_DIR="$DEFAULT_DATA_DIR"; [ -f "$DATA_DIR/data.db" ] || EXISTING_DATA=0; fi
+case "$DATA_DIR" in ''|*[[:cntrl:]]*|*\"*|*\'*|*\$*|*\`*) die "DATA_DIR contains unsafe characters: $DATA_DIR" ;; esac
 
 # Settings: flags win, then what is already in the env file, then defaults.
 env_get() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1 || true; }
+PREV_APP_USERS="$(env_get VENVY_APP_USERS)"
 [ -n "$HOST" ]      || HOST="$(env_get HOST)";                   [ -n "$HOST" ]      || HOST="0.0.0.0"
 [ -n "$PORT" ]      || PORT="$(env_get PORT)";                   [ -n "$PORT" ]      || PORT="54783"
-[ -n "$APP_USERS" ] || APP_USERS="$(env_get VENVY_APP_USERS)"
+[ -n "$APP_USERS" ] || APP_USERS="$PREV_APP_USERS"
+# Validate effective HOST and PORT (whether from CLI or existing venvy.env).
+case "$PORT" in ''|*[!0-9]*) die "PORT must be a number (got '$PORT')" ;; esac
+[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "PORT must be between 1 and 65535 (got '$PORT')"
+case "$HOST" in ''|*[!0-9A-Za-z.:_-]*) die "HOST contains unexpected characters (got '$HOST')" ;; esac
 # Per-app users unless asked otherwise: without them every app, terminal and
 # package install runs as Venvy's own user and can read data.db, the secrets
 # key and every other app. An existing install keeps the mode it has.
 if [ -z "$APP_USERS" ]; then
   if [ "$EXISTING_DATA" -eq 1 ]; then APP_USERS="0"; else APP_USERS="1"; fi
 fi
+case "$APP_USERS" in 0|1) ;; *) die "VENVY_APP_USERS must be 0 or 1 (got '$APP_USERS')" ;; esac
 
 # Who the service runs as.
 HAND_OVER=0
+HAND_OVER_ROOT=0
 if [ "$APP_USERS" = "1" ]; then
   RUN_USER="root"; RUN_GROUP="root"
+  if [ "$EXISTING_DATA" -eq 1 ] && [ "$(stat -c %U "$DATA_DIR/data.db")" != "root" ]; then
+    HAND_OVER_ROOT=1
+  fi
 elif [ "$EXISTING_DATA" -eq 1 ]; then
   RUN_USER="$(stat -c %U "$DATA_DIR/data.db")"; RUN_GROUP="$(stat -c %G "$DATA_DIR/data.db")"
-  if [ "$RUN_USER" = "root" ]; then
+  if [ "$RUN_USER" = "root" ] || [ "$PREV_APP_USERS" = "1" ]; then
     # Per-app users until now, so the service ran as root and root owns the
-    # data. Taken from there, --shared-user would have run every app as root;
-    # the data goes over to the 'venvy' user instead (step 5, once stopped).
+    # data (or app dirs belong to venvy-app-*). Taken from there, --shared-user
+    # would have run every app as root or left app folders unreadable; the data
+    # goes over to the 'venvy' user instead (step 5, once stopped).
     RUN_USER="venvy"; RUN_GROUP="venvy"; HAND_OVER=1
   fi
 else
@@ -197,6 +209,8 @@ fi
 # Where "the latest release" lives: what an update from the UI installs. update.sh
 # passes it on, so an update fetched by tag still follows the same fork or mirror.
 LATEST_URL="${VENVY_LATEST_URL:-${VENVY_BASE_URL:-https://github.com/$REPO/releases/latest/download}}"
+case "$LATEST_URL" in http://*|https://*) ;; *) die "VENVY_LATEST_URL must be an http(s) URL" ;; esac
+case "$LATEST_URL" in *[[:cntrl:]]*|*\"*|*\'*|*\$*|*\`*|*[[:space:]]*) die "VENVY_LATEST_URL contains unsafe characters" ;; esac
 if [ "$VERSION" = "latest" ]; then
   BASE_URL="${VENVY_BASE_URL:-https://github.com/$REPO/releases/latest/download}"
 else
@@ -215,7 +229,9 @@ PKGS="python3 python3-venv curl ca-certificates openssl git tar openssh-client"
 # Bun and Deno come as zip files; Go needs nothing beyond curl and tar.
 [ "$WITH_BUN" -eq 1 ] || [ "$WITH_DENO" -eq 1 ] && PKGS="$PKGS unzip"
 MISSING=""
-for p in $PKGS; do dpkg -s "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"; done
+for p in $PKGS; do
+  dpkg-query -W -f='${Status}\n' "$p" 2>/dev/null | grep -qx 'install ok installed' || MISSING="$MISSING $p"
+done
 if [ -n "$MISSING" ]; then
   say "Installing system packages:$MISSING"
   apt-get update -y -q
@@ -232,7 +248,7 @@ case "$(uname -m)" in
 esac
 
 fetch_to() {  # URL FILE — or stop with a message
-  curl -fsSL --retry 3 -o "$2" "$1" || { rm -rf "${WORK:-}"; die "Could not download $1"; }
+  curl -fsSL --connect-timeout 15 --max-time 600 --retry 3 -o "$2" "$1" || { rm -rf "${WORK:-}"; die "Could not download $1"; }
 }
 verify_sha256() {  # FILE EXPECTED NAME
   [ -n "$2" ] || { rm -rf "${WORK:-}"; die "No checksum was published for $3."; }
@@ -257,11 +273,14 @@ PY
   [ $# -eq 2 ] || { rm -rf "$WORK"; die "Could not find the current Go release on go.dev."; }
   fetch_to "https://go.dev/dl/$1" "$WORK/go.tgz"
   verify_sha256 "$WORK/go.tgz" "$2" "$1"
+  mkdir -p "$WORK/go-stage"
+  tar -C "$WORK/go-stage" -xzf "$WORK/go.tgz"
+  [ -x "$WORK/go-stage/go/bin/go" ] || die "Go archive did not contain go/bin/go."
   rm -rf /usr/local/go
-  tar -C /usr/local -xzf "$WORK/go.tgz"
+  mv "$WORK/go-stage/go" /usr/local/go
   ln -sf /usr/local/go/bin/go /usr/local/bin/go
   ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
-  rm -rf "$WORK"
+  rm -rf "$WORK"; WORK=""
 }
 
 install_bun() {
@@ -301,24 +320,26 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
 
 # ── 2. Download and verify ───────────────────────────────────────────────────
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
 say "Downloading $BASE_URL/venvy.tar.gz"
-curl -fsSL --retry 3 -o "$TMP/venvy.tar.gz"        "$BASE_URL/venvy.tar.gz" \
+curl -fsSL --connect-timeout 15 --max-time 600 --retry 3 -o "$TMP/venvy.tar.gz"        "$BASE_URL/venvy.tar.gz" \
   || die "Download failed. Is the release published (and the repository public)?"
-curl -fsSL --retry 3 -o "$TMP/venvy.tar.gz.sha256" "$BASE_URL/venvy.tar.gz.sha256" \
+curl -fsSL --connect-timeout 15 --max-time 60  --retry 3 -o "$TMP/venvy.tar.gz.sha256" "$BASE_URL/venvy.tar.gz.sha256" \
   || die "Could not download the checksum file."
-( cd "$TMP" && sha256sum -c --status venvy.tar.gz.sha256 ) \
-  || die "Checksum mismatch — the download is corrupt or was tampered with. Nothing was changed."
-curl -fsSL --retry 3 -o "$TMP/venvy.tar.gz.sha256.sig" "$BASE_URL/venvy.tar.gz.sha256.sig" \
+curl -fsSL --connect-timeout 15 --max-time 60  --retry 3 -o "$TMP/venvy.tar.gz.sha256.sig" "$BASE_URL/venvy.tar.gz.sha256.sig" \
   || die "Could not download the release's signature. Nothing was changed."
 if [ -n "${VENVY_SIGNING_KEY_FILE:-}" ]; then
   cp "$VENVY_SIGNING_KEY_FILE" "$TMP/release-key.pem" || die "Can't read $VENVY_SIGNING_KEY_FILE."
 else
   printf '%s\n' "$RELEASE_PUBKEY" > "$TMP/release-key.pem"
 fi
+# Verify signature BEFORE parsing or trusting the checksum file.
 openssl pkeyutl -verify -pubin -inkey "$TMP/release-key.pem" -rawin \
     -in "$TMP/venvy.tar.gz.sha256" -sigfile "$TMP/venvy.tar.gz.sha256.sig" >/dev/null 2>&1 \
   || die "The release's signature doesn't match its key — it was not published by Venvy's maintainer. Nothing was changed."
+[ "$(wc -l < "$TMP/venvy.tar.gz.sha256")" -eq 1 ] && grep -Eq '^[0-9a-f]{64}  venvy\.tar\.gz$' "$TMP/venvy.tar.gz.sha256" \
+  || die "The checksum file has an unexpected format. Nothing was changed."
+( cd "$TMP" && sha256sum -c --status venvy.tar.gz.sha256 ) \
+  || die "Checksum mismatch — the download is corrupt or was tampered with. Nothing was changed."
 
 mkdir "$TMP/src"
 tar -xzf "$TMP/venvy.tar.gz" -C "$TMP/src"
@@ -326,24 +347,32 @@ for f in main.py requirements.txt VERSION venvy/app.py web/index.html; do
   [ -f "$TMP/src/$f" ] || die "The release archive is incomplete (missing $f). Nothing was changed."
 done
 REL_VERSION="$(tr -cd '0-9A-Za-z._-' < "$TMP/src/VERSION")"
-[ -n "$REL_VERSION" ] || die "The release archive has no version."
+case "$REL_VERSION" in ''|.|..) die "The release archive has an invalid version." ;; esac
 
 # Refuse silent downgrades to an older (still validly signed) release unless
-# explicitly requested with --allow-downgrade.
+# explicitly requested with --allow-downgrade. Fail closed on unparseable tags.
 if [ "$ALLOW_DOWNGRADE" -eq 0 ] && [ -f "$CODE_DIR/current/VERSION" ]; then
   CUR_VERSION="$(tr -cd '0-9A-Za-z._-' < "$CODE_DIR/current/VERSION")"
   if [ -n "$CUR_VERSION" ]; then
     python3 - "$CUR_VERSION" "$REL_VERSION" <<'PY' || die "Refusing to downgrade from $CUR_VERSION to $REL_VERSION (pass --allow-downgrade to override)."
 import re, sys
-def parse(v):
-    m = re.match(r"^v?(\d+(?:\.\d+)*)(.*)$", v.strip())
+def order(v):
+    m = re.match(r"^v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$", v.strip())
     if not m:
         return None
-    nums = tuple(int(x) for x in m.group(1).split("."))
+    nums = [int(x) for x in m.group(1).split(".")]
+    while len(nums) > 1 and nums[-1] == 0:
+        nums.pop()
     pre = m.group(2)
-    return (nums, 0 if pre else 1)
-cur, rel = parse(sys.argv[1]), parse(sys.argv[2])
-if cur is not None and rel is not None and rel < cur:
+    if not pre:
+        return (tuple(nums), 1, ())
+    tokens = []
+    for part in pre.split("."):
+        for seg in re.findall(r"\d+|[A-Za-z]+", part):
+            tokens.append((0, int(seg), "") if seg.isdigit() else (1, 0, seg.lower()))
+    return (tuple(nums), 0, tuple(tokens))
+cur, rel = order(sys.argv[1]), order(sys.argv[2])
+if cur is None or rel is None or rel < cur:
     sys.exit(1)
 PY
   fi
@@ -359,8 +388,13 @@ mv "$TMP/src" "$STAGE"
 
 say "Building the Python environment for $REL_VERSION..."
 python3 -m venv "$STAGE/.venv"
-"$STAGE/.venv/bin/pip" install -q --disable-pip-version-check -r "$STAGE/requirements.txt" \
-  || { rm -rf "$STAGE"; die "Installing Python dependencies failed. Nothing was changed."; }
+if [ -f "$STAGE/requirements.lock" ]; then
+  "$STAGE/.venv/bin/pip" install -q --disable-pip-version-check --require-hashes -r "$STAGE/requirements.lock" \
+    || { rm -rf "$STAGE"; die "Installing Python dependencies failed. Nothing was changed."; }
+else
+  "$STAGE/.venv/bin/pip" install -q --disable-pip-version-check -r "$STAGE/requirements.txt" \
+    || { rm -rf "$STAGE"; die "Installing Python dependencies failed. Nothing was changed."; }
+fi
 # Does it even import? Checked from an empty directory, before anything is stopped.
 ( cd "$TMP" && "$STAGE/.venv/bin/python" -c "import sys; sys.path.insert(0, '$STAGE'); import venvy.app" >/dev/null 2>"$TMP/import.log" ) \
   || { cat "$TMP/import.log" >&2; rm -rf "$STAGE"; die "The new version failed to load. Nothing was changed."; }
@@ -401,6 +435,8 @@ SESSION_COOKIE_SECURE=0
 
 # One Unix user per hosted app (the service then runs as root). With 0, all
 # apps share Venvy's own user and can read its database and each other.
+# Do not toggle this by hand — re-run install.sh with --app-users or --shared-user
+# so file ownership and the systemd unit stay in sync.
 VENVY_APP_USERS=$APP_USERS
 
 # Origins allowed to call the API from a browser, comma separated.
@@ -420,11 +456,15 @@ VENVY_APP_USERS=$APP_USERS
 EOF
   )
 else
-  # Existing file: only touch what was asked for on the command line.
+  # Existing file: only touch what was asked for on the command line (or if missing).
   env_set() {
     if grep -q "^$1=" "$ENV_FILE"; then sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"; else printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"; fi
   }
-  env_set HOST "$HOST"; env_set PORT "$PORT"; env_set VENVY_APP_USERS "$APP_USERS"
+  [ "$HOST_ARG" -eq 1 ]      && env_set HOST "$HOST"
+  [ "$PORT_ARG" -eq 1 ]      && env_set PORT "$PORT"
+  if [ "$APP_USERS_ARG" -eq 1 ] || ! grep -q '^VENVY_APP_USERS=' "$ENV_FILE"; then
+    env_set VENVY_APP_USERS "$APP_USERS"
+  fi
 fi
 chown root:root "$ENV_FILE"
 chmod 600 "$ENV_FILE"
@@ -446,11 +486,25 @@ if [ "$HAND_OVER" -eq 1 ]; then
   say "Switching to one shared user: handing $DATA_DIR over to 'venvy'..."
   # Whatever the apps' own users still run (a daemon started from a terminal)
   # would keep writing into the folders that are changing hands.
-  getent passwd | cut -d: -f1 | grep '^venvy-app-' | while read -r u; do pkill -KILL -u "$u" 2>/dev/null || true; done
+  getent passwd | awk -F: '/^venvy-app-/ {print $1}' | while read -r u; do pkill -KILL -u "$u" 2>/dev/null || true; done
   # -h -R: links are changed themselves and never followed. The apps' folders
   # held whatever their users put there, a link to /etc/shadow included.
   chown -hR venvy:venvy "$DATA_DIR"
   chmod 750 "$DATA_DIR"
+elif [ "$HAND_OVER_ROOT" -eq 1 ]; then
+  say "Switching to per-app users: handing Venvy's own state in $DATA_DIR to 'root'..."
+  chown -h root:root "$DATA_DIR"
+  chmod 711 "$DATA_DIR"
+  for item in data.db data.db-wal data.db-shm .venvy_key .setup-code .backup-op.json .update-request; do
+    [ -e "$DATA_DIR/$item" ] && [ ! -L "$DATA_DIR/$item" ] && chown -h root:root "$DATA_DIR/$item"
+  done
+  for dir in backups releases deploy-keys app-logs .terminal .upload-tmp; do
+    [ -d "$DATA_DIR/$dir" ] && [ ! -L "$DATA_DIR/$dir" ] && chown -hR root:root "$DATA_DIR/$dir"
+  done
+  if [ -d "$DATA_DIR/apps" ] && [ ! -L "$DATA_DIR/apps" ]; then
+    chown -h root:root "$DATA_DIR/apps"
+    chmod 711 "$DATA_DIR/apps"
+  fi
 fi
 
 if [ ! -L "$DATA_DIR/data.db" ] && [ -f "$DATA_DIR/data.db" ]; then
@@ -496,11 +550,18 @@ for old in snaps[keep:]:
   fi
 fi
 
+# Back up existing unit files and update.sh so rollback restores them cleanly.
+mkdir -p "$TMP/unit-backup"
+for u in "$UNIT_FILE" "$UPDATE_UNIT" "$UPDATE_PATH_UNIT" "$UPDATE_SCRIPT"; do
+  [ -f "$u" ] && cp -a "$u" "$TMP/unit-backup/$(basename "$u")"
+done
+
 rm -rf "$REL_DIR"
 mv "$STAGE" "$REL_DIR"
 ln -sfn "$REL_DIR" "$CODE_DIR/current"
 
-cat > "$UNIT_FILE" <<EOF
+{
+  cat <<EOF
 [Unit]
 Description=Venvy application manager
 After=network-online.target
@@ -520,10 +581,26 @@ Restart=always
 RestartSec=5
 TimeoutStopSec=30
 LimitNOFILE=65536
+EOF
+  if [ "$APP_USERS" != "1" ]; then
+    cat <<EOF
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=$DATA_DIR /tmp
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+EOF
+  fi
+  cat <<'EOF'
 
 [Install]
 WantedBy=multi-user.target
 EOF
+} > "$UNIT_FILE"
 
 # Updating from the UI. Venvy (unprivileged) can only create an empty request
 # file in its data directory; this path unit notices it and runs the script
@@ -538,17 +615,18 @@ install -m 644 -o root -g root "$TMP/release-key.pem" "$RELEASE_KEY_FILE"
 # this installer from inside update.sh, and bash reads a running script as it goes —
 # rewritten in place, the old script would carry on in the middle of the new one.
 UPDATE_SCRIPT_NEW="$UPDATE_SCRIPT.new"
-cat > "$UPDATE_SCRIPT_NEW" <<EOF
-#!/usr/bin/env bash
-# Written by the Venvy installer. Run as root by venvy-update.service when the
-# file $DATA_DIR/.update-request appears (an admin clicked Update in Venvy).
-set -uo pipefail
-umask 022
-DATA_DIR="$DATA_DIR"
-UPDATE_DIR="$UPDATE_DIR"
-BASE_URL="$LATEST_URL"
-KEY_FILE="$RELEASE_KEY_FILE"
-EOF
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '# Written by the Venvy installer. Run as root by venvy-update.service when the\n'
+  printf '# file %s/.update-request appears (an admin clicked Update in Venvy).\n' "$DATA_DIR"
+  printf 'set -uo pipefail\n'
+  printf 'umask 022\n'
+  printf 'DATA_DIR=%q\n' "$DATA_DIR"
+  printf 'CODE_DIR=%q\n' "$CODE_DIR"
+  printf 'UPDATE_DIR=%q\n' "$UPDATE_DIR"
+  printf 'BASE_URL=%q\n' "$LATEST_URL"
+  printf 'KEY_FILE=%q\n' "$RELEASE_KEY_FILE"
+} > "$UPDATE_SCRIPT_NEW"
 cat >> "$UPDATE_SCRIPT_NEW" <<'EOF'
 # One function, called on the last line: bash has read all of it before anything runs.
 venvy_update() {
@@ -571,21 +649,52 @@ TAG=""
 case "$BASE_URL" in
   https://github.com/*/releases/latest/download)
     REPO_PATH="${BASE_URL#https://github.com/}"; REPO_PATH="${REPO_PATH%/releases/latest/download}"
-    TAG="$(curl -fsSL --retry 2 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO_PATH/releases/latest" 2>/dev/null \
+    TAG="$(curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO_PATH/releases/latest" 2>/dev/null \
            | python3 -c 'import json, sys; print(json.load(sys.stdin).get("tag_name", ""))' 2>/dev/null || true)"
-    case "$TAG" in ''|*[!0-9A-Za-z._-]*) TAG="" ;; esac
+    case "$TAG" in ''|.|..|*[!0-9A-Za-z._-]*) TAG="" ;; esac
     ;;
 esac
 if [ -n "$TAG" ]; then FETCH_URL="https://github.com/$REPO_PATH/releases/download/$TAG"; else FETCH_URL="$BASE_URL"; fi
+check_not_downgrade() {
+  [ -f "$CODE_DIR/current/VERSION" ] || return 0
+  CUR_V="$(tr -cd '0-9A-Za-z._-' < "$CODE_DIR/current/VERSION")"
+  NEW_V="$(tr -cd '0-9A-Za-z._-' < "$WORK/VERSION")"
+  [ -n "$CUR_V" ] || return 0
+  python3 - "$CUR_V" "$NEW_V" <<'PY'
+import re, sys
+def order(v):
+    m = re.match(r"^v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$", v.strip())
+    if not m:
+        return None
+    nums = [int(x) for x in m.group(1).split(".")]
+    while len(nums) > 1 and nums[-1] == 0:
+        nums.pop()
+    pre = m.group(2)
+    if not pre:
+        return (tuple(nums), 1, ())
+    tokens = []
+    for part in pre.split("."):
+        for seg in re.findall(r"\d+|[A-Za-z]+", part):
+            tokens.append((0, int(seg), "") if seg.isdigit() else (1, 0, seg.lower()))
+    return (tuple(nums), 0, tuple(tokens))
+cur, rel = order(sys.argv[1]), order(sys.argv[2])
+if cur is None or rel is None or rel < cur:
+    sys.exit(1)
+PY
+}
 {
   echo "Fetching ${TAG:-the latest release} from $FETCH_URL"
-  curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz" "$FETCH_URL/venvy.tar.gz" \
-    && curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz.sha256" "$FETCH_URL/venvy.tar.gz.sha256" \
-    && curl -fsSL --retry 3 -o "$WORK/venvy.tar.gz.sha256.sig" "$FETCH_URL/venvy.tar.gz.sha256.sig" \
-    && ( cd "$WORK" && sha256sum -c --status venvy.tar.gz.sha256 ) \
+  curl -fsSL --connect-timeout 15 --max-time 600 --retry 3 -o "$WORK/venvy.tar.gz" "$FETCH_URL/venvy.tar.gz" \
+    && curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 -o "$WORK/venvy.tar.gz.sha256" "$FETCH_URL/venvy.tar.gz.sha256" \
+    && curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 -o "$WORK/venvy.tar.gz.sha256.sig" "$FETCH_URL/venvy.tar.gz.sha256.sig" \
     && { openssl pkeyutl -verify -pubin -inkey "$KEY_FILE" -rawin -in "$WORK/venvy.tar.gz.sha256" \
            -sigfile "$WORK/venvy.tar.gz.sha256.sig" >/dev/null 2>&1 \
          || { echo "The release's signature doesn't match the key this server was installed with. Not installed."; false; }; } \
+    && { [ "$(wc -l < "$WORK/venvy.tar.gz.sha256")" -eq 1 ] && grep -Eq '^[0-9a-f]{64}  venvy\.tar\.gz$' "$WORK/venvy.tar.gz.sha256" \
+         || { echo "The checksum file has an unexpected format. Not installed."; false; }; } \
+    && ( cd "$WORK" && sha256sum -c --status venvy.tar.gz.sha256 ) \
+    && tar -xzf "$WORK/venvy.tar.gz" -C "$WORK" VERSION \
+    && { check_not_downgrade || { echo "Refusing to downgrade via automatic update. Not installed."; false; }; } \
     && tar -xzf "$WORK/venvy.tar.gz" -C "$WORK" install.sh \
     && VENVY_SIGNING_KEY_FILE="$KEY_FILE" VENVY_LATEST_URL="$BASE_URL" VENVY_BASE_URL="$FETCH_URL" \
          bash "$WORK/install.sh" --version "${TAG:-latest}"
@@ -633,7 +742,7 @@ case "$HOST" in 0.0.0.0|'') PROBE_HOST="127.0.0.1" ;; ::|'[::]') PROBE_HOST="[::
 say "Waiting for Venvy to come up..."
 HEALTHY=0
 for _ in $(seq 1 60); do
-  if curl -fsS -o /dev/null "http://$PROBE_HOST:$PORT/api/health" 2>/dev/null; then HEALTHY=1; break; fi
+  if curl -fsS --connect-timeout 2 --max-time 5 -o /dev/null "http://$PROBE_HOST:$PORT/api/health" 2>/dev/null; then HEALTHY=1; break; fi
   sleep 1
 done
 
@@ -643,10 +752,15 @@ if [ "$HEALTHY" -ne 1 ]; then
   if [ -n "$PREV_DIR" ] && [ -d "$PREV_DIR" ] && [ "$PREV_DIR" != "$REL_DIR" ]; then
     warn "Switching back to $(basename "$PREV_DIR")..."
     ln -sfn "$PREV_DIR" "$CODE_DIR/current"
+    for u in "$UNIT_FILE" "$UPDATE_UNIT" "$UPDATE_PATH_UNIT" "$UPDATE_SCRIPT"; do
+      b="$TMP/unit-backup/$(basename "$u")"
+      [ -f "$b" ] && cp -a "$b" "$u"
+    done
+    systemctl daemon-reload
     systemctl restart venvy.service
     rm -rf "$REL_DIR"
     for _ in $(seq 1 60); do
-      if curl -fsS -o /dev/null "http://$PROBE_HOST:$PORT/api/health" 2>/dev/null; then
+      if curl -fsS --connect-timeout 2 --max-time 5 -o /dev/null "http://$PROBE_HOST:$PORT/api/health" 2>/dev/null; then
         die "The update was rolled back; the previous version is running again. The database snapshot is in $DATA_DIR/backups."
       fi
       sleep 1
@@ -662,7 +776,7 @@ for d in "$CODE_DIR"/releases/*/; do
   [ "$d" = "$REL_DIR" ] || [ "$d" = "$PREV_DIR" ] || rm -rf "$d"
 done
 
-IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 case "$HOST" in 127.0.0.1|localhost|::1) SHOW="127.0.0.1 (this machine only — reach it through your tunnel)" ;; *) SHOW="${IP:-$HOST}" ;; esac
 echo
 say "Venvy $REL_VERSION is running."

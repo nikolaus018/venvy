@@ -114,38 +114,67 @@ def _finished(job_id: int, task: asyncio.Task) -> None:
         logging.error(f"Job {job_id} crashed: {task.exception()}")
 
 
-def _mask_env_secrets(text: str, app: App) -> str:
-    """*text* with the app's environment values masked, as in a deploy log."""
+def _mask_env_secrets(text: str, app: App, extra_secrets: Optional[List[str]] = None) -> str:
+    """*text* with the app's environment values masked, as in a deploy log.
+    Uses strict=True so a transient DB/decryption failure fails closed."""
     from venvy.deploy import _env_secrets
     try:
-        secrets = _env_secrets(app)
+        secrets = set(_env_secrets(app, strict=True))
     except Exception as exc:
         logging.error(f"Could not load the secrets of app {app.id}: {exc}")
         return "[venvy] output hidden: the app's secrets could not be loaded to mask it"
-    for secret in secrets:
+    if extra_secrets:
+        secrets.update(s for s in extra_secrets if s)
+    for secret in sorted(secrets, key=len, reverse=True):
         text = text.replace(secret, "***")
     return text
 
 
 async def _run_job(job_id: int, by: str) -> dict:
-    from venvy.deploy import _app_env_for_commands
-    with Session(engine, expire_on_commit=False) as s:
-        job = s.get(ScheduledJob, job_id)
-        app = s.get(App, job.app_id) if job else None
-        if not job or not app:
-            return {"status": "failed", "output": "The job or its app no longer exists."}
-        job.last_status, job.last_run_at = "running", utc_now()
-        s.add(job)
-        s.commit()
-        command, timeout, name = job.command, job.timeout, job.name
+    from venvy.deploy import _app_env_for_commands, _MASK_MIN_LEN
+    from venvy.isolation import _clean_root_env, _exec_env_argv, _isolation_active, _prepare_exec_env
+
+    def _start_record():
+        with Session(engine, expire_on_commit=False) as s:
+            job = s.get(ScheduledJob, job_id)
+            app = s.get(App, job.app_id) if job else None
+            if not job or not app:
+                return None, None, None
+            job.last_status, job.last_run_at = "running", utc_now()
+            s.add(job)
+            s.commit()
+            return job, app, (job.command, job.timeout, job.name)
+
+    job, app, meta = await asyncio.to_thread(_start_record)
+    if not job or not app or not meta:
+        return {"status": "failed", "output": "The job or its app no longer exists."}
+    command, timeout, name = meta
     started = time.monotonic()
     out_tail, status, code = "", "failed", None
+    captured_secrets: List[str] = []
+    proc = None
     try:
         await asyncio.to_thread(_ensure_app_user, app)
-        proc = await asyncio.create_subprocess_exec(
-            *_as_app_user(app, ["sh", "-c", command]),
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            env=_app_env_for_commands(app), cwd=app.app_dir, start_new_session=True)
+        job_env = await asyncio.to_thread(_app_env_for_commands, app)
+        captured_secrets = [v for v in job_env.values() if isinstance(v, str) and len(v) >= _MASK_MIN_LEN]
+        env_tf = None
+        try:
+            if _isolation_active():
+                env_tf, env_fd = _prepare_exec_env(job_env)
+                spawn_argv = _as_app_user(app, _exec_env_argv(env_fd, ["sh", "-c", command]))
+                spawn_env = _clean_root_env()
+                pass_fds = (env_fd,)
+            else:
+                spawn_argv = ["sh", "-c", command]
+                spawn_env = job_env
+                pass_fds = ()
+            proc = await asyncio.create_subprocess_exec(
+                *spawn_argv,
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                env=spawn_env, cwd=app.app_dir, start_new_session=True, pass_fds=pass_fds)
+        finally:
+            if env_tf is not None:
+                env_tf.close()
         chunks: List[bytes] = []
         size = 0
 
@@ -166,24 +195,46 @@ async def _run_job(job_id: int, by: str) -> dict:
             code = proc.returncode
             status = "ok" if code == 0 else "failed"
         except asyncio.TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
+            with contextlib.suppress(ProcessLookupError, OSError):
                 os.killpg(proc.pid, signal.SIGKILL)
-            await proc.wait()
+            with contextlib.suppress(Exception):
+                await proc.wait()
             status = "timeout"
         # Masked before the cut, so a secret across it can't survive in part.
-        out_tail = _mask_env_secrets(b"".join(chunks).decode(errors="replace"), app)[-OUTPUT_KEEP:]
+        out_tail = _mask_env_secrets(b"".join(chunks).decode(errors="replace"), app, captured_secrets)[-OUTPUT_KEEP:]
         if status == "timeout":
             out_tail += f"\n[venvy] killed after {timeout} seconds"
+    except asyncio.CancelledError:
+        if proc is not None and proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(Exception):
+                await proc.wait()
+        duration = time.monotonic() - started
+        with contextlib.suppress(Exception):
+            with Session(engine) as s:
+                row = s.get(ScheduledJob, job_id)
+                if row and row.last_status == "running":
+                    row.last_status = "failed"
+                    row.last_duration = round(duration, 2)
+                    row.last_output = "[venvy] job cancelled during shutdown"
+                    s.add(row)
+                    s.commit()
+        raise
     except Exception as exc:
-        out_tail = _mask_env_secrets(f"[venvy] could not run the job: {exc}", app)
+        out_tail = _mask_env_secrets(f"[venvy] could not run the job: {exc}", app, captured_secrets)
         status = "failed"
     duration = time.monotonic() - started
-    with Session(engine) as s:
-        job = s.get(ScheduledJob, job_id)
-        if job:
-            job.last_status, job.last_exit_code, job.last_duration, job.last_output = status, code, round(duration, 2), out_tail
-            s.add(job)
-            s.commit()
+
+    def _finish_record() -> None:
+        with Session(engine) as s:
+            row = s.get(ScheduledJob, job_id)
+            if row:
+                row.last_status, row.last_exit_code, row.last_duration, row.last_output = status, code, round(duration, 2), out_tail
+                s.add(row)
+                s.commit()
+
+    await asyncio.to_thread(_finish_record)
     if status != "ok":
         notify.emit("job_failed", f"{app.name}: job '{name}' {'timed out' if status == 'timeout' else 'failed'}",
                     out_tail[-600:], app.id, app.name, "error")
@@ -259,8 +310,16 @@ async def tick(now: Optional[datetime.datetime] = None) -> None:
     from venvy.process import restore_in_progress
     if restore_in_progress():
         return
-    with Session(engine) as s:
-        jobs = s.exec(select(ScheduledJob).where(ScheduledJob.enabled == True)).all()  # noqa: E712
+
+    def _load_due_data():
+        with Session(engine) as s:
+            jobs_list = s.exec(select(ScheduledJob).where(ScheduledJob.enabled == True)).all()  # noqa: E712
+        return jobs_list, get_setting(SCHEDULE_KEY, "")
+
+    jobs, sched = await asyncio.to_thread(_load_due_data)
+    active_ids = {j.id for j in jobs}
+    for k in [k for k in _fired_minute if k != "backup" and k not in active_ids]:
+        _fired_minute.pop(k, None)
     for job in jobs:
         if _fired_minute.get(job.id) == now.timetuple()[:5]:
             continue
@@ -274,7 +333,6 @@ async def tick(now: Optional[datetime.datetime] = None) -> None:
                 start_job(job.id, "scheduler")
             except ValueError:
                 logging.info(f"Job '{job.name}' is still running; this run is skipped.")
-    sched = get_setting(SCHEDULE_KEY, "")
     if sched and _fired_minute.get("backup") != now.timetuple()[:5]:
         try:
             due = Cron(sched).matches(now)

@@ -296,8 +296,8 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
     check("deleting an app removes its releases and keys", cl.req("DELETE", f"/api/apps/{snap}").status_code == 200 and not (d / "releases" / str(snap)).exists())
     cl.req("DELETE", f"/api/apps/{fresh}")
     reused = make_app(cl, name="Reused")
-    check("an app that gets a deleted app's id starts with no deploy log", reused not in (fresh, snap)
-          or cl.req("GET", f"/api/apps/{reused}/deploy").json()["state"]["log"] == [], f"id {reused}")
+    check("an app that gets a deleted app's id starts with no deploy log",
+          cl.req("GET", f"/api/apps/{reused}/deploy").json()["state"]["log"] == [], f"id {reused}")
     sink.close()
 
 shutil.rmtree(work, ignore_errors=True)

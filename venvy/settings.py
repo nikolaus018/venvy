@@ -6,13 +6,27 @@ from venvy.cloudflare import _sanitize_cf_value
 from venvy.crypto import _encrypt_secret
 
 
-# Kept by their own API (encrypted JSON), never through the generic one.
-_INTERNAL_KEYS = ("global_env", "backup_remote", "venvy_hosts")
+# Kept by their own API (encrypted JSON or scheduler state), never through the generic one.
+_INTERNAL_KEYS = (
+    "global_env",
+    "backup_remote",
+    "venvy_hosts",
+    "backup_schedule",
+    "backup_keep",
+    "backup_scheduled_names",
+    "backup_last_scheduled",
+)
 
 
 def _is_secret_setting(key: str) -> bool:
     """Settings whose value is never returned by the API once stored."""
-    return key == "cf_api_token" or key.startswith("totp_pending_") or key in _INTERNAL_KEYS
+    k = key.lower()
+    return (
+        key == "cf_api_token"
+        or (k.startswith("cf_") and ("token" in k or "secret" in k))
+        or key.startswith("totp_pending_")
+        or key in _INTERNAL_KEYS
+    )
 
 
 def _reject_reserved_setting(key: str) -> None:

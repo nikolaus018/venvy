@@ -44,7 +44,10 @@ ALWAYS_KEEP = [".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3"]
 class Client:
     def __init__(self, url: str):
         self.base = url.rstrip("/")
-        host = urllib.parse.urlparse(self.base).netloc.replace(":", "_")
+        parsed = urllib.parse.urlparse(self.base)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            sys.exit(f"Invalid Venvy URL: {url!r}")
+        host = parsed.netloc.replace(":", "_").replace("/", "_")
         self.state_file = CONFIG_DIR / f"{host}.json"
         self.jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
@@ -54,19 +57,27 @@ class Client:
     def load(self) -> bool:
         try:
             st = json.loads(self.state_file.read_text())
-        except (OSError, ValueError):
+            self.auth_key = st["auth_key"]
+            sess = st["session"]
+        except (OSError, ValueError, KeyError, TypeError):
             return False
-        self.auth_key = st["auth_key"]
-        domain = urllib.parse.urlparse(self.base).hostname
+        domain = urllib.parse.urlparse(self.base).hostname or ""
+        # http.cookiejar expects ".local" suffix for single-label hostnames like localhost.
+        cookie_domain = domain if "." in domain or ":" in domain else f"{domain}.local"
         self.jar.set_cookie(http.cookiejar.Cookie(
-            0, "session", st["session"], None, False, domain, True, False, "/", True,
+            0, "session", sess, None, False, cookie_domain, False, False, "/", True,
             self.base.startswith("https"), None, False, None, None, {}))
         return True
 
     def save(self) -> None:
         session = next((c.value for c in self.jar if c.name == "session"), "")
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(CONFIG_DIR, 0o700)
+        except OSError:
+            pass
         fd = os.open(self.state_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump({"session": session, "auth_key": self.auth_key}, f)
 
@@ -115,24 +126,29 @@ class Client:
         self.save() if self.auth_key else None  # sliding session: keep the cookie fresh
         return json.loads(raw) if raw else None
 
-    def upload(self, app_id: int, rel: str, data: bytes) -> None:
-        upload_id, offset = secrets.token_hex(16), 0
-        while True:
-            chunk = data[offset:offset + CHUNK]
-            try:
-                res = self.request("POST", f"/api/apps/{app_id}/files/upload/chunk", form={
-                    "upload_id": upload_id, "path": "", "rel_path": rel,
-                    "offset": str(offset), "total": str(len(data)), "chunk": chunk})
-            except urllib.error.HTTPError as e:
-                if e.code == 409:  # a lost response: resume from what the server has
-                    detail = json.loads(e.read()).get("detail")
-                    if isinstance(detail, dict):
-                        offset = detail["received"]
-                        continue
-                raise
-            offset = res["received"]
-            if res.get("done") or offset >= len(data):
-                return
+    def upload(self, app_id: int, rel: str, file_path: Path) -> None:
+        total = file_path.stat().st_size
+        upload_id, offset, conflicts = secrets.token_hex(16), 0, 0
+        with file_path.open("rb") as fh:
+            while True:
+                fh.seek(offset)
+                chunk = fh.read(CHUNK)
+                try:
+                    res = self.request("POST", f"/api/apps/{app_id}/files/upload/chunk", form={
+                        "upload_id": upload_id, "path": "", "rel_path": rel,
+                        "offset": str(offset), "total": str(total), "chunk": chunk})
+                except urllib.error.HTTPError as e:
+                    if e.code == 409 and conflicts < 5:  # a lost response: resume from what the server has
+                        conflicts += 1
+                        detail = json.loads(e.read()).get("detail")
+                        if isinstance(detail, dict) and isinstance(detail.get("received"), int):
+                            offset = detail["received"]
+                            continue
+                    raise
+                conflicts = 0
+                offset = res["received"]
+                if res.get("done") or offset >= total:
+                    return
 
 
 def tracked_files(root: Path) -> list[str]:
@@ -163,14 +179,26 @@ def remote_files(c: Client, app_id: int, path: str = "") -> dict[str, tuple]:
     return found
 
 
-def unchanged(remote: Optional[tuple], data: bytes) -> bool:
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            buf = fh.read(1 << 20)
+            if not buf:
+                break
+            h.update(buf)
+    return h.hexdigest()
+
+
+def unchanged(remote: Optional[tuple], path: Path) -> bool:
     """Whether the server's copy is this file. By content when the server reports
     hashes: by size alone, an edit that kept the length (DEBUG=1 -> DEBUG=0) was
     never shipped."""
-    if remote is None or remote[0] != len(data):
+    size = path.stat().st_size
+    if remote is None or remote[0] != size:
         return False
     if remote[1] is not None:
-        return remote[1] == hashlib.sha256(data).hexdigest()
+        return remote[1] == _file_sha256(path)
     return True
 
 
@@ -191,13 +219,13 @@ def cmd_sync(c: Client, args) -> None:
 
     sent = skipped = 0
     for rel in local:
-        data = (root / rel).read_bytes()
-        if unchanged(remote.get(rel), data):
+        fp = root / rel
+        if unchanged(remote.get(rel), fp):
             skipped += 1
             continue
         print(f"  upload {rel}")
         if not args.dry_run:
-            c.upload(app["id"], rel, data)
+            c.upload(app["id"], rel, fp)
         sent += 1
 
     wanted = set(local)
@@ -210,15 +238,22 @@ def cmd_sync(c: Client, args) -> None:
             print(f"  delete {rel}")
         else:
             print(f"  stale  {rel}")
-    if args.prune and not args.dry_run:  # drop folders the deletions emptied
+    if args.prune and not args.dry_run:  # drop folders only if truly empty on the server
         survivors = wanted | (set(remote) - set(stale))
-        for d in sorted({str(p) for r in stale for p in Path(r).parents if str(p) != "."}, key=len, reverse=True):
-            live = any(p.startswith(d + "/") for p in survivors)
-            if not live:
-                try:
+        candidate_dirs = sorted(
+            {p.as_posix() for r in stale for p in Path(r).parents if p.as_posix() != "."},
+            key=len,
+            reverse=True,
+        )
+        for d in candidate_dirs:
+            if any(p.startswith(d + "/") for p in survivors):
+                continue
+            try:
+                listing = c.request("GET", f"/api/apps/{app['id']}/files/tree?path={urllib.parse.quote(d)}")
+                if not listing:
                     c.request("POST", f"/api/apps/{app['id']}/files/op", {"operation": "delete", "path": d})
-                except urllib.error.HTTPError:
-                    pass
+            except urllib.error.HTTPError:
+                pass
     print(f"{sent} uploaded, {skipped} unchanged, {len(stale)} stale"
           f"{' (run with --prune to delete them)' if stale and not args.prune else ''}.")
     if args.restart and not args.dry_run:
@@ -229,10 +264,12 @@ def cmd_sync(c: Client, args) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", default=os.getenv("VENVY_URL"), help="Venvy base URL (default $VENVY_URL)")
+    sub_common = argparse.ArgumentParser(add_help=False)
+    sub_common.add_argument("--url", default=argparse.SUPPRESS, help="Venvy base URL (default $VENVY_URL)")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("login")
-    sub.add_parser("apps")
-    s = sub.add_parser("sync")
+    sub.add_parser("login", parents=[sub_common])
+    sub.add_parser("apps", parents=[sub_common])
+    s = sub.add_parser("sync", parents=[sub_common])
     s.add_argument("app")
     s.add_argument("--dir", default=".", help="git checkout to ship (default .)")
     s.add_argument("--prune", action="store_true", help="delete server files that are no longer in the repo")

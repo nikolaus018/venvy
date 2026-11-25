@@ -450,10 +450,10 @@
                     mark.setAttribute('aria-hidden', 'true');
                     mark.style.cssText = 'display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--amber);margin-left:5px;vertical-align:middle';
                     tabBtn.appendChild(mark);
-                    tabBtn.title = 'Settings (5) — unsaved changes';
+                    tabBtn.title = 'Settings (7) — unsaved changes';
                 } else if (!isDirty && mark) {
                     mark.remove();
-                    tabBtn.title = 'Settings (5)';
+                    tabBtn.title = 'Settings (7)';
                 }
             }
         }

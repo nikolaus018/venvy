@@ -5,10 +5,62 @@
         let _appInitialized = false;
         let _reauthUser = null;     // who had unsaved edits when the session expired
 
+        function _clearAuthInputs() {
+            ['password', 'totp-code', 'setup-code'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            const step1 = document.getElementById('login-step-password');
+            const step2 = document.getElementById('login-step-totp');
+            if (step1) step1.classList.remove('hidden');
+            if (step2) step2.classList.add('hidden');
+            const submitBtn = document.getElementById('login-submit-btn');
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Sign In'; }
+        }
+
+        function _clearSessionCaches() {
+            if (typeof stopBackupOpWatch === 'function') stopBackupOpWatch();
+            if (typeof stopDeployPolling === 'function') stopDeployPolling();
+            if (typeof stopUpdateWatch === 'function') stopUpdateWatch();
+            if (typeof _jobsTimer !== 'undefined' && _jobsTimer) { clearTimeout(_jobsTimer); _jobsTimer = null; }
+            if (typeof _cachedApps !== 'undefined') _cachedApps = [];
+            if (typeof _appsEverLoaded !== 'undefined') _appsEverLoaded = false;
+            if (typeof _lastAppListHash !== 'undefined') _lastAppListHash = '';
+            if (typeof _lastKnownStatus !== 'undefined') {
+                for (const k of Object.keys(_lastKnownStatus)) delete _lastKnownStatus[k];
+            }
+            if (typeof _cfCredsCache !== 'undefined') _cfCredsCache = null;
+            if (typeof _cfZonesCache !== 'undefined') _cfZonesCache = null;
+            if (typeof _cfRouteCache !== 'undefined') {
+                for (const k of Object.keys(_cfRouteCache)) delete _cfRouteCache[k];
+            }
+            if (typeof _depData !== 'undefined') _depData = null;
+            if (typeof _depApp !== 'undefined') _depApp = null;
+            if (typeof _jobs !== 'undefined') _jobs = [];
+            if (typeof _notifyData !== 'undefined') _notifyData = null;
+            if (typeof _alertsData !== 'undefined') _alertsData = [];
+            if (typeof _updateInfo !== 'undefined') _updateInfo = null;
+            if (typeof _updateFrom !== 'undefined') _updateFrom = null;
+            if (typeof _backupOp !== 'undefined') _backupOp = null;
+            if (typeof _hostCapacity !== 'undefined') _hostCapacity = { memMB: null, cores: null };
+        }
+
+        function _showBootRetryError(msg) {
+            const shellHidden = document.getElementById('app-shell')?.classList.contains('hidden');
+            const authHidden = document.getElementById('auth-screen')?.classList.contains('hidden');
+            if (shellHidden && authHidden) {
+                document.getElementById('auth-screen').classList.remove('hidden');
+                showToast(msg, 'error', 0, { actionLabel: 'Retry', onAction: checkAuth });
+            }
+        }
+
         async function checkAuth() {
             try {
                 const res = await fetch(`${API}/auth/status`);
-                if (!res.ok) return;
+                if (!res.ok) {
+                    _showBootRetryError(`Could not reach Venvy (HTTP ${res.status}).`);
+                    return;
+                }
                 const data = await res.json();
                 if (data.authenticated) {
                     // Edits kept through a session expiry are only for the same user.
@@ -36,7 +88,8 @@
                 } else {
                     // Not authenticated — show login
                     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-                    stopBackupOpWatch();
+                    _clearSessionCaches();
+                    _clearAuthInputs();
                     _appInitialized = false;
                     document.getElementById('app-shell').classList.add('hidden');
                     document.getElementById('auth-screen').classList.remove('hidden');
@@ -47,10 +100,16 @@
                         // A password being chosen, not recalled: lets a
                         // password manager offer to generate and save one.
                         document.getElementById('password').autocomplete = 'new-password';
+                    } else {
+                        document.getElementById('setup-hint').classList.add('hidden');
+                        document.getElementById('setup-code').classList.add('hidden');
+                        delete document.getElementById('login-form').dataset.mode;
+                        document.getElementById('password').autocomplete = 'current-password';
                     }
                 }
             } catch (e) {
-                // Network error — don't log out, just leave current state
+                // On initial boot when neither screen is visible, reveal login + retry.
+                _showBootRetryError('Could not connect to Venvy — check your connection.');
             }
         }
 
@@ -60,6 +119,16 @@
         function applyRoleUiGating(role) {
             const isViewer = role === 'viewer';
             document.body.classList.toggle('role-viewer', isViewer);
+            document.querySelectorAll('#tab-settings input, #tab-settings select, #tab-settings textarea, #tab-settings [role="switch"]').forEach(el => {
+                if (el.id === 'usage-range') return;
+                if (isViewer) {
+                    if (!el.disabled) el.dataset.viewerDisabled = '1';
+                    el.disabled = true;
+                } else if (el.dataset.viewerDisabled === '1') {
+                    delete el.dataset.viewerDisabled;
+                    el.disabled = false;
+                }
+            });
         }
 
         // Called when polling detects session has expired (10 consecutive 401s).
@@ -68,9 +137,8 @@
         function _showReAuthOverlay() {
             // If the full auth screen is already showing, nothing to do
             if (!document.getElementById('auth-screen').classList.contains('hidden')) return;
-            // Tear down active polling, watchers, terminal, and expired session key
-            if (typeof stopBackupOpWatch === 'function') stopBackupOpWatch();
-            if (typeof stopDeployPolling === 'function') stopDeployPolling();
+            // Tear down active polling, watchers, terminal, caches, and expired session key
+            _clearSessionCaches();
             if (typeof _termDestroy === 'function') _termDestroy();
             // Unsaved edits stay for whoever signs back in; see checkAuth.
             if (_editorDirty) { _reauthUser = currentUser?.username || ''; _termAppId = null; }
@@ -78,14 +146,9 @@
             if (window._controlPollTimer) { clearInterval(window._controlPollTimer); window._controlPollTimer = null; }
             setAuthKey(null);
             document.getElementById('admin-users-btn')?.classList.add('hidden');
-            // Reset login form to clean state
+            // Reset login form to clean state and wipe any sensitive input values
             _loginTotpPending = false;
-            const step1 = document.getElementById('login-step-password');
-            const step2 = document.getElementById('login-step-totp');
-            if (step1) step1.classList.remove('hidden');
-            if (step2) step2.classList.add('hidden');
-            const submitBtn = document.getElementById('login-submit-btn');
-            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Sign In'; }
+            _clearAuthInputs();
             document.getElementById('app-shell').classList.add('hidden');
             document.getElementById('auth-screen').classList.remove('hidden');
             _appInitialized = false;
@@ -125,7 +188,12 @@
                     if (!setupCode) { showToast('Enter the setup code.', 'warn'); return; }
                     submitBtn.disabled = true; submitBtn.textContent = 'Creating…';
                     const res = await fetch(API + '/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p, setup_code: setupCode }) });
-                    if (res.ok) { setAuthKey((await res.json()).auth_key); await checkAuth(); }
+                    if (res.ok) {
+                        setAuthKey((await res.json()).auth_key);
+                        _clearAuthInputs();
+                        delete document.getElementById('login-form').dataset.mode;
+                        await checkAuth();
+                    }
                     else {
                         const err = await res.json().catch(() => ({ detail: 'Setup failed' }));
                         showToast(err.detail || 'Setup failed', 'error');
@@ -143,7 +211,12 @@
                     if (!code) { showToast('Enter the 6-digit code.', 'warn'); return; }
                     submitBtn.disabled = true; submitBtn.textContent = 'Verifying…';
                     const res = await fetch(API + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p, totp_code: code }) });
-                    if (res.ok) { _loginTotpPending = false; setAuthKey((await res.json()).auth_key); await checkAuth(); }
+                    if (res.ok) {
+                        _loginTotpPending = false;
+                        setAuthKey((await res.json()).auth_key);
+                        _clearAuthInputs();
+                        await checkAuth();
+                    }
                     else {
                         const err = await res.json().catch(() => ({ detail: 'Invalid code' }));
                         showToast(err.detail || 'Invalid code', 'error');
@@ -160,6 +233,7 @@
                 const res = await fetch(API + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
                 if (res.ok) {
                     setAuthKey((await res.json()).auth_key);
+                    _clearAuthInputs();
                     await checkAuth();
                 } else {
                     const err = await res.json().catch(() => ({ detail: 'Authentication failed' }));
@@ -303,7 +377,7 @@
         function copyTotpSecret() {
             const secret = document.getElementById('totp-secret-display').textContent;
             if (!secret) return;
-            navigator.clipboard.writeText(secret).then(() => showToast('Secret copied.', 'success')).catch(() => { });
+            copyText(secret, 'Secret copied');
         }
 
         async function confirmTotpSetup() {
@@ -389,6 +463,8 @@
                         document.getElementById('current-pwd-input').select();
                     }
                 }
+            } catch (e) {
+                showToast('Network error: ' + e.message, 'error');
             } finally {
                 btn.disabled = false; btn.textContent = 'Save';
             }

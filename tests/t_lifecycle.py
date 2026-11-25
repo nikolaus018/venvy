@@ -15,35 +15,35 @@ with server(repo, 54992) as (base, data, srv):
     if case == "double_start":
         app_id = make_app(cl)
         with cf.ThreadPoolExecutor(6) as ex:
-            list(ex.map(lambda _: cl.req("POST", f"/api/apps/{app_id}/control?action=start").status_code, range(6)))
-        cl.wait_status(app_id, "running")
+            codes = list(ex.map(lambda _: cl.req("POST", f"/api/apps/{app_id}/control?action=start").status_code, range(6)))
+        assert cl.wait_status(app_id, "running"), f"never started: {codes}"
         time.sleep(2)
         n = len(app_procs(data))
-        print("processes after 6 concurrent starts:", n)
+        print("processes after 6 concurrent starts:", n, "codes:", codes)
         cl.req("POST", f"/api/apps/{app_id}/control?action=stop")
-        cl.wait_status(app_id, "stopped")
+        stopped = cl.wait_status(app_id, "stopped")
         time.sleep(1.5)
         left = len(app_procs(data))
         print("processes left after stop:", left)
-        sys.exit(0 if (n == 1 and left == 0) else 1)
+        sys.exit(0 if (all(c in (200, 409) for c in codes) and n == 1 and stopped and left == 0) else 1)
 
     if case == "restart_storm":
         app_id = make_app(cl)
         cl.req("POST", f"/api/apps/{app_id}/control?action=start")
-        cl.wait_status(app_id, "running")
+        assert cl.wait_status(app_id, "running"), "never started"
         with cf.ThreadPoolExecutor(5) as ex:
-            list(ex.map(lambda _: cl.req("POST", f"/api/apps/{app_id}/control?action=restart").status_code, range(5)))
+            codes = list(ex.map(lambda _: cl.req("POST", f"/api/apps/{app_id}/control?action=restart").status_code, range(5)))
         time.sleep(8)
         st = cl.status(app_id)
         n = len(app_procs(data))
-        print("status:", st["status"], "pid:", st["pid"], "processes:", n)
-        ok = st["status"] == "running" and n == 1 and st["pid"] in app_procs(data)
+        print("status:", st["status"], "pid:", st["pid"], "processes:", n, "codes:", codes)
+        ok = all(c in (200, 409) for c in codes) and st["status"] == "running" and n == 1 and st["pid"] in app_procs(data)
         cl.req("POST", f"/api/apps/{app_id}/control?action=stop")
-        cl.wait_status(app_id, "stopped")
+        stopped = cl.wait_status(app_id, "stopped")
         time.sleep(1.5)
         left = len(app_procs(data))
         print("processes left after stop:", left)
-        sys.exit(0 if ok and left == 0 else 1)
+        sys.exit(0 if ok and stopped and left == 0 else 1)
 
     if case == "stop_crashloop":
         # An "always" app that keeps crashing must stay down once the user

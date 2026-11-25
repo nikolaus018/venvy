@@ -19,6 +19,8 @@ from venvy.auth import (
     check_ip_allowlist,
     get_current_user,
     get_download_user,
+    get_session_user,
+    has_app_access,
     rate_limit_mutations,
     require_operator,
     visible_app_ids,
@@ -49,7 +51,19 @@ from venvy.process import (
 )
 from venvy.safefs import is_safe_path
 from venvy.settings import _is_secret_setting, _reject_reserved_setting, _setting_for_storage
-from venvy.uploads import _append_upload_chunk
+from venvy.uploads import (
+    _append_upload_chunk_locked,
+    _part_lock,
+    _release_upload_reserve,
+    _UPLOAD_FILE_MAX,
+)
+
+_ROLE_RANK = {"viewer": 0, "operator": 1, "admin": 2}
+
+
+def _validate_setting_key(key: str) -> None:
+    if not key or len(key) > 128 or any(ord(c) <= 32 or ord(c) == 127 for c in key):
+        raise HTTPException(400, "Invalid setting key.")
 
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist)]
@@ -99,7 +113,7 @@ async def create_backup(
     Answers {"job_id"}; tarring every app can take well over a minute. 409 if
     a backup or restore is already running. Progress: GET /system/backup/status."""
     _begin_operation("backup", admin.username)
-    return _start_job(admin, "backup", lambda: _backup_job(admin))
+    return _start_job(admin, "backup", lambda: _backup_job(admin), min_role="admin")
 
 
 @router.get("/system/backup/status")
@@ -127,27 +141,40 @@ async def upload_backup_chunk(
         raise HTTPException(409, "A restore is in progress.")
     if total <= 0 or offset < 0 or offset > total:
         raise HTTPException(400, "Invalid offset/total.")
+    if total > _UPLOAD_FILE_MAX:
+        raise HTTPException(413, f"File exceeds the {_UPLOAD_FILE_MAX // (1024 * 1024)} MB upload limit.")
     part = _backup_upload_part(admin.id, upload_id)
 
-    def _append() -> int:
-        BACKUP_DIR.mkdir(mode=0o700, exist_ok=True)
-        if offset == 0:
-            _purge_stale_backup_uploads()
-        return _append_upload_chunk(part, chunk, offset, total)
+    def _append_and_maybe_adopt():
+        with _part_lock(part):
+            BACKUP_DIR.mkdir(mode=0o700, exist_ok=True)
+            if offset == 0:
+                _purge_stale_backup_uploads()
+            received = _append_upload_chunk_locked(part, chunk, offset, total)
+            if received < total:
+                return received, None, 0
+            try:
+                dest = _adopt_uploaded_backup(part, filename)
+                size = dest.stat().st_size
+                return received, dest, size
+            finally:
+                _release_upload_reserve(part)
 
-    received = await asyncio.to_thread(_append)
-    if received < total:
+    received, dest, size = await asyncio.to_thread(_append_and_maybe_adopt)
+    if dest is None:
         return {"ok": True, "received": received, "done": False}
-    dest = await asyncio.to_thread(_adopt_uploaded_backup, part, filename)
     audit_log(admin.username, "system_backup_upload", f"path={dest}")
     return {"ok": True, "received": received, "done": True,
-            "filename": dest.name, "size_bytes": dest.stat().st_size}
+            "filename": dest.name, "size_bytes": size}
 
 
 @router.delete("/system/backups/upload/{upload_id}")
 def cancel_backup_upload(upload_id: str, admin: User = Depends(check_admin)):
     """Drop the partial file of a backup upload that was cancelled."""
-    _backup_upload_part(admin.id, upload_id).unlink(missing_ok=True)
+    part = _backup_upload_part(admin.id, upload_id)
+    with _part_lock(part):
+        part.unlink(missing_ok=True)
+        _release_upload_reserve(part)
     return {"ok": True}
 
 
@@ -156,16 +183,19 @@ def list_backups(admin: User = Depends(check_admin)):
     """List existing backups of both kinds — see _BACKUP_TYPES."""
     if not BACKUP_DIR.exists():
         return []
-    entries = [
-        {
-            "filename": f.name,
-            "size_bytes": f.stat().st_size,
-            "created_at": datetime.datetime.fromtimestamp(f.stat().st_mtime, tz=datetime.timezone.utc).isoformat(),
-            "type": kind,
-        }
-        for pattern, kind in _BACKUP_TYPES
-        for f in BACKUP_DIR.glob(pattern)
-    ]
+    entries = []
+    for pattern, kind in _BACKUP_TYPES:
+        for f in BACKUP_DIR.glob(pattern):
+            try:
+                st = f.stat()
+            except FileNotFoundError:
+                continue
+            entries.append({
+                "filename": f.name,
+                "size_bytes": st.st_size,
+                "created_at": datetime.datetime.fromtimestamp(st.st_mtime, tz=datetime.timezone.utc).isoformat(),
+                "type": kind,
+            })
     return sorted(entries, key=lambda b: b["created_at"], reverse=True)
 
 
@@ -197,7 +227,10 @@ def delete_backup(
     if restore_in_progress():
         raise HTTPException(409, "A restore is in progress — backups can't be deleted until it has finished.")
     path = _resolve_backup_path(filename)
-    path.unlink()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        raise HTTPException(404, "Backup not found.")
     audit_log(admin.username, "system_backup_delete", f"path={path}")
     return {"ok": True}
 
@@ -211,6 +244,7 @@ async def restore_backup(
     filename: str,
     req: RestoreBackupReq,
     admin: User = Depends(check_admin),
+    _session: User = Depends(get_session_user),
     session: Session = Depends(get_session),
     _rl: None = Depends(rate_limit_mutations),
 ):
@@ -238,14 +272,23 @@ async def restore_backup(
     audit_log(admin.username, "system_restore_started", f"path={archive_path}")
     session.close()
     set_restore_in_progress(True)
-    return _start_job(admin, "restore", lambda: _restore_job(admin, archive_path))
+    return _start_job(admin, "restore", lambda: _restore_job(admin, archive_path), min_role="admin")
 
 
 @router.get("/jobs/{job_id}")
-def get_job(job_id: str, user: User = Depends(get_current_user)):
+def get_job(
+    job_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
     """Status of a background job: {status: running|done|error, result, error}."""
     job = _jobs.get(job_id)
     if not job or (job["user_id"] != user.id and user.role != "admin"):
+        raise HTTPException(404, "Job not found (finished jobs are kept for an hour).")
+    min_rank = _ROLE_RANK.get(job.get("min_role", "viewer"), 0)
+    if _ROLE_RANK.get(user.role, 0) < min_rank:
+        raise HTTPException(404, "Job not found (finished jobs are kept for an hour).")
+    if job.get("app_id") is not None and not has_app_access(session, user, job["app_id"]):
         raise HTTPException(404, "Job not found (finished jobs are kept for an hour).")
     return {k: job[k] for k in ("id", "kind", "status", "result", "error", "code")}
 
@@ -320,6 +363,9 @@ async def system_ports(
     allowed = visible_app_ids(session, user)
     app_port_map: Dict[int, str] = {a.port: a.name for a in app_rows
                                     if a.port and (allowed is None or a.id in allowed)}
+    if allowed is not None:
+        # Restricted operators only see listening ports belonging to their granted apps.
+        result = [entry for entry in result if entry["port"] in app_port_map]
     for entry in result:
         entry["app_name"] = app_port_map.get(entry["port"])
 
@@ -353,7 +399,9 @@ def set_system_setting(
     req: SystemSettingReq,
     admin: User = Depends(check_admin),
     session: Session = Depends(get_session),
+    _rl: None = Depends(rate_limit_mutations),
 ):
+    _validate_setting_key(key)
     _reject_reserved_setting(key)
     value, stored_value = _setting_for_storage(key, req.value)
     setting = session.get(SystemSetting, key)
@@ -377,9 +425,13 @@ def set_system_settings_batch(
     items: List[BatchSettingItem],
     admin: User = Depends(check_admin),
     session: Session = Depends(get_session),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     """Save multiple settings in a single DB transaction."""
+    if len(items) > 100:
+        raise HTTPException(400, "At most 100 settings can be saved in one batch.")
     for item in items:
+        _validate_setting_key(item.key)
         _reject_reserved_setting(item.key)
     for item in items:
         _, stored_value = _setting_for_storage(item.key, item.value)

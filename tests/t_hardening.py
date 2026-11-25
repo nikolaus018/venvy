@@ -1,7 +1,7 @@
 """Limits and races: oversized bodies, password prompts, delete while busy,
 apps orphaned by a killed server, backups of a tree that changes underneath,
 and archives that try to write through a link."""
-import asyncio, io, os, signal, sys, tarfile, tempfile, time
+import asyncio, io, os, shutil, signal, sys, tarfile, tempfile, time
 from pathlib import Path
 import httpx, websockets
 from harness import Client, admin, app_procs, make_app, server
@@ -124,6 +124,7 @@ with server(repo, PORT, data=data) as (base, d, srv):
 
 # ── backup of a tree that changes while it is read (no server needed) ──
 work = Path(tempfile.mkdtemp(prefix="venvy-t-")); os.chdir(work); sys.path.insert(0, repo)
+import atexit; atexit.register(lambda p=work: (os.chdir("/"), shutil.rmtree(p, ignore_errors=True)))
 from venvy.backup import _add_tree_to_tar   # noqa: E402
 tree = work / "apps"; (tree / "sub").mkdir(parents=True)
 (tree / "a-shrinks.bin").write_bytes(b"A" * 100_000); (tree / "b-vanishes.txt").write_text("gone soon")
@@ -166,7 +167,7 @@ for _ in range(6):
     A._login_attempts.get("probe", {})["locked_until"] = None
     for _ in range(A._LOGIN_MAX_TRIES):
         A._record_login_failure("probe")
-    lengths.append(round(A._login_attempts["probe"]["locked_until"] - time.time()))
+    lengths.append(round(A._login_attempts["probe"]["locked_until"] - time.monotonic()))
 A._purge_login_attempts()
 check("repeated lockouts grow: 5, 10, 20, 40 minutes, then an hour",
       lengths == [300, 600, 1200, 2400, 3600, 3600] and "probe" in A._login_attempts, str(lengths))

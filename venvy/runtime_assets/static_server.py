@@ -16,48 +16,91 @@ import argparse
 import http.server
 import os
 import sys
+import threading
 import urllib.parse
+
+_REQUEST_TIMEOUT = 15.0
+_MAX_CONCURRENT = 64
+_MAX_ERROR_PAGE_BYTES = 2 * 1024 * 1024
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True)
+    ap.add_argument("--root", default="", help="app root that --dir must stay inside")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--deny", default="", help="comma separated top-level names never served")
     args = ap.parse_args()
 
-    root = os.path.realpath(args.dir)
+    if args.root:
+        app_root = os.path.realpath(args.root)
+        cand = args.dir
+        if os.path.islink(cand):
+            sys.exit(f"static site folder must not be a symlink: {args.dir}")
+        root = os.path.realpath(cand)
+        if not (root == app_root or root.startswith(app_root + os.sep)):
+            sys.exit(f"static site folder escapes app directory: {args.dir}")
+    else:
+        root = os.path.realpath(args.dir)
     if not os.path.isdir(root):
         sys.exit(f"static site folder not found: {args.dir}")
-    deny = {n for n in args.deny.split(",") if n}
+    deny = {n.lower() for n in args.deny.split(",") if n}
+    conn_sem = threading.BoundedSemaphore(_MAX_CONCURRENT)
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         server_version = "VenvyStatic"
+        timeout = _REQUEST_TIMEOUT
 
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=root, **kw)
 
-        def _hidden(self, url_path: str) -> bool:
-            parts = [p for p in urllib.parse.unquote(url_path).split("/") if p]
+        def setup(self):
+            self.request.settimeout(_REQUEST_TIMEOUT)
+            super().setup()
+
+        def _parts_hidden(self, parts) -> bool:
             if any(p.startswith(".") and p != ".well-known" for p in parts):
                 return True
-            return bool(parts) and parts[0] in deny
+            return bool(parts) and parts[0].lower() in deny
+
+        def _hidden(self, url_path: str) -> bool:
+            parts = [p for p in urllib.parse.unquote(url_path).split("/") if p]
+            return self._parts_hidden(parts)
 
         def _inside(self, fs_path: str) -> bool:
             real = os.path.realpath(fs_path)
-            return real == root or real.startswith(root + os.sep)
+            if not (real == root or real.startswith(root + os.sep)):
+                return False
+            if real != root:
+                rel = os.path.relpath(real, root)
+                rel_parts = [p for p in rel.split(os.sep) if p and p != "."]
+                if self._parts_hidden(rel_parts):
+                    return False
+            return True
 
         def _serve_page(self, name: str, status: int) -> None:
             """Send a file from the site root under *status* (404.html)."""
             with open(os.path.join(root, name), "rb") as f:
-                body = f.read()
+                body = f.read(_MAX_ERROR_PAGE_BYTES)
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)
+
+        def _send_fallback_or_404(self):
+            p200 = os.path.join(root, "200.html")
+            if os.path.isfile(p200) and self._inside(p200):
+                self.path = "/200.html"
+                return super().send_head()
+            p404 = os.path.join(root, "404.html")
+            if os.path.isfile(p404) and self._inside(p404):
+                self._serve_page("404.html", 404)
+                return None
+            self.send_error(404)
+            return None
 
         def send_head(self):
             parts = urllib.parse.urlsplit(self.path)
@@ -79,8 +122,6 @@ def main() -> None:
                     return super().send_head()
             if os.path.isdir(fs_path):
                 # Index files only: the stock handler would list the folder.
-                if not url_path.endswith("/"):
-                    return super().send_head()      # its redirect to the slash form
                 index_ok = False
                 for i in ("index.html", "index.htm"):
                     cand = os.path.join(fs_path, i)
@@ -88,20 +129,12 @@ def main() -> None:
                         index_ok = self._inside(cand)
                         break
                 if not index_ok:
-                    self.send_error(404)
-                    return None
+                    return self._send_fallback_or_404()
+                if not url_path.endswith("/"):
+                    return super().send_head()      # redirect to the slash form only when index exists
                 return super().send_head()
             if not os.path.exists(fs_path):
-                p200 = os.path.join(root, "200.html")
-                if os.path.isfile(p200) and self._inside(p200):
-                    self.path = "/200.html"
-                    return super().send_head()
-                p404 = os.path.join(root, "404.html")
-                if os.path.isfile(p404) and self._inside(p404):
-                    self._serve_page("404.html", 404)
-                    return None
-                self.send_error(404)
-                return None
+                return self._send_fallback_or_404()
             return super().send_head()
 
         def list_directory(self, path):
@@ -120,6 +153,25 @@ def main() -> None:
     class Server(http.server.ThreadingHTTPServer):
         daemon_threads = True
         allow_reuse_address = True
+
+        def process_request(self, request, client_address):
+            if not conn_sem.acquire(blocking=False):
+                try:
+                    request.close()
+                except OSError:
+                    pass
+                return
+            try:
+                super().process_request(request, client_address)
+            except Exception:
+                conn_sem.release()
+                raise
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                conn_sem.release()
 
     httpd = Server((args.host, args.port), Handler)
     print(f"Serving {root} on http://{args.host}:{args.port}", flush=True)

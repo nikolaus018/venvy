@@ -106,29 +106,76 @@ def clean(cfg: dict, old: Optional[dict]) -> dict:
     for f in REQUIRED[kind]:
         if not out.get(f):
             raise ValueError(f"{f} is required.")
-    if kind == "webdav" and not out["url"].startswith(("http://", "https://")):
-        raise ValueError("url must start with http:// or https://")
-    if kind == "s3" and out.get("endpoint") and not out["endpoint"].startswith(("http://", "https://")):
-        raise ValueError("endpoint must start with http:// or https://")
+    for k, v in list(out.items()):
+        if k == "port":
+            continue
+        if not isinstance(v, str):
+            raise ValueError(f"{k} must be a string.")
+    from venvy.notify import _check_safe_outbound_host, _check_safe_outbound_url
+    if kind == "webdav":
+        _check_safe_outbound_url(out["url"], "url")
+        parsed_dav = urllib.parse.urlsplit(out["url"])
+        if parsed_dav.username or parsed_dav.password:
+            raise ValueError("Put WebDAV credentials in the username/password fields, not inside the URL.")
+    if kind == "s3":
+        if out.get("endpoint"):
+            _check_safe_outbound_url(out["endpoint"], "endpoint")
+            parsed_ep = urllib.parse.urlsplit(out["endpoint"])
+            if parsed_ep.username or parsed_ep.password:
+                raise ValueError("S3 endpoint must not contain embedded credentials.")
+        import re as _re
+        bucket = out["bucket"]
+        if not _re.fullmatch(r"[a-z0-9][a-z0-9.\-]{0,61}[a-z0-9]?", bucket) or ".." in bucket or bucket.endswith(("-", ".")):
+            raise ValueError("Invalid S3 bucket name.")
+        region = out.get("region") or "us-east-1"
+        if not _re.fullmatch(r"[a-z0-9][a-z0-9\-]{0,31}", region):
+            raise ValueError("Invalid S3 region.")
     if kind == "scp":
+        import re as _re
         if not str(out.get("private_key", "")).lstrip().startswith("-----BEGIN"):
             raise ValueError("private_key must be an SSH private key (starts with -----BEGIN).")
         out["private_key"] = out["private_key"].strip() + "\n"
         try:
-            out["port"] = int(out.get("port") or 22)
+            port = int(out.get("port") or 22)
         except (TypeError, ValueError):
             raise ValueError("port must be a number.")
-        for f in ("host", "user", "path"):
-            if any(c in out[f] for c in " \t\r\n\0'\"`$;|&<>\\") or out[f].startswith("-"):
-                raise ValueError(f"{f} contains characters that are not allowed.")
+        if not (1 <= port <= 65535):
+            raise ValueError("port must be between 1 and 65535.")
+        out["port"] = port
+        if not _re.fullmatch(r"[A-Za-z0-9._\-]{1,128}", out["user"]) or out["user"].startswith("-"):
+            raise ValueError("user contains characters that are not allowed.")
+        if not _re.fullmatch(r"[A-Za-z0-9.\-]{1,253}", out["host"]) or out["host"].startswith("-"):
+            raise ValueError("host contains characters that are not allowed.")
+        _check_safe_outbound_host(out["host"], "host")
+        if not _re.fullmatch(r"[A-Za-z0-9._/@+\-]{1,512}", out["path"]) or out["path"].startswith("-"):
+            raise ValueError("path contains characters that are not allowed.")
     return out
+
+
+def _strip_url_userinfo(url: str) -> str:
+    p = urllib.parse.urlsplit(url)
+    if p.username is None and p.password is None:
+        return url
+    host = p.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = f"{host}:{p.port}" if p.port else host
+    return urllib.parse.urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
 
 
 def masked(cfg: Optional[dict]) -> Optional[dict]:
     if not cfg:
         return None
     sec = SECRET_FIELDS[cfg["kind"]]
-    return {k: (MASK if k in sec and v else v) for k, v in cfg.items()}
+    out = {}
+    for k, v in cfg.items():
+        if k in sec and v:
+            out[k] = MASK
+        elif k in ("url", "endpoint") and isinstance(v, str) and v:
+            out[k] = _strip_url_userinfo(v)
+        else:
+            out[k] = v
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -228,10 +275,10 @@ async def _upload_s3(path: Path, size: int, cfg: dict, name: str) -> str:
                            h.hexdigest(), {}, datetime.datetime.now(datetime.timezone.utc))
     headers = {**signed, "Content-Type": "application/gzip", "Content-Length": str(size)}
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=600)
-    async with aiohttp.ClientSession(timeout=timeout, **HTTP_CLIENT_LIMITS) as http:
+    async with aiohttp.ClientSession(timeout=timeout, cookie_jar=aiohttp.DummyCookieJar(), **HTTP_CLIENT_LIMITS) as http:
         async with http.put(url, data=_file_chunks(path), headers=headers, allow_redirects=False) as resp:
             if resp.status >= 300:
-                raise RemoteError(f"S3 answered {resp.status}: {(await resp.text())[:300]}")
+                raise RemoteError(f"S3 answered HTTP {resp.status}.")
     return f"s3://{cfg['bucket']}/{_object_key(cfg, name)}"
 
 
@@ -239,11 +286,11 @@ async def _upload_webdav(path: Path, size: int, cfg: dict, name: str) -> str:
     url = cfg["url"].rstrip("/") + "/" + urllib.parse.quote(name)
     auth = aiohttp.BasicAuth(cfg.get("username", ""), cfg.get("password", "")) if cfg.get("username") else None
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=600)
-    async with aiohttp.ClientSession(timeout=timeout, auth=auth, **HTTP_CLIENT_LIMITS) as http:
+    async with aiohttp.ClientSession(timeout=timeout, auth=auth, cookie_jar=aiohttp.DummyCookieJar(), **HTTP_CLIENT_LIMITS) as http:
         async with http.put(url, data=_file_chunks(path), headers={"Content-Length": str(size)}, allow_redirects=False) as resp:
             if resp.status >= 300:
-                raise RemoteError(f"The WebDAV server answered {resp.status}: {(await resp.text())[:300]}")
-    return url
+                raise RemoteError(f"The WebDAV server answered HTTP {resp.status}.")
+    return _strip_url_userinfo(url)
 
 
 async def _upload_scp(path: Path, cfg: dict, name: str) -> str:

@@ -1,5 +1,6 @@
 """Updating Venvy from the UI (admin only). See venvy/updates.py."""
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -56,6 +57,7 @@ def start_update(admin: User = Depends(check_admin), _session: User = Depends(ge
     except FileExistsError:
         raise HTTPException(409, "An update is already under way.")
     except OSError as exc:
-        raise HTTPException(500, f"Could not ask for the update: {exc}")
+        logging.error(f"Could not write update request: {exc}")
+        raise HTTPException(500, "Could not request the update — check server logs.")
     audit_log(admin.username, "system_update", f"from {updates.current_version()}")
     return {"ok": True}

@@ -14,7 +14,9 @@ from venvy.config import DATA_DIR
 
 async def _check_python3_venv() -> None:
     """Log whether `python3 -m venv` works; Python apps can't be created without it."""
+    import contextlib
     test_dir = DATA_DIR / ".venv_probe"
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "python3", "-m", "venv", "--without-pip", str(test_dir),
@@ -28,9 +30,14 @@ async def _check_python3_venv() -> None:
         err_text = stderr.decode(errors="replace").strip()
         logging.warning(f"python3-venv probe failed (rc={proc.returncode}): {err_text}")
     except Exception as exc:
+        if proc is not None and proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
         logging.warning(f"python3-venv probe error: {exc}")
     finally:
-        shutil.rmtree(test_dir, ignore_errors=True)
+        await asyncio.to_thread(shutil.rmtree, test_dir, True)
 
     logging.error(
         "python3-venv is not available — creating Python apps will fail. "

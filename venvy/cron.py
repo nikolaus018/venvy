@@ -36,11 +36,12 @@ def _number(token: str, name: str, lo: int, hi: int) -> int:
 
 
 def _field(text: str, name: str, lo: int, hi: int) -> Tuple[Set[int], bool]:
-    """(allowed values, whether the field starts with * — as in cron, */2 counts as * for
+    """(allowed values, whether any item uses * — as in cron, */2 counts as * for
     the day-of-month / day-of-week rule)."""
     values: Set[int] = set()
-    star = text.startswith("*")
-    for part in text.split(","):
+    parts = text.split(",")
+    star = any(p.partition("/")[0] == "*" for p in parts)
+    for part in parts:
         if not part:
             raise CronError(f"The {name} field has an empty item.")
         step = 1
@@ -50,15 +51,17 @@ def _field(text: str, name: str, lo: int, hi: int) -> Tuple[Set[int], bool]:
                 raise CronError(f"'{s}' is not a valid step in the {name} field.")
             step = int(s)
         if part == "*":
-            a, b = lo, hi
+            a, b = lo, (6 if name == "day of week" else hi)
         elif "-" in part:
             x, _, y = part.partition("-")
             a, b = _number(x, name, lo, hi), _number(y, name, lo, hi)
+            if name == "day of week" and a > b == 0:
+                b = 7   # e.g. fri-sun (5-7)
             if a > b:
                 raise CronError(f"The range {part} in the {name} field runs backwards.")
         else:
             a = _number(part, name, lo, hi)
-            b = hi if step > 1 else a
+            b = (6 if name == "day of week" else hi) if step > 1 else a
         values.update(range(a, b + 1, step))
     if name == "day of week":
         values = {0 if v == 7 else v for v in values}

@@ -214,20 +214,26 @@
         }
 
         async function deleteLogs() {
+            const appId = activeAppId, appName = activeApp?.name || 'this app';
+            if (!appId) return;
             const ok = await confirmDialog({
                 title: 'Clear logs?',
                 sub: 'This cannot be undone',
-                body: `The log file for "${activeApp?.name || 'this app'}" will be emptied. Output produced from now on will still be captured.`,
+                body: `The log file for "${appName}" will be emptied. Output produced from now on will still be captured.`,
                 confirmLabel: 'Clear logs',
                 danger: true,
                 icon: 'trash-2',
             });
             if (!ok) return;
             try {
-                const res = await fetch(`${API}/apps/${activeAppId}/logs`, { method: 'DELETE' });
+                const res = await fetch(`${API}/apps/${appId}/logs`, { method: 'DELETE' });
                 if (res.ok) {
-                    _logRaw = ''; _logRenderedKey = '';
-                    _renderLogs(true);
+                    if (appId === activeAppId) {
+                        _logRaw = ''; _logRenderedKey = '';
+                        const lv = document.getElementById('log-viewer');
+                        if (lv) lv.dataset.rawText = '';
+                        _renderLogs(true);
+                    }
                     showToast('Logs cleared.', 'success', 1500);
                 } else {
                     showToast('Could not clear the logs.', 'error');

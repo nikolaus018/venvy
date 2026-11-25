@@ -10,14 +10,15 @@ Only exact matches of an app's domain are proxied, so Venvy's own UI is never
 reachable under an app's name and the reverse — nor is a name Venvy itself has
 been signed in to under (own_hosts.py), whatever domain an app was given.
 
-X-Venvy-Proxy-Secret and the forwarding headers a client sent are not passed
-on: the secret would let the app pass for the tunnel, and the X-Forwarded-*
-it gets are Venvy's own."""
+X-Venvy-Proxy-Secret and client-forged forwarding headers are not passed on:
+the secret would let the app pass for the tunnel, and the X-Forwarded-* it
+gets are Venvy's own."""
 import asyncio
 import contextlib
 import logging
+import os
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 import aiohttp
 from sqlmodel import Session, select
@@ -31,13 +32,23 @@ from venvy.models import App
 _TTL_SEC = 5.0
 _cache: Dict[str, Optional[int]] = {}
 _cache_at = 0.0
+_refresh_lock: Optional[asyncio.Lock] = None
 _session: Optional[aiohttp.ClientSession] = None
+_WS_MAX_MSG_BYTES = max(1, int(os.getenv("VENVY_PROXY_WS_MAX_MB", "16"))) * 1024 * 1024
 
 _HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
         "transfer-encoding", "upgrade", "proxy-connection"}
 
 # Request headers that never reach the app (see the module docstring).
-_DROP = {"x-venvy-proxy-secret", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto"}
+_DROP = {
+    "x-venvy-proxy-secret",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-forwarded-port",
+    "x-real-ip",
+    "forwarded",
+}
 
 
 def invalidate() -> None:
@@ -45,7 +56,7 @@ def invalidate() -> None:
     _cache_at = 0.0
 
 
-def _refresh() -> None:
+def _refresh_sync() -> None:
     global _cache, _cache_at
     try:
         with Session(engine) as s:
@@ -56,15 +67,38 @@ def _refresh() -> None:
         logging.warning(f"Could not read the app domains: {exc}")
 
 
+async def _refresh_async() -> None:
+    global _refresh_lock
+    if _refresh_lock is None:
+        _refresh_lock = asyncio.Lock()
+    async with _refresh_lock:
+        if time.monotonic() - _cache_at <= 0.5:
+            return
+        await asyncio.to_thread(_refresh_sync)
+
+
 def lookup(host: str) -> tuple:
-    """(is_app_domain, port or None) for a Host header value."""
+    """Synchronous lookup for tests/callers: (is_app_domain, port or None)."""
     age = time.monotonic() - _cache_at
     if age > _TTL_SEC:
-        _refresh()
+        _refresh_sync()
     name = own_hosts.host_name(host)
     if name in _cache and not own_hosts.is_own(name):
         if _cache[name] is None and age > 0.5:
-            _refresh()          # not running a moment ago: look again, it may have started
+            _refresh_sync()
+        return True, _cache[name]
+    return False, None
+
+
+async def lookup_async(host: str) -> tuple:
+    """Async lookup avoiding synchronous SQLite I/O on the event loop."""
+    age = time.monotonic() - _cache_at
+    if age > _TTL_SEC:
+        await _refresh_async()
+    name = own_hosts.host_name(host)
+    if name in _cache and not own_hosts.is_own(name):
+        if _cache[name] is None and time.monotonic() - _cache_at > 0.5:
+            await _refresh_async()
         return True, _cache[name]
     return False, None
 
@@ -73,8 +107,12 @@ def _http() -> aiohttp.ClientSession:
     global _session
     if _session is None or _session.closed:
         _session = aiohttp.ClientSession(
-            auto_decompress=False, timeout=aiohttp.ClientTimeout(total=None, sock_connect=5, sock_read=300),
-            connector=aiohttp.TCPConnector(limit=200), **HTTP_CLIENT_LIMITS)
+            auto_decompress=False,
+            cookie_jar=aiohttp.DummyCookieJar(),
+            timeout=aiohttp.ClientTimeout(total=None, sock_connect=5, sock_read=300),
+            connector=aiohttp.TCPConnector(limit=200),
+            **HTTP_CLIENT_LIMITS,
+        )
     return _session
 
 
@@ -110,6 +148,37 @@ def _client_ip(scope) -> str:
         return (scope.get("client") or ("",))[0]
 
 
+def _trusted_proxy(scope) -> bool:
+    from venvy.auth import _from_trusted_proxy
+    try:
+        return _from_trusted_proxy(HTTPConnection(scope))
+    except Exception:
+        return False
+
+
+def _connection_hop_headers(raw_headers) -> Set[str]:
+    """Headers nominated as hop-by-hop via RFC 7230 Connection header."""
+    extra: Set[str] = set()
+    for k, v in raw_headers:
+        if k.lower() == b"connection":
+            for part in v.decode("latin-1").split(","):
+                name = part.strip().lower()
+                if name:
+                    extra.add(name)
+    return extra
+
+
+def _request_path(scope) -> Optional[str]:
+    raw = scope.get("raw_path")
+    if raw:
+        path = raw.decode("latin-1")
+    else:
+        path = scope.get("path") or "/"
+    if not path.startswith("/"):
+        return None
+    return path
+
+
 class DomainProxyMiddleware:
     def __init__(self, app):
         self.app = app
@@ -123,10 +192,14 @@ class DomainProxyMiddleware:
             if k == b"host":
                 host = v.decode("latin-1")
                 break
-        is_app, port = lookup(host) if host else (False, None)
+        is_app, port = (await lookup_async(host)) if host else (False, None)
         if not is_app:
             await self.app(scope, receive, send)
             return
+        # Never proxy back to Venvy's own listening port (prevents self-proxy loops).
+        own_port = (scope.get("server") or (None, None))[1]
+        if port and own_port and int(port) == int(own_port):
+            port = None
         if scope["type"] == "websocket":
             await self._websocket(scope, receive, send, port)
         else:
@@ -136,11 +209,17 @@ class DomainProxyMiddleware:
         if not port:
             await _plain(send, 503, "This app is not running right now.")
             return
+        path = _request_path(scope)
+        if path is None:
+            await _plain(send, 400, "Invalid request path.")
+            return
+        drop = set(_HOP) | set(_DROP) | _connection_hop_headers(scope["headers"])
+        if not _trusted_proxy(scope):
+            drop |= {"cf-connecting-ip", "cf-visitor"}
         headers = [(k.decode("latin-1"), v.decode("latin-1")) for k, v in scope["headers"]
-                   if k.decode("latin-1") not in _HOP and k.decode("latin-1") not in _DROP]
+                   if k.decode("latin-1").lower() not in drop]
         headers += [("X-Forwarded-For", _client_ip(scope)), ("X-Forwarded-Host", host),
                     ("X-Forwarded-Proto", _proto(scope))]
-        path = scope.get("raw_path", scope["path"].encode()).decode("latin-1") or "/"
         qs = scope.get("query_string", b"").decode("latin-1")
         url = f"http://127.0.0.1:{port}{path}" + (f"?{qs}" if qs else "")
 
@@ -154,12 +233,45 @@ class DomainProxyMiddleware:
                 if not msg.get("more_body", False):
                     return
 
-        has_body = scope["method"] not in ("GET", "HEAD", "OPTIONS") or any(k == "content-length" and v != "0" for k, v in headers)
+        cl_val = next((v for k, v in headers if k.lower() == "content-length"), None)
+        has_body = scope["method"] not in ("GET", "HEAD", "OPTIONS") or (cl_val is not None and cl_val != "0")
+        req_data = None
+        if has_body:
+            buffered = False
+            if cl_val is not None and cl_val.isdigit() and int(cl_val) <= 16 * 1024 * 1024:
+                # Buffer bounded Content-Length bodies so HTTP/1.0 upstream apps
+                # (which do not understand Transfer-Encoding: chunked) still see Content-Length.
+                buf = bytearray()
+                over = False
+                async for chunk in body():
+                    buf.extend(chunk)
+                    if len(buf) > 16 * 1024 * 1024:
+                        over = True
+                        break
+                if not over:
+                    req_data = bytes(buf)
+                    headers = [(k, v) for k, v in headers if k.lower() != "content-length"]
+                    headers.append(("Content-Length", str(len(req_data))))
+                    buffered = True
+                else:
+                    async def _tail(first=bytes(buf)):
+                        yield first
+                        async for c in body():
+                            yield c
+                    headers = [(k, v) for k, v in headers if k.lower() != "content-length"]
+                    req_data = _tail()
+                    buffered = True
+            if not buffered:
+                # Streaming an async generator uses chunked transfer-encoding in aiohttp;
+                # strip incoming Content-Length to avoid conflicting CL + TE headers.
+                headers = [(k, v) for k, v in headers if k.lower() != "content-length"]
+                req_data = body()
         started = False
         try:
-            async with _http().request(scope["method"], url, headers=headers, data=body() if has_body else None,
+            async with _http().request(scope["method"], url, headers=headers, data=req_data,
                                        allow_redirects=False) as resp:
-                out = [(k.lower(), v) for k, v in resp.raw_headers if k.decode("latin-1").lower() not in _HOP]
+                resp_hop = _HOP | _connection_hop_headers(resp.raw_headers)
+                out = [(k.lower(), v) for k, v in resp.raw_headers if k.decode("latin-1").lower() not in resp_hop]
                 await send({"type": "http.response.start", "status": resp.status, "headers": out})
                 started = True
                 async for chunk in resp.content.iter_any():
@@ -177,22 +289,41 @@ class DomainProxyMiddleware:
 
     async def _websocket(self, scope, receive, send, port) -> None:
         if not port:
+            with contextlib.suppress(Exception):
+                await receive()
             await send({"type": "websocket.close", "code": 1013})
             return
+        path = _request_path(scope)
+        if path is None:
+            with contextlib.suppress(Exception):
+                await receive()
+            await send({"type": "websocket.close", "code": 1002})
+            return
         qs = scope.get("query_string", b"").decode("latin-1")
-        path = scope.get("raw_path", scope["path"].encode()).decode("latin-1") or "/"
         url = f"ws://127.0.0.1:{port}{path}" + (f"?{qs}" if qs else "")
         protocols = [p for p in scope.get("subprotocols", [])]
-        fwd = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]
-               if k.decode("latin-1") in ("host", "cookie", "origin", "user-agent", "authorization")}
+        fwd: Dict[str, str] = {}
+        cookies = []
+        for k, v in scope["headers"]:
+            kl = k.decode("latin-1").lower()
+            val = v.decode("latin-1")
+            if kl == "cookie":
+                cookies.append(val)
+            elif kl in ("host", "origin", "user-agent", "authorization"):
+                fwd[kl] = val
+        if cookies:
+            fwd["cookie"] = "; ".join(cookies)
         fwd["X-Forwarded-For"] = _client_ip(scope)
         if "host" in fwd:
             fwd["X-Forwarded-Host"] = fwd["host"]
         fwd["X-Forwarded-Proto"] = _proto(scope)
         try:
-            upstream = await _http().ws_connect(url, headers=fwd, protocols=protocols, max_msg_size=0, autoclose=False, autoping=False)
+            upstream = await _http().ws_connect(
+                url, headers=fwd, protocols=protocols,
+                max_msg_size=_WS_MAX_MSG_BYTES, autoclose=False, autoping=False,
+            )
         except Exception as exc:
-            logging.warning(f"WebSocket proxy to {url} failed: {exc}")
+            logging.warning(f"WebSocket proxy to 127.0.0.1:{port}{path} failed: {exc}")
             await receive()           # the connect message
             await send({"type": "websocket.close", "code": 1011})
             return

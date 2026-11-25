@@ -53,12 +53,19 @@ def _get_fernet() -> Fernet:
                         f.write(base64.urlsafe_b64encode(secrets.token_bytes(32)))
                         f.flush()
                         os.fsync(f.fileno())
-                    with contextlib.suppress(FileExistsError):
+                    try:
                         os.link(tmp, _VENVY_KEY_FILE)
+                    except FileExistsError:
+                        pass
+                    except OSError:
+                        # Filesystem without hard links: fall back to atomic replace only if still absent.
+                        if not _VENVY_KEY_FILE.exists():
+                            os.replace(tmp, _VENVY_KEY_FILE)
                 finally:
                     tmp.unlink(missing_ok=True)
             with contextlib.suppress(OSError):
-                _VENVY_KEY_FILE.chmod(0o600)
+                if not _VENVY_KEY_FILE.is_symlink():
+                    _VENVY_KEY_FILE.chmod(0o600)
             _fernet_instance = Fernet(_VENVY_KEY_FILE.read_bytes())
     return _fernet_instance
 

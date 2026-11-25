@@ -30,8 +30,13 @@ run login_timing "$PYB" t_timing.py "$R"
 (
     run small "$PYB" t_small.py "$R"
     run hardening "$PYB" t_hardening.py "$R"
+    run review_fixes "$PYB" t_review_fixes.py "$R"
     # Browser pass; needs `pip install playwright` and an installed Google Chrome.
-    "$PYB" -c "import playwright" 2>/dev/null && run ui "$PYB" t_ui.py "$R"
+    if "$PYB" -c "import playwright" 2>/dev/null; then
+        run ui "$PYB" t_ui.py "$R"
+    else
+        echo "SKIP ui (playwright not installed)"
+    fi
 ) &
 (
     for c in double_start restart_storm stop_crashloop shutdown_logs; do run "lifecycle_$c" "$PYB" t_lifecycle.py "$R" "$c"; done

@@ -1,7 +1,7 @@
 """File-manager behaviour around symlinks + simulated swap-after-check races.
 usage: t_fs.py <repo>"""
 import importlib.util as u
-import os, sys, tempfile
+import os, shutil, sys, tempfile
 from pathlib import Path
 from harness import admin, make_app, server
 
@@ -11,11 +11,13 @@ def check(name, cond, extra=""):
     print(("  ok   " if cond else "  FAIL ") + name, extra if not cond else "")
     if not cond: fails.append(name)
 
-with server(repo, 54999) as (base, data, srv):
+outside = Path(tempfile.mkdtemp(prefix="venvy-outside-"))
+work = Path(tempfile.mkdtemp(prefix="venvy-race-"))
+try:
+  with server(repo, 54999) as (base, data, srv):
     cl = admin(base)
     app_id = make_app(cl)
     app_dir = next((Path(data) / "apps").glob("*/*"))
-    outside = Path(tempfile.mkdtemp(prefix="venvy-outside-"))
     (outside / "secret.txt").write_text("TOP SECRET")
     op = lambda **b: cl.req("POST", f"/api/apps/{app_id}/files/op", json=b)
     dl = lambda p: cl.req("GET", f"/api/apps/{app_id}/files/download", params={"path": p})
@@ -46,7 +48,7 @@ with server(repo, 54999) as (base, data, srv):
     check("tree of outside link refused", cl.req("GET", f"/api/apps/{app_id}/files/tree", params={"path": "link_out"}).status_code == 403)
     os.symlink(outside / "secret.txt", app_dir / "peek")
     top = {f["name"]: f for f in cl.req("GET", f"/api/apps/{app_id}/files/tree").json()}
-    check("tree does not stat through an outside link", top["peek"]["size"] != len("TOP SECRET")
+    check("tree does not stat through an outside link", top["peek"]["size"] == 0
           and not top["link_out"]["is_dir"], str(top.get("peek")))
     check("tree still follows an inside link", top["link_in"]["is_dir"], str(top.get("link_in")))
     os.unlink(app_dir / "peek")
@@ -90,30 +92,35 @@ with server(repo, 54999) as (base, data, srv):
     check("single-request upload", r.status_code == 200 and (app_dir / "sub/multi/a.txt").read_bytes() == b"A"
           and (app_dir / "sub/b.txt").read_bytes() == b"B" and [s["path"] for s in j["skipped"]] == ["../evil.txt"], r.text)
 
-# --- swap-after-check: call the fs layer with components that have become symlinks
-work = Path(tempfile.mkdtemp(prefix="venvy-race-")); os.chdir(work)
-sys.path.insert(0, os.path.abspath(repo))
-import venvy.safefs as fs
-import venvy.isolation as iso
-root = work / "app"; (root / "real").mkdir(parents=True)
-victim = work / "victim"; victim.mkdir(); (victim / "keep.txt").write_text("keep")
-os.symlink(victim, root / "d")          # "d" was a directory when the path was checked
-def refused(fn, *a):
-    try: fn(*a); return False
-    except fs.AppPathError: return True
-check("race: save refused", refused(fs._fs_save, root, ("d", "x.txt"), b"x", None) and not (victim / "x.txt").exists())
-check("race: touch refused", refused(fs._fs_touch, root, ("d", "t"), None) and not (victim / "t").exists())
-check("race: mkdir refused", refused(fs._fs_mkdir, root, ("d", "nd"), None) and not (victim / "nd").exists())
-check("race: delete refused", refused(fs._fs_delete, root, ("d", "keep.txt")) and (victim / "keep.txt").exists())
-check("race: read refused", refused(fs._fs_open_file, root, ("d", "keep.txt")))
-check("race: move-out refused", refused(fs._fs_move_or_copy, root, ("real",), ("d", "moved"), False, None, "x") and not (victim / "moved").exists())
-(work / "part").write_bytes(b"p")
-check("race: install refused", refused(fs._fs_install, root, ("d", "p.bin"), work / "part", None) and not (victim / "p.bin").exists())
-os.symlink(victim / "keep.txt", root / "real" / "f")    # final component swapped for a link
-fs._fs_save(root, ("real", "f"), b"new", None)
-check("race: save replaces a link, never writes through it", (victim / "keep.txt").read_text() == "keep" and (root / "real/f").read_text() == "new" and not (root / "real/f").is_symlink())
-os.symlink(victim / "keep.txt", root / "real" / "g")
-check("race: read of link refused", refused(fs._fs_open_file, root, ("real", "g")))
-iso._chown_tree(root, os.getuid(), os.getgid())
+  # --- swap-after-check: call the fs layer with components that have become symlinks
+  os.chdir(work)
+  sys.path.insert(0, os.path.abspath(repo))
+  import venvy.safefs as fs
+  import venvy.isolation as iso
+  root = work / "app"; (root / "real").mkdir(parents=True)
+  victim = work / "victim"; victim.mkdir(); (victim / "keep.txt").write_text("keep")
+  os.symlink(victim, root / "d")          # "d" was a directory when the path was checked
+  def refused(fn, *a):
+      try: fn(*a); return False
+      except fs.AppPathError: return True
+  check("race: save refused", refused(fs._fs_save, root, ("d", "x.txt"), b"x", None) and not (victim / "x.txt").exists())
+  check("race: touch refused", refused(fs._fs_touch, root, ("d", "t"), None) and not (victim / "t").exists())
+  check("race: mkdir refused", refused(fs._fs_mkdir, root, ("d", "nd"), None) and not (victim / "nd").exists())
+  check("race: delete refused", refused(fs._fs_delete, root, ("d", "keep.txt")) and (victim / "keep.txt").exists())
+  check("race: read refused", refused(fs._fs_open_file, root, ("d", "keep.txt")))
+  check("race: move-out refused", refused(fs._fs_move_or_copy, root, ("real",), ("d", "moved"), False, None, "x") and not (victim / "moved").exists())
+  (work / "part").write_bytes(b"p")
+  check("race: install refused", refused(fs._fs_install, root, ("d", "p.bin"), work / "part", None) and not (victim / "p.bin").exists())
+  os.symlink(victim / "keep.txt", root / "real" / "f")    # final component swapped for a link
+  fs._fs_save(root, ("real", "f"), b"new", None)
+  check("race: save replaces a link, never writes through it", (victim / "keep.txt").read_text() == "keep" and (root / "real/f").read_text() == "new" and not (root / "real/f").is_symlink())
+  os.symlink(victim / "keep.txt", root / "real" / "g")
+  check("race: read of link refused", refused(fs._fs_open_file, root, ("real", "g")))
+  iso._chown_tree(root, os.getuid(), os.getgid())
+  check("race: chown_tree leaves symlink targets untouched", (victim / "keep.txt").read_text() == "keep" and (root / "real/g").is_symlink())
+finally:
+  os.chdir("/")
+  shutil.rmtree(outside, ignore_errors=True)
+  shutil.rmtree(work, ignore_errors=True)
 print("FAILED:" if fails else "ALL OK", fails)
 sys.exit(1 if fails else 0)

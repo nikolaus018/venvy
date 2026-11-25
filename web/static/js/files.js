@@ -320,6 +320,8 @@
         const EDITOR_MAX_BYTES = 5 * 1024 * 1024;
 
         async function _offerDownloadInstead(path, name, message) {
+            const appId = activeAppId;
+            if (!appId) return;
             const ok = await confirmDialog({
                 title: 'Can\'t open in editor',
                 sub: name,
@@ -328,7 +330,7 @@
                 cancelLabel: 'Close',
                 icon: 'download',
             });
-            if (ok) triggerDownload(`${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(path)}`, name);
+            if (ok) triggerDownload(`${API}/apps/${appId}/files/download?path=${encodeURIComponent(path)}`, name);
         }
 
         let _openFileSeq = 0;
@@ -496,9 +498,9 @@
             triggerDownload(`${API}/apps/${activeAppId}/files/download?path=${encodeURIComponent(path)}`, name || path.split('/').pop());
         }
 
-        let _pendingFileOp = null, _pendingRenamePath = null;
+        let _pendingFileOp = null, _pendingRenamePath = null, _pendingFileAppId = null, _pendingFileDir = '';
         function promptFileOp(op) {
-            _pendingFileOp = op; _pendingRenamePath = null;
+            _pendingFileOp = op; _pendingRenamePath = null; _pendingFileAppId = activeAppId; _pendingFileDir = currentBrowserPath;
             const isFolder = op === 'create_folder';
             document.getElementById('file-name-modal-title').textContent = isFolder ? 'New Folder' : 'New File';
             document.getElementById('file-name-confirm-btn').textContent = isFolder ? 'Create Folder' : 'Create File';
@@ -508,7 +510,7 @@
             setTimeout(() => document.getElementById('file-name-input').focus(), 150);
         }
         function promptRename(path, currentName) {
-            _pendingFileOp = 'rename'; _pendingRenamePath = path;
+            _pendingFileOp = 'rename'; _pendingRenamePath = path; _pendingFileAppId = activeAppId; _pendingFileDir = currentBrowserPath;
             document.getElementById('file-name-modal-title').textContent = 'Rename';
             document.getElementById('file-name-confirm-btn').textContent = 'Rename';
             const input = document.getElementById('file-name-input');
@@ -520,8 +522,9 @@
             const name = document.getElementById('file-name-input').value.trim();
             if (!name) { document.getElementById('file-name-input').focus(); return; }
             closeModal('file-name-modal');
-            const op = _pendingFileOp, renamePath = _pendingRenamePath;
-            _pendingFileOp = null; _pendingRenamePath = null;
+            const op = _pendingFileOp, renamePath = _pendingRenamePath, appId = _pendingFileAppId || activeAppId, dir = _pendingFileDir;
+            _pendingFileOp = null; _pendingRenamePath = null; _pendingFileAppId = null; _pendingFileDir = '';
+            if (!op || !appId) return;
             try {
                 let body;
                 if (op === 'rename') {
@@ -530,14 +533,17 @@
                     if (newPath === renamePath) return;
                     body = { operation: 'rename', path: renamePath, new_path: newPath };
                 } else {
-                    const fullPath = currentBrowserPath ? currentBrowserPath + '/' + name : name;
+                    const fullPath = dir ? dir + '/' + name : name;
                     body = { operation: op, path: fullPath };
                 }
-                const error = await _fileOp(activeAppId, body);
+                const error = await _fileOp(appId, body);
                 if (error) showToast('Operation failed: ' + error, 'error');
-                else if (op === 'rename') { _onPathMoved(body.path, body.new_path); showToast(`Renamed to "${name}"`, 'success', 2000); }
+                else if (op === 'rename') {
+                    if (appId === activeAppId) _onPathMoved(body.path, body.new_path);
+                    showToast(`Renamed to "${name}"`, 'success', 2000);
+                }
             } catch (e) { showToast('Operation failed: ' + e.message, 'error'); }
-            loadFiles(currentBrowserPath);
+            if (appId === activeAppId) loadFiles(currentBrowserPath);
         }
         document.addEventListener('DOMContentLoaded', () => {
             const inp = document.getElementById('file-name-input');
@@ -546,6 +552,8 @@
 
         async function deletePaths(items) {
             if (!items || !items.length) return;
+            const appId = activeAppId;
+            if (!appId) return;
             const ok = await confirmDialog({
                 title: `Delete ${items.length} item${items.length === 1 ? '' : 's'}?`,
                 sub: 'This cannot be undone',
@@ -555,7 +563,7 @@
                 danger: true,
             });
             if (!ok) return;
-            const appId = activeAppId, failed = [];
+            const failed = [];
             let successCount = 0;
             for (const item of items) {
                 const error = await _fileOp(appId, { operation: 'delete', path: item.path });
@@ -587,8 +595,10 @@
             return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
         }
 
+        let _uploadHideTimer = null;
         function showUploadProgress(title) {
             const container = document.getElementById('upload-progress-container');
+            if (_uploadHideTimer) { clearTimeout(_uploadHideTimer); _uploadHideTimer = null; }
             document.getElementById('upload-progress-title').textContent = title || 'Uploading...';
             document.getElementById('upload-progress-bar').style.width = '0%';
             document.getElementById('upload-progress-stats').textContent = 'Preparing...';
@@ -606,8 +616,9 @@
 
         function hideUploadProgress() {
             const container = document.getElementById('upload-progress-container');
+            if (_uploadHideTimer) { clearTimeout(_uploadHideTimer); _uploadHideTimer = null; }
             container.classList.add('translate-y-full');
-            setTimeout(() => container.classList.add('hidden'), 300);
+            _uploadHideTimer = setTimeout(() => { _uploadHideTimer = null; container.classList.add('hidden'); }, 300);
         }
 
         function cancelActiveUpload() {
@@ -776,13 +787,14 @@
         }
 
         async function _uploadIntoBrowser(items, targetPath) {
-            if (!items.length) return;
+            const appId = activeAppId;
+            if (!items.length || !appId) return;
             try {
-                reportUploadResult(await uploadFilesChunked(activeAppId, targetPath, items));
+                reportUploadResult(await uploadFilesChunked(appId, targetPath, items));
             } catch (e) {
                 showToast('Upload failed: ' + e.message, 'error');
             } finally {
-                loadFiles(currentBrowserPath);
+                if (appId === activeAppId) loadFiles(currentBrowserPath);
             }
         }
 

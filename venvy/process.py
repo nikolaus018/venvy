@@ -14,6 +14,8 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Union
@@ -37,7 +39,11 @@ from venvy.isolation import (
     _app_tool_env,
     _as_app_user,
     _app_username,
+    _clean_root_env,
     _ensure_app_user,
+    _exec_env_argv,
+    _isolation_active,
+    _prepare_exec_env,
     _resolve_system_bin,
     strip_dangerous_env_vars,
 )
@@ -152,24 +158,45 @@ def _detect_ports_sync(app_pid: int) -> List[int]:
     return sorted(list(detected_ports))
 
 
+_port_alloc_lock = threading.Lock()
+_recent_allocated_ports: Dict[int, float] = {}
+
+
 def find_free_port(start: int = 8001, end: int = 9000) -> Optional[int]:
-    """Return the first TCP port in [start, end) that can be bound to."""
-    for port in range(start, end):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(("0.0.0.0", port))
+    """Return the first TCP port in [start, end) that can be bound to,
+    serialized across concurrent launches so two apps don't claim the same port."""
+    now = time.monotonic()
+    with _port_alloc_lock:
+        for p in [k for k, ts in _recent_allocated_ports.items() if now - ts > 10.0]:
+            _recent_allocated_ports.pop(p, None)
+        for port in range(start, end):
+            if port in _recent_allocated_ports:
+                continue
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(("0.0.0.0", port))
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s2:
+                    s2.settimeout(0.2)
+                    if s2.connect_ex(("127.0.0.1", port)) == 0:
+                        continue
+                _recent_allocated_ports[port] = now
                 return port
-        except OSError:
-            continue
+            except OSError:
+                continue
     return None
 
 
 def _verify_port_free(port: int) -> bool:
     """Return True if the port is not currently bound — used immediately before launch."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.connect_ex(("localhost", port)) != 0
+    for family, addr in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                if s.connect_ex((addr, port)) == 0:
+                    return False
+        except OSError:
+            continue
+    return True
 
 
 def get_server_ipv4() -> str:
@@ -275,12 +302,14 @@ def _rotate_log(log_file: Path) -> None:
     """Move app.log aside as app.log.<ts> and keep only the newest few."""
     target = log_file.with_name(f"{log_file.name}.{time.time_ns()}")
     shutil.move(str(log_file), str(target))
-    rotated = sorted(log_file.parent.glob(f"{log_file.name}.*"), key=lambda x: x.stat().st_mtime, reverse=True)
-    for old_log in rotated[_LOG_KEEP_ROTATED:]:
-        try:
+    entries = []
+    for p in log_file.parent.glob(f"{log_file.name}.*"):
+        with contextlib.suppress(OSError):
+            entries.append((p.stat().st_mtime, p))
+    entries.sort(key=lambda x: x[0], reverse=True)
+    for _, old_log in entries[_LOG_KEEP_ROTATED:]:
+        with contextlib.suppress(OSError):
             old_log.unlink()
-        except OSError:
-            pass
 
 
 async def log_streamer(stream, log_file: Path) -> None:
@@ -492,29 +521,78 @@ def _venvy_log(log_file: Path, msg: str) -> None:
             lf.write(f"[{utc_now().strftime('%Y-%m-%d %H:%M:%S')}] [venvy] {msg}\n")
 
 
+def forget_app_runtime(app_id: int) -> None:
+    """Clean up all in-memory process/metrics/backoff state when an app is deleted."""
+    _active_app_pids.pop(app_id, None)
+    _app_metrics.pop(app_id, None)
+    _cpu_seen.pop(app_id, None)
+    _restart_backoff.pop(app_id, None)
+    _last_port_scan.pop(app_id, None)
+    _cancel_log_task(app_id)
+    lock = _app_locks.get(app_id)
+    if lock is not None and not lock.locked():
+        _app_locks.pop(app_id, None)
+
+
+_PRESTART_TAIL_MAX = 64 * 1024
+
+
 async def _run_prestart_step(db_app: App, step: "runtimes.Step", log_file: Path) -> None:
     """Run a dependency install before the first start, with its output in the
     app's log. Raises if it fails — the app would only crash without it."""
     _venvy_log(log_file, f"Dependencies are not installed yet — running {step.what}…")
-    proc = await asyncio.create_subprocess_exec(
-        *_as_app_user(db_app, step.argv),
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        env=_app_tool_env(db_app),
-        cwd=db_app.app_dir if step.in_app_dir else "/",
-        start_new_session=True,
-    )
+    tool_env = _app_tool_env(db_app)
+    env_tf = None
     try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=step.timeout)
-    except asyncio.TimeoutError:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        with contextlib.suppress(Exception):
-            await proc.wait()
-        _venvy_log(log_file, f"{step.what} timed out after {step.timeout} seconds.")
-        raise RuntimeError(f"{step.what} timed out after {step.timeout} seconds.")
-    text = out.decode(errors="replace").strip()
+        if _isolation_active():
+            env_tf, env_fd = _prepare_exec_env(tool_env)
+            inner = _exec_env_argv(env_fd, step.argv)
+            argv = _as_app_user(db_app, inner)
+            spawn_env = _clean_root_env()
+            pass_fds = (env_fd,)
+        else:
+            argv = list(step.argv)
+            spawn_env = tool_env
+            pass_fds = ()
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=spawn_env,
+            cwd=db_app.app_dir if step.in_app_dir else "/",
+            start_new_session=True,
+            pass_fds=pass_fds,
+        )
+    finally:
+        if env_tf is not None:
+            env_tf.close()
+
+    tail = bytearray()
+
+    async def _drain() -> None:
+        assert proc.stdout is not None
+        while True:
+            chunk = await proc.stdout.read(8192)
+            if not chunk:
+                break
+            tail.extend(chunk)
+            if len(tail) > _PRESTART_TAIL_MAX:
+                del tail[:len(tail) - _PRESTART_TAIL_MAX]
+
+    try:
+        await asyncio.wait_for(asyncio.gather(_drain(), proc.wait()), timeout=step.timeout)
+    except BaseException:
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(Exception):
+                await proc.wait()
+        if isinstance(sys.exc_info()[1], asyncio.TimeoutError):
+            _venvy_log(log_file, f"{step.what} timed out after {step.timeout} seconds.")
+            raise RuntimeError(f"{step.what} timed out after {step.timeout} seconds.")
+        raise
+    text = tail.decode(errors="replace").strip()
     if text:
         with contextlib.suppress(OSError):
             with open(log_file, "a", encoding="utf-8") as lf:
@@ -580,7 +658,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         APP_LOGS_DIR.chmod(0o700)
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    if log_file.exists() and log_file.stat().st_size > 5 * 1024 * 1024:
+    if log_file.exists() and log_file.stat().st_size > min(5 * 1024 * 1024, _LOG_MAX_BYTES):
         try:
             await asyncio.to_thread(_rotate_log, log_file)
         except Exception as exc:
@@ -619,18 +697,28 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         env.update(HOME=str(app_dir), USER=_app_username(app_id), LOGNAME=_app_username(app_id))
     _cancel_log_task(app_id)
 
+    process: Optional[asyncio.subprocess.Process] = None
     try:
         for step in runtimes.first_run_steps(db_app.runtime, app_dir):
             await _run_prestart_step(db_app, step, log_file)
 
-        effective_port = db_app.port
-        if db_app.port:
-            port_free = await asyncio.to_thread(_verify_port_free, db_app.port)
+        effective_port = None
+        try:
+            m_ports = json.loads(db_app.manual_ports or "[]")
+            if m_ports and isinstance(m_ports, list):
+                effective_port = m_ports[0]
+        except Exception:
+            pass
+        if not effective_port:
+            effective_port = db_app.port
+
+        if effective_port:
+            port_free = await asyncio.to_thread(_verify_port_free, effective_port)
             if not port_free:
                 new_port = await asyncio.to_thread(find_free_port)
                 if new_port:
                     logging.warning(
-                        f"Port {db_app.port} for '{db_app.name}' was taken at launch time; "
+                        f"Port {effective_port} for '{db_app.name}' was taken at launch time; "
                         f"reassigning to {new_port}."
                     )
                     db_app.port = new_port
@@ -650,49 +738,58 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             db_app.runtime, app_dir, db_app.entrypoint, db_app.port, db_app.venv_path)
 
         unit_name = f"venvy-app-{app_id}"
-        launch_cmd = cmd
         used_systemd_scope = False
-        if await asyncio.to_thread(_systemd_run_available):
-            # The unit name is fixed per app, and a scope outlives its first
-            # process for as long as anything it started is still running (a
-            # daemonised child, say) — or lingers as "failed" after an OOM
-            # kill. systemd-run then refuses the name ("Unit … already
-            # exists") and the app could never be started again.
-            await _clear_stale_scope(unit_name)
-            scope_cmd = [_resolve_system_bin("systemd-run"), "--scope", "--quiet", f"--unit={unit_name}"]
-            if db_app.memory_limit_mb:
-                scope_cmd += ["-p", f"MemoryMax={db_app.memory_limit_mb}M"]
-            if db_app.cpu_limit_percent:
-                scope_cmd += ["-p", f"CPUQuota={db_app.cpu_limit_percent}%"]
-            if ids:
-                scope_cmd += [f"--uid={ids[0]}", f"--gid={ids[1]}"]
-            scope_cmd += ["--"] + cmd
-            launch_cmd = scope_cmd
-            used_systemd_scope = True
+        isolated = _isolation_active()
+        env_tf = None
+        try:
+            if isolated:
+                # Never pass untrusted app environment variables to root-privileged
+                # wrappers (systemd-run / setpriv). Apply env after dropping uid/gid
+                # + setting --no-new-privs via exec_env.py reading an unlinked fd.
+                env_tf, env_fd = _prepare_exec_env(env)
+                inner_cmd = _as_app_user(db_app, _exec_env_argv(env_fd, cmd))
+                spawn_env = _clean_root_env()
+                pass_fds = (env_fd,)
+            else:
+                inner_cmd = list(cmd)
+                spawn_env = env
+                pass_fds = ()
 
-        if not used_systemd_scope:
-            # Under systemd-run, --uid/--gid above does the switch (it must
-            # start as root to create the scope); otherwise switch here.
-            launch_cmd = _as_app_user(db_app, cmd)
+            launch_cmd = inner_cmd
+            if await asyncio.to_thread(_systemd_run_available):
+                await _clear_stale_scope(unit_name)
+                scope_cmd = [_resolve_system_bin("systemd-run"), "--scope", "--quiet", f"--unit={unit_name}"]
+                if db_app.memory_limit_mb:
+                    scope_cmd += ["-p", f"MemoryMax={db_app.memory_limit_mb}M"]
+                if db_app.cpu_limit_percent:
+                    scope_cmd += ["-p", f"CPUQuota={db_app.cpu_limit_percent}%"]
+                scope_cmd += ["--"] + inner_cmd
+                launch_cmd = scope_cmd
+                used_systemd_scope = True
 
-        process = await asyncio.create_subprocess_exec(
-            *launch_cmd,
-            cwd=str(app_dir),
-            # Never Venvy's own stdin: started from a shell, an app that reads
-            # input would otherwise compete with it for the terminal.
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
+            process = await asyncio.create_subprocess_exec(
+                *launch_cmd,
+                cwd=str(app_dir),
+                # Never Venvy's own stdin: started from a shell, an app that reads
+                # input would otherwise compete with it for the terminal.
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=spawn_env,
+                start_new_session=True,
+                pass_fds=pass_fds,
+            )
+        finally:
+            if env_tf is not None:
+                env_tf.close()
 
         if process.stdout:
             task = asyncio.create_task(log_streamer(process.stdout, log_file))
             _log_tasks[app_id] = task
 
+        pid_start = await asyncio.to_thread(_proc_start_id, process.pid)
         db_app.pid = process.pid
-        db_app.pid_start = await asyncio.to_thread(_proc_start_id, process.pid)
+        db_app.pid_start = pid_start
         _active_app_pids[app_id] = process.pid
         db_app.status = "running"
         db_app.last_start_time = utc_now()
@@ -704,15 +801,20 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             f"App '{db_app.name}' started (PID {process.pid})"
             + (f" under systemd scope '{unit_name}.scope'" if used_systemd_scope else " (no resource isolation)")
         )
-        
-        async def _reap_process(proc: asyncio.subprocess.Process, _app_id: int):
+
+        async def _reap_process(proc: asyncio.subprocess.Process, _app_id: int, _start_id: Optional[str]):
             try:
                 rc = await proc.wait()
                 logging.info(f"App {_app_id} (PID {proc.pid}) exited with code {rc}")
                 try:
                     with Session(engine) as s:
                         app_to_reap = s.get(App, _app_id)
-                        if app_to_reap and app_to_reap.pid == proc.pid:
+                        same_proc = (
+                            app_to_reap is not None
+                            and app_to_reap.pid == proc.pid
+                            and (not _start_id or not app_to_reap.pid_start or app_to_reap.pid_start == _start_id)
+                        )
+                        if same_proc:
                             crashed = (app_to_reap.status == "running" and rc not in (0, None)
                                        and _app_id not in _stopping_on_purpose)
                             if crashed:
@@ -737,18 +839,34 @@ async def _start_app_process(app_id: int, session: Session) -> App:
                 if _active_app_pids.get(_app_id) == proc.pid:
                     _active_app_pids.pop(_app_id, None)
                 _running_tasks.discard(asyncio.current_task())
-                    
+
             _trigger_supervisor()
 
-        reap_task = asyncio.create_task(_reap_process(process, app_id))
+        reap_task = asyncio.create_task(_reap_process(process, app_id, pid_start))
         _running_tasks.add(reap_task)
-        
+        process = None  # ownership transferred to _reap_process
         return db_app
-    except Exception as exc:
-        logging.error(f"Failed to start app {app_id}: {exc}")
-        db_app.status = "error"
-        session.add(db_app)
-        session.commit()
+    except BaseException as exc:
+        if process is not None and process.returncode is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.killpg(process.pid, signal.SIGKILL)
+            with contextlib.suppress(Exception):
+                await process.wait()
+        if process is not None and _active_app_pids.get(app_id) == process.pid:
+            _active_app_pids.pop(app_id, None)
+        _cancel_log_task(app_id)
+        if isinstance(exc, Exception):
+            logging.error(f"Failed to start app {app_id}: {exc}")
+        with contextlib.suppress(Exception):
+            session.rollback()
+            fresh = session.get(App, app_id, populate_existing=True)
+            if fresh is not None:
+                fresh.status = "error"
+                fresh.pid = None
+                fresh.pid_start = None
+                fresh.systemd_scope = None
+                session.add(fresh)
+                session.commit()
         raise
 
 
@@ -790,13 +908,21 @@ async def _kill_pid_tree(pid: int) -> None:
                 pass
         return list(set(res))
 
-    async def _wait_all_dead(pids: List[int], timeout_s: float) -> bool:
+    def _pid_still_same(p: int, start_id: Optional[str]) -> bool:
+        if not _pid_alive(p):
+            return False
+        if start_id:
+            return _proc_start_id(p) == start_id
+        return True
+
+    async def _wait_all_dead(targets: List[tuple], timeout_s: float) -> bool:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if not any(_pid_alive(p) for p in pids):
+            alive = await asyncio.to_thread(lambda: any(_pid_still_same(p, sid) for p, sid in targets))
+            if not alive:
                 return True
             await asyncio.sleep(0.05)
-        return not any(_pid_alive(p) for p in pids)
+        return not await asyncio.to_thread(lambda: any(_pid_still_same(p, sid) for p, sid in targets))
 
     async def _sig_pgid(pgid: int, sig: int) -> None:
         try:
@@ -813,37 +939,39 @@ async def _kill_pid_tree(pid: int) -> None:
     _SIGTERM_GRACE = _STOP_GRACE_SEC
     _SIGKILL_WAIT  = 0.5
 
-    # Snapshot the full descendant tree up front. A wrapper process (npm, a shell
-    # script, a dev-server launcher) can die from SIGTERM before its own child
-    # does — if we only waited on the leader pid, we'd declare victory and skip
-    # SIGKILL while a descendant is still alive and holding the port.
-    pids = await asyncio.to_thread(_get_pids_to_kill, pid)
+    # Snapshot the full descendant tree with start-time fingerprints so a PID
+    # that exits and gets reused during the grace period is never killed.
+    def _snapshot_tree():
+        return [(p, _proc_start_id(p)) for p in _get_pids_to_kill(pid)]
+
+    targets = await asyncio.to_thread(_snapshot_tree)
 
     try:
         pgid = os.getpgid(pid)
         # CRITICAL BUGFIX: Ensure we never call killpg on Venvy's own PGID
         if pgid > 0 and pgid != os.getpgid(0):
             await _sig_pgid(pgid, signal.SIGTERM)
-            if await _wait_all_dead(pids, _SIGTERM_GRACE):
+            if await _wait_all_dead(targets, _SIGTERM_GRACE):
                 return
             await _sig_pgid(pgid, signal.SIGKILL)
-            if await _wait_all_dead(pids, _SIGKILL_WAIT):
+            if await _wait_all_dead(targets, _SIGKILL_WAIT):
                 return
     except Exception:
         pass
 
     # Fallback (and cleanup for descendants that called setsid into their own PGID)
-    survivors = [p for p in pids if _pid_alive(p)]
+    survivors = await asyncio.to_thread(lambda: [(p, sid) for p, sid in targets if _pid_still_same(p, sid)])
     if not survivors:
         return
-    for p in survivors:
-        await _sig_pid(p, signal.SIGTERM)
+    for p, sid in survivors:
+        if await asyncio.to_thread(_pid_still_same, p, sid):
+            await _sig_pid(p, signal.SIGTERM)
 
     if await _wait_all_dead(survivors, _SIGTERM_GRACE):
         return
 
-    for p in survivors:
-        if _pid_alive(p):
+    for p, sid in survivors:
+        if await asyncio.to_thread(_pid_still_same, p, sid):
             await _sig_pid(p, signal.SIGKILL)
     await _wait_all_dead(survivors, _SIGKILL_WAIT)
 
@@ -876,6 +1004,7 @@ async def _stop_app_process_inner(app_id: int, session: Session, manual: bool = 
     # the loop there too.
     if manual:
         db_app.last_manually_stopped_at = utc_now()
+        _restart_backoff.pop(app_id, None)
     if not db_app.pid:
         _cancel_log_task(app_id)
         db_app.status = "stopped"
@@ -905,7 +1034,7 @@ async def _stop_app_process_inner(app_id: int, session: Session, manual: bool = 
     # Always also run the signal-based teardown as a fallback/complement if
     # our process is still alive (re-checking pid_start avoids a PID-reuse race).
     try:
-        if _app_pid_alive(db_app):
+        if await asyncio.to_thread(_app_pid_alive, db_app):
             await _kill_pid_tree(pid)
     except Exception as exc:
         logging.warning(f"Error killing PID {pid}: {exc}")
@@ -979,6 +1108,10 @@ def set_restore_in_progress(value: bool) -> None:
     _restore_in_progress = value
 
 
+# Throttle port detection for steady-state running apps (every 5s, immediate during first 15s).
+_last_port_scan: Dict[int, float] = {}
+
+
 async def supervisor_task() -> None:
     """Background loop: detect crashed apps, restart per policy, auto-detect ports."""
     global _supervisor_event
@@ -986,6 +1119,28 @@ async def supervisor_task() -> None:
 
     _last_session_cleanup  = 0.0
     _last_login_cleanup    = 0.0
+
+    def _purge_expired_sessions() -> int:
+        with Session(engine) as _cs:
+            expired = _cs.exec(
+                select(UserSession).where(UserSession.expires_at < utc_now())
+            ).all()
+            for s in expired:
+                _cs.delete(s)
+            if expired:
+                _cs.commit()
+            return len(expired)
+
+    def _fetch_all_app_ids() -> List[int]:
+        with Session(engine) as session:
+            return [a.id for a in session.exec(select(App)).all() if a.id is not None]
+
+    def _fetch_app_and_alive(aid: int):
+        with Session(engine) as session:
+            row = session.get(App, aid)
+            if row is None:
+                return None, False
+            return row, _app_pid_alive(row)
 
     while True:
         try:
@@ -1005,15 +1160,9 @@ async def supervisor_task() -> None:
             if now_mono - _last_session_cleanup > 600:
                 _last_session_cleanup = now_mono
                 try:
-                    with Session(engine) as _cs:
-                        expired = _cs.exec(
-                            select(UserSession).where(UserSession.expires_at < utc_now())
-                        ).all()
-                        for s in expired:
-                            _cs.delete(s)
-                        if expired:
-                            _cs.commit()
-                            logging.info(f"Purged {len(expired)} expired session(s)")
+                    n = await asyncio.to_thread(_purge_expired_sessions)
+                    if n:
+                        logging.info(f"Purged {n} expired session(s)")
                 except Exception as _exc:
                     logging.warning(f"Session cleanup error: {_exc}")
 
@@ -1024,48 +1173,37 @@ async def supervisor_task() -> None:
 
             await monitor.health_tick(_health_restart)
 
-            apps_to_check: List[App] = []
             try:
-                with Session(engine) as session:
-                    apps_to_check = session.exec(select(App)).all()
+                app_ids = await asyncio.to_thread(_fetch_all_app_ids)
             except Exception as e:
                 logging.error(f"Failed to fetch apps: {e}")
                 await asyncio.sleep(5)
                 continue
 
-            for stale_row in apps_to_check:
-                # This loop awaits (restarts, port scans), so the snapshot above
-                # can be seconds old by the time a given app is reached.
+            for aid in app_ids:
                 try:
-                    with Session(engine) as session:
-                        app_row = session.get(App, stale_row.id)
+                    app_row, is_alive = await asyncio.to_thread(_fetch_app_and_alive, aid)
                 except Exception as e:
-                    logging.error(f"Failed to fetch app {stale_row.id}: {e}")
+                    logging.error(f"Failed to fetch app {aid}: {e}")
                     continue
                 if app_row is None:
                     continue
-                is_alive = _app_pid_alive(app_row)
 
                 if (app_row.status == "running" and not is_alive
                         and app_row.pid and _active_app_pids.get(app_row.id) == app_row.pid):
                     # Our own child that has just exited: a zombie until its
                     # reaper (_reap_process) collects it, which records the real
-                    # exit code and wakes us. Handled here instead, it got exit
-                    # code 1 and the restart and crash notice of a crash — an
-                    # on-failure app that had exited cleanly was started again.
+                    # exit code and wakes us.
                     continue
 
                 if app_row.status == "running" and not is_alive:
                     died = False
                     async with _app_lock(app_row.id):
-                        try:
+                        def _mark_dead(target_id: int, expected_pid: Optional[int]) -> bool:
                             with Session(engine) as update_session:
-                                refreshed = update_session.get(App, app_row.id)
-                                # Re-check under the lock: a restart may have
-                                # replaced this PID while we waited, and its
-                                # new process must not be written off as dead.
+                                refreshed = update_session.get(App, target_id)
                                 if (refreshed and refreshed.status == "running"
-                                        and refreshed.pid == app_row.pid):
+                                        and refreshed.pid == expected_pid):
                                     refreshed.pid = None
                                     refreshed.pid_start = None
                                     refreshed.systemd_scope = None
@@ -1075,7 +1213,10 @@ async def supervisor_task() -> None:
                                         refreshed.last_exit_code = 1
                                     update_session.add(refreshed)
                                     update_session.commit()
-                                    died = True
+                                    return True
+                            return False
+                        try:
+                            died = await asyncio.to_thread(_mark_dead, app_row.id, app_row.pid)
                         except Exception as db_exc:
                             logging.error(f"Failed to update state for {app_row.name}: {db_exc}")
                     if not died:
@@ -1108,48 +1249,54 @@ async def supervisor_task() -> None:
                                 logging.error(f"Restart failed for '{app_row.name}': {exc}")
 
                 elif app_row.status == "running" and is_alive:
-                    if (app_row.last_start_time is not None
-                            and (utc_now() - _make_tz_aware(app_row.last_start_time)).total_seconds() > _RESTART_STABLE_SEC):
+                    age_s = (
+                        (utc_now() - _make_tz_aware(app_row.last_start_time)).total_seconds()
+                        if app_row.last_start_time is not None else 999.0
+                    )
+                    if age_s > _RESTART_STABLE_SEC:
                         _restart_backoff.pop(app_row.id, None)
-                    try:
-                        detected_ports = await asyncio.to_thread(_detect_ports_sync, app_row.pid)
-                        manual_list = []
+                    # Scan every tick during the first 15s after start so newly bound
+                    # ports appear promptly, then throttle to every 5s.
+                    last_scan = _last_port_scan.get(app_row.id, 0.0)
+                    if age_s <= 15.0 or (now_mono - last_scan >= 5.0):
+                        _last_port_scan[app_row.id] = now_mono
                         try:
-                            manual_list = json.loads(app_row.manual_ports or "[]")
-                        except Exception:
-                            pass
-                        
-                        if manual_list:
-                            combined = manual_list
-                        else:
-                            combined = [p for p in detected_ports]
-                        
-                        dp_json = json.dumps(combined)
-                        
-                        if app_row.detected_ports != dp_json:
-                            with Session(engine) as update_session:
-                                refreshed = update_session.get(App, app_row.id)
-                                if refreshed:
-                                    if not refreshed.port and combined:
-                                        refreshed.port = combined[0]
-                                    refreshed.detected_ports = dp_json
-                                    update_session.add(refreshed)
-                                    update_session.commit()
-                                    logging.info(f"Ports updated to {combined} for '{app_row.name}'")
-                    except Exception as exc:
-                        logging.debug(f"Port detect scan failed for '{app_row.name}': {exc}")
+                            detected_ports = await asyncio.to_thread(_detect_ports_sync, app_row.pid)
+                            manual_list = []
+                            try:
+                                manual_list = json.loads(app_row.manual_ports or "[]")
+                            except Exception:
+                                pass
 
-                elif (app_row.status == "stopped" 
+                            combined = manual_list if manual_list else list(detected_ports)
+                            dp_json = json.dumps(combined)
+
+                            if app_row.detected_ports != dp_json:
+                                def _save_ports(target_id: int, ports_list: list, ports_json: str) -> None:
+                                    with Session(engine) as update_session:
+                                        refreshed = update_session.get(App, target_id)
+                                        if refreshed:
+                                            if not refreshed.port and ports_list:
+                                                refreshed.port = ports_list[0]
+                                            refreshed.detected_ports = ports_json
+                                            update_session.add(refreshed)
+                                            update_session.commit()
+                                await asyncio.to_thread(_save_ports, app_row.id, combined, dp_json)
+                                logging.info(f"Ports updated to {combined} for '{app_row.name}'")
+                        except Exception as exc:
+                            logging.debug(f"Port detect scan failed for '{app_row.name}': {exc}")
+
+                elif (app_row.status == "stopped"
                         and app_row.restart_policy in ("always", "on-failure")
                         and app_row.last_start_time is not None
                         and (app_row.last_stop_time is None or (utc_now() - _make_tz_aware(app_row.last_stop_time)).total_seconds() >= 5.0)):
-                    
+
                     should_restart = False
                     if app_row.restart_policy == "always":
                         should_restart = True
                     elif app_row.restart_policy == "on-failure" and app_row.last_exit_code != 0:
                         should_restart = True
-                        
+
                     if should_restart:
                         has_started_this_session = (
                             app_row.last_start_time is not None and
@@ -1167,8 +1314,8 @@ async def supervisor_task() -> None:
                             try:
                                 with Session(engine) as restart_session:
                                     await start_app_process_logic(app_row.id, restart_session)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                logging.warning(f"Automatic restart failed for '{app_row.name}': {exc}")
 
         except Exception as exc:
             logging.error(f"Supervisor loop error: {exc}")
@@ -1186,27 +1333,16 @@ def _tree_cpu_seconds(p: "psutil.Process") -> float:  # type: ignore
     return t.user + t.system + getattr(t, "children_user", 0.0) + getattr(t, "children_system", 0.0)
 
 
-def _collect_metrics_tick(current_app_ids: list, proc_cache: Dict[int, "psutil.Process"]) -> float:  # type: ignore
+def _collect_metrics_tick(active_pids: Dict[int, int], proc_cache: Dict[int, "psutil.Process"]):  # type: ignore
     """Blocking psutil work for one metrics-collector tick, run via
-    asyncio.to_thread so per-app (and per-child-process) /proc reads don't
-    stall the event loop — websocket terminal I/O, HTTP responses, and the
-    app-supervisor loop all share that loop with this background task.
-
-    An app's CPU is the CPU time its whole process tree used since the last
-    tick, divided by the time that passed. Sampling each process's own
-    cpu_percent() missed short-lived children: a compile is a stream of
-    compiler processes that each exit before a second sample could be taken,
-    so a host at full load showed the app at under 1%. Counting time instead,
-    a child that exited is still there, in its parent's children times.
-
-    proc_cache holds the Process objects (app roots and children) by pid, so
-    a process that is reused across ticks is one psutil object."""
+    asyncio.to_thread. Returns `(host_cpu, metrics_snapshot)` so shared dicts are
+    only mutated on the event loop."""
     host_cpu = psutil.cpu_percent(interval=None)
     live_pids: set = set()
     now = time.monotonic()
+    snapshot: Dict[int, Dict[str, Union[float, int]]] = {}
 
-    for app_id in current_app_ids:
-        pid = _active_app_pids.get(app_id)
+    for app_id, pid in active_pids.items():
         if not pid:
             continue
         try:
@@ -1236,9 +1372,8 @@ def _collect_metrics_tick(current_app_ids: list, proc_cache: Dict[int, "psutil.P
             if prev and prev[0] == pid and now > prev[2]:
                 # Negative when a child's time left the tree (an orphan reaped by init).
                 cpu = max(0.0, total - prev[1]) / (now - prev[2]) * 100
-            _app_metrics[app_id] = {"cpu": round(cpu, 1), "memory": mem}
+            snapshot[app_id] = {"cpu": round(cpu, 1), "memory": mem}
         except (psutil.NoSuchProcess, psutil.AccessDenied):
-            _app_metrics.pop(app_id, None)
             _cpu_seen.pop(app_id, None)
             proc_cache.pop(pid, None)
         except Exception:
@@ -1247,9 +1382,9 @@ def _collect_metrics_tick(current_app_ids: list, proc_cache: Dict[int, "psutil.P
     for pid in list(proc_cache.keys()):
         if pid not in live_pids:
             proc_cache.pop(pid, None)
-    for app_id in [a for a in _cpu_seen if a not in current_app_ids]:
+    for app_id in [a for a in _cpu_seen if a not in active_pids]:
         _cpu_seen.pop(app_id, None)
-    return host_cpu
+    return host_cpu, snapshot
 
 
 async def metrics_collector_task():
@@ -1262,10 +1397,12 @@ async def metrics_collector_task():
     while True:
         try:
             global _host_cpu_percent
-            current_app_ids = list(_active_app_pids.keys())
-            _host_cpu_percent = await asyncio.to_thread(
-                _collect_metrics_tick, current_app_ids, proc_cache
+            active_snapshot = dict(_active_app_pids)
+            _host_cpu_percent, new_metrics = await asyncio.to_thread(
+                _collect_metrics_tick, active_snapshot, proc_cache
             )
+            _app_metrics.clear()
+            _app_metrics.update(new_metrics)
             monitor.record_tick(dict(_app_metrics), _host_cpu_percent)
             await monitor.flush_if_due()
         except Exception as exc:

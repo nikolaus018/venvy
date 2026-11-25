@@ -63,7 +63,7 @@
                 ${fieldHtml('job-name', 'Name', { value: j?.name || '', placeholder: 'Nightly cleanup' })}
                 ${selectHtml('job-preset', 'Schedule', [..._SCHEDULE_PRESETS, ['custom', 'Custom…']], known)}
                 <div id="job-cron-row" class="${known === 'custom' ? '' : 'hidden'}">
-                    ${fieldHtml('job-cron', 'Cron expression', { value: j?.schedule || '', placeholder: '30 2 * * mon-fri', attrs: 'mono', hint: 'minute hour day-of-month month day-of-week — e.g. <span class="mono">*/10 * * * *</span> every ten minutes, <span class="mono">0 9 * * mon-fri</span> weekdays at nine.' })}
+                    ${fieldHtml('job-cron', 'Cron expression', { value: j?.schedule || '', placeholder: '30 2 * * mon-fri', mono: true, hint: 'minute hour day-of-month month day-of-week — e.g. <span class="mono">*/10 * * * *</span> every ten minutes, <span class="mono">0 9 * * mon-fri</span> weekdays at nine.' })}
                 </div>
                 <div>
                     <label class="block section-label mb-1.5" for="job-command">Command</label>
@@ -76,38 +76,44 @@
                     <button type="button" class="btn-ghost flex-1 py-2.5 text-sm font-medium rounded-xl" data-on-click="closeModal('job-modal')">Cancel</button>
                     <button type="button" id="job-save" class="btn-primary flex-1 py-2.5 text-sm rounded-xl">${j ? 'Save' : 'Add job'}</button>
                 </div></div>`;
+            const modalAppId = activeAppId;
             $id('job-preset').addEventListener('change', () => $id('job-cron-row').classList.toggle('hidden', $id('job-preset').value !== 'custom'));
-            $id('job-save').addEventListener('click', () => saveJob(id));
+            $id('job-save').addEventListener('click', () => saveJob(id, modalAppId));
             openModal('job-modal');
         }
 
-        async function saveJob(id) {
+        async function saveJob(id, appId = activeAppId) {
+            if (!appId) return;
             const preset = $id('job-preset').value;
             const body = {
                 name: _val('job-name'), schedule: preset === 'custom' ? _val('job-cron') : preset,
                 command: $id('job-command').value.trim(), timeout: parseInt($id('job-timeout').value, 10) || 600, enabled: $id('job-enabled').checked,
             };
             const btn = $id('job-save'); btn.disabled = true;
-            const r = id ? await apiJson('PUT', `/apps/${activeAppId}/jobs/${id}`, body) : await apiJson('POST', `/apps/${activeAppId}/jobs`, body);
+            const r = id ? await apiJson('PUT', `/apps/${appId}/jobs/${id}`, body) : await apiJson('POST', `/apps/${appId}/jobs`, body);
             btn.disabled = false;
             if (!r.ok) { showToast(r.error, 'error'); return; }
             closeModal('job-modal');
             showToast(id ? 'Job saved' : 'Job added', 'success', 1500);
-            loadJobs();
+            if (appId === activeAppId) loadJobs();
         }
 
         async function runJobNow(id) {
-            const r = await apiJson('POST', `/apps/${activeAppId}/jobs/${id}/run`);
+            const appId = activeAppId;
+            if (!appId) return;
+            const r = await apiJson('POST', `/apps/${appId}/jobs/${id}/run`);
             if (!r.ok) { showToast(r.error, 'error'); return; }
             showToast('Started', 'info', 1200);
-            setTimeout(loadJobs, 400);
+            setTimeout(() => { if (appId === activeAppId) loadJobs(); }, 400);
         }
 
         async function deleteJob(id) {
+            const appId = activeAppId;
+            if (!appId) return;
             const j = _jobs.find(x => x.id === id);
             const ok = await confirmDialog({ title: `Delete "${j?.name || 'job'}"?`, body: 'It stops running on schedule.', confirmLabel: 'Delete', danger: true });
             if (!ok) return;
-            const r = await apiJson('DELETE', `/apps/${activeAppId}/jobs/${id}`);
+            const r = await apiJson('DELETE', `/apps/${appId}/jobs/${id}`);
             if (!r.ok) { showToast(r.error, 'error'); return; }
-            loadJobs();
+            if (appId === activeAppId) loadJobs();
         }

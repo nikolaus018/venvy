@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 6 * * 1"     # weekly, so dependency-audit catches new CVEs without a push
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -25,19 +27,19 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --require-hashes -r .github/ci-requirements/tests.txt
-      - name: The CI lock has the same pins as requirements.txt
+      - name: The CI lock and requirements.lock have the same pins as requirements.txt
         run: |
           python - <<'PY'
           import re, sys
           pins = lambda text: dict(re.findall(r"^([A-Za-z0-9_.\-]+)(?:\[[^\]]*\])?==([^\s;\\]+)", text, re.M))
           want = {k.lower(): v for k, v in pins(open("requirements.txt").read()).items()}
-          have = {k.lower(): v for k, v in pins(open(".github/ci-requirements/tests.txt").read()).items()}
-          off = {k: (v, have.get(k)) for k, v in want.items() if have.get(k) != v}
-          if off:
-              print("::error::.github/ci-requirements/tests.txt is out of date (requirements.txt wants, the lock has): "
-                    + ", ".join(f"{k} {a} vs {b}" for k, (a, b) in off.items())
-                    + " -- regenerate it, see .github/ci-requirements/README.md")
-              sys.exit(1)
+          for lock in (".github/ci-requirements/tests.txt", "requirements.lock"):
+              have = {k.lower(): v for k, v in pins(open(lock).read()).items()}
+              off = {k: (v, have.get(k)) for k, v in want.items() if have.get(k) != v}
+              if off:
+                  print(f"::error::{lock} is out of date (requirements.txt wants, the lock has): "
+                        + ", ".join(f"{k} {a} vs {b}" for k, (a, b) in off.items()))
+                  sys.exit(1)
           print("in sync:", ", ".join(f"{k}=={v}" for k, v in want.items()))
           PY
       - name: The committed Tailwind CSS matches the class names in web/
@@ -99,25 +101,27 @@ jobs:
 
       - name: Build a release archive and serve it locally
         run: |
-          mkdir -p /tmp/rel /tmp/bad
+          mkdir -p /tmp/rel /tmp/bad /tmp/old
           # Releases here are signed with a throwaway key, which the installer is
           # told to trust (VENVY_SIGNING_KEY_FILE) instead of the real one.
           openssl genpkey -algorithm ed25519 -out /tmp/ci-release-key.pem
           openssl pkey -in /tmp/ci-release-key.pem -pubout > /tmp/ci-release-pub.pem
           echo "v0.0.0-ci1" > VERSION
-          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web
+          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt requirements.lock VERSION install.sh venvy web
           (cd /tmp/rel && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
           openssl pkeyutl -sign -inkey /tmp/ci-release-key.pem -rawin -in /tmp/rel/venvy.tar.gz.sha256 -out /tmp/rel/venvy.tar.gz.sha256.sig
           cp VERSION /tmp/rel/VERSION
-          # A second version that cannot start, to exercise the rollback.
+          cp /tmp/rel/* /tmp/old/
+          # A newer version that cannot start, to exercise the rollback (v0.0.0-ci3 > v0.0.0-ci2).
           cp main.py /tmp/main.good && printf 'import sys\nsys.exit("broken on purpose")\n' > main.py
-          echo "v0.0.0-broken" > VERSION
-          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/bad/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web
+          echo "v0.0.0-ci3" > VERSION
+          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/bad/venvy.tar.gz main.py requirements.txt requirements.lock VERSION install.sh venvy web
           (cd /tmp/bad && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
           openssl pkeyutl -sign -inkey /tmp/ci-release-key.pem -rawin -in /tmp/bad/venvy.tar.gz.sha256 -out /tmp/bad/venvy.tar.gz.sha256.sig
           cp /tmp/main.good main.py && rm VERSION
           python3 -m http.server 8099 --directory /tmp/rel >/dev/null 2>&1 &
           python3 -m http.server 8098 --directory /tmp/bad >/dev/null 2>&1 &
+          python3 -m http.server 8097 --directory /tmp/old >/dev/null 2>&1 &
           sleep 1
 
       - name: Fresh install
@@ -154,7 +158,7 @@ jobs:
         run: |
           # Publish a newer release on the local release server, then let Venvy install it.
           echo "v0.0.0-ci2" > VERSION
-          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt VERSION install.sh venvy web
+          tar --owner=0 --group=0 --exclude='__pycache__' -czf /tmp/rel/venvy.tar.gz main.py requirements.txt requirements.lock VERSION install.sh venvy web
           (cd /tmp/rel && sha256sum venvy.tar.gz > venvy.tar.gz.sha256)
           openssl pkeyutl -sign -inkey /tmp/ci-release-key.pem -rawin -in /tmp/rel/venvy.tar.gz.sha256 -out /tmp/rel/venvy.tar.gz.sha256.sig
           cp VERSION /tmp/rel/VERSION && rm VERSION
@@ -165,6 +169,12 @@ jobs:
           (cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing --ui-update v0.0.0-ci2 ${{ matrix.mode == 'default' && '--app-users' || '' }})
           test "$(basename "$(readlink -f /opt/venvy/current)")" = "v0.0.0-ci2"
           cd tests && sudo /opt/checks/bin/python t_installed.py $BASE --existing ${{ matrix.mode == 'default' && '--app-users' || '' }}
+
+      - name: A downgrade is refused without --allow-downgrade
+        run: |
+          if sudo VENVY_BASE_URL=http://127.0.0.1:8097 VENVY_SIGNING_KEY_FILE=$VENVY_SIGNING_KEY_FILE bash install.sh; then echo "installer accepted a downgrade"; exit 1; fi
+          test "$(basename "$(readlink -f /opt/venvy/current)")" = "v0.0.0-ci2"
+          curl -fsS $BASE/api/health
 
       - name: A release that does not start is rolled back
         run: |

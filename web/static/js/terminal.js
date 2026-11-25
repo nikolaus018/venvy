@@ -6,6 +6,8 @@
         let _termResizeObserver = null;
         let _termVpListener = null;
         let _termReconnectTimer = null;
+        let _termConnectRaf = null;
+        let _termSessionSeq = 0;
         let _termAppId = null;   // app this terminal is connected to
         let _termAttempt = 0;
         const _TERM_MAX_ATTEMPTS = 6;
@@ -138,20 +140,9 @@
             requestAnimationFrame(_termFit);
         }
 
-        /** Bump terminal font size ±1pt — great for mobile readability */
-        let _termFontSize = null;
-        function termFontResize(delta) {
-            if (!window.term) return;
-            _termFontSize = (_termFontSize ?? window.term.options.fontSize) + delta;
-            _termFontSize = Math.max(9, Math.min(24, _termFontSize));
-            window.term.options.fontSize = _termFontSize;
-            requestAnimationFrame(_termFit);
-            _mobHaptic(6);
-        }
         window.termMobKey = termMobKey;
         window.termModToggle = termModToggle;
         window.termMobToggleMore = termMobToggleMore;
-        window.termFontResize = termFontResize;
 
         function _termClear() {
             if (window.term) {
@@ -180,12 +171,20 @@
 
         // Tear down all terminal resources (xterm + WebSocket + observers)
         function _termDestroy() {
-            // Kill pending reconnect
+            _termSessionSeq++;
+            // Kill pending initial connect rAF or reconnect timer
+            if (_termConnectRaf) { cancelAnimationFrame(_termConnectRaf); _termConnectRaf = null; }
             if (_termReconnectTimer) { clearTimeout(_termReconnectTimer); _termReconnectTimer = null; }
 
             // Close WebSocket cleanly
             if (termSocket) {
-                try { termSocket.onclose = null; termSocket.close(); } catch (e) { }
+                try {
+                    termSocket.onopen = null;
+                    termSocket.onmessage = null;
+                    termSocket.onclose = null;
+                    termSocket.onerror = null;
+                    termSocket.close();
+                } catch (e) { }
                 termSocket = null;
             }
 
@@ -211,13 +210,13 @@
 
         function initTerminal(appId) {
             _termDestroy();
+            const seq = ++_termSessionSeq;
             _termAppId = appId;
             _termAttempt = 0;
 
             // Reset mobile modifier and secondary row on each new terminal session
             clearTimeout(_mobModTimer);
             _mobMod = null;
-            _termFontSize = null;
             _updateModBtns();
             const moreRow = document.getElementById('term-mob-more-row');
             const moreBtn = document.getElementById('mob-more-btn');
@@ -326,34 +325,41 @@
             const _proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
 
             function _connect() {
-                // Bail if the user navigated away from this app
-                if (_termAppId !== activeAppId) return;
+                // Bail if destroyed, deselected, or navigated away from this app
+                if (seq !== _termSessionSeq || _termAppId == null || _termAppId !== activeAppId) return;
 
                 _termSetStatus('connecting');
                 const wsUrl = `${_proto}://${window.location.host}/api/apps/${_termAppId}/terminal`;
-                termSocket = new WebSocket(wsUrl);
+                const ws = new WebSocket(wsUrl);
+                termSocket = ws;
 
-                termSocket.onopen = () => {
+                ws.onopen = () => {
+                    if (seq !== _termSessionSeq || ws !== termSocket) { try { ws.close(); } catch (e) { } return; }
                     // First message authenticates: WebSockets can't carry headers.
-                    termSocket.send('\x01' + (getAuthKey() || ''));
+                    ws.send('\x01' + (getAuthKey() || ''));
                     // The size right behind it, so the shell starts at it (see terminal_ws).
                     _termFit();
                     _termAttempt = 0;
                     _termSetStatus('connected');
                     // Send current dimensions immediately so PTY initialises at the right size
-                    setTimeout(() => { _termFit(); window.term && window.term.focus(); }, 60);
+                    setTimeout(() => {
+                        if (seq !== _termSessionSeq || ws !== termSocket) return;
+                        _termFit();
+                        window.term && window.term.focus();
+                    }, 60);
                 };
 
-                termSocket.onmessage = (ev) => {
-                    if (!window.term) return;
+                ws.onmessage = (ev) => {
+                    if (seq !== _termSessionSeq || ws !== termSocket || !window.term) return;
                     window.term.write(ev.data);
                 };
 
-                termSocket.onclose = () => {
+                ws.onclose = () => {
+                    if (seq !== _termSessionSeq || ws !== termSocket) return;
                     _termSetStatus('disconnected');
 
                     // Don't retry if we've been destroyed or switched apps
-                    if (_termAppId !== activeAppId || !window.term) return;
+                    if (_termAppId == null || _termAppId !== activeAppId || !window.term) return;
 
                     if (_termAttempt < _TERM_MAX_ATTEMPTS) {
                         const delay = Math.min(800 * Math.pow(2, _termAttempt), 15000);
@@ -374,12 +380,16 @@
                     }
                 };
 
-                termSocket.onerror = () => {
+                ws.onerror = () => {
+                    if (seq !== _termSessionSeq || ws !== termSocket) return;
                     // onclose fires right after onerror, so just update status here
                     _termSetStatus('disconnected');
                 };
             }
 
             // Defer first connect until fitAddon has had one rAF to calculate dimensions
-            requestAnimationFrame(_connect);
+            _termConnectRaf = requestAnimationFrame(() => {
+                _termConnectRaf = null;
+                _connect();
+            });
         }
