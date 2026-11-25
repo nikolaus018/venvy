@@ -35,7 +35,7 @@ from venvy.models import App, SystemSetting, User
 from venvy.process import set_restore_in_progress, stop_app_process_logic
 from venvy.safefs import foreign_hardlink, is_safe_path
 from venvy.terminal import terminal_manager
-from venvy.uploads import _UPLOAD_ID_RE, _UPLOAD_STALE_SEC
+from venvy.uploads import _UPLOAD_ID_RE, _purge_stale_parts
 
 
 # ---------------------------------------------------------------------------
@@ -533,11 +533,9 @@ def _backup_upload_part(user_id: int, upload_id: str) -> Path:
 
 
 def _purge_stale_backup_uploads() -> None:
-    cutoff = utc_now().timestamp() - _UPLOAD_STALE_SEC
-    for part in BACKUP_DIR.glob(".upload-*.part"):
-        with contextlib.suppress(OSError):
-            if part.stat().st_mtime < cutoff:
-                part.unlink()
+    # Also drops the parts' disk reservations (venvy.uploads), which would
+    # otherwise outlive the files and refuse later uploads with 507.
+    _purge_stale_parts(BACKUP_DIR, ".upload-*.part")
 
 
 _BACKUP_MAX_MEMBERS = 500_000

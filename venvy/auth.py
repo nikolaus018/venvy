@@ -202,7 +202,7 @@ def _socket_owner(client_host: str, client_port: int, server_host: str, server_p
                         if (_proc_address(fields[1]), _proc_address(fields[2])) == want:
                             # TIME_WAIT sockets in /proc/net/tcp report uid=0; ignore non-active states.
                             if fields[3] == "06":
-                                return None
+                                continue    # a live socket may reuse the same addresses
                             return int(fields[7])
                     except ValueError:
                         continue
@@ -399,10 +399,22 @@ def _slide_session_if_needed(session: Session, db_session: UserSession) -> bool:
     if remaining < 60 * 60 * 24 * 7:
         db_session.expires_at = now + datetime.timedelta(seconds=SESSION_TTL_SECONDS)
         session.add(db_session)
-        with contextlib.suppress(Exception):
-            session.commit()
-        return True
+        return _commit_quietly(session)
     return False
+
+
+def _commit_quietly(session: Session) -> bool:
+    """Commit bookkeeping (a slid expiry, a token's last use) that must not
+    fail the request. On failure the session is rolled back, so the request's
+    next query still works. True if it was saved."""
+    try:
+        session.commit()
+        return True
+    except Exception as exc:
+        logging.warning(f"Could not save session bookkeeping: {exc.__class__.__name__}")
+        with contextlib.suppress(Exception):
+            session.rollback()
+        return False
 
 
 def _load_session(session: Session, cookie_token: Optional[str], slide: bool = False) -> Optional[UserSession]:
@@ -415,8 +427,7 @@ def _load_session(session: Session, cookie_token: Optional[str], slide: bool = F
     now = utc_now()
     if now > _make_tz_aware(db_session.expires_at):
         session.delete(db_session)
-        with contextlib.suppress(Exception):
-            session.commit()
+        _commit_quietly(session)
         return None
     if slide:
         _slide_session_if_needed(session, db_session)
@@ -469,8 +480,7 @@ def _authenticate_token(session: Session, request: Request, raw: str) -> User:
     if not row.last_used_at or (now - _make_tz_aware(row.last_used_at)).total_seconds() > _TOKEN_TOUCH_SEC:
         row.last_used_at = now
         session.add(row)
-        with contextlib.suppress(Exception):
-            session.commit()
+        _commit_quietly(session)
     request.state.via_token = True
     return user
 

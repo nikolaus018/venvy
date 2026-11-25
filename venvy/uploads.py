@@ -149,19 +149,31 @@ def _append_upload_chunk(part: Path, chunk: UploadFile, offset: int, total: int)
         return _append_upload_chunk_locked(part, chunk, offset, total)
 
 
-def _purge_stale_upload_parts() -> None:
+def _purge_stale_parts(pattern_dir: Path, pattern: str) -> None:
+    """Delete .part files untouched for a day, and forget their disk reservation.
+    The callers hold one part's lock already (and the locks are striped, not
+    reentrant): a part whose lock is taken is skipped, not waited for — it is
+    in use, or it is the next sweep's."""
     cutoff = time.time() - _UPLOAD_STALE_SEC
     try:
-        for part in _UPLOAD_TMP_DIR.glob("*.part"):
-            with _part_lock(part):
-                try:
-                    if part.stat().st_mtime < cutoff:
-                        part.unlink()
-                        _release_upload_reserve(part)
-                except OSError:
-                    pass
+        for part in pattern_dir.glob(pattern):
+            lock = _part_lock(part)
+            if not lock.acquire(blocking=False):
+                continue
+            try:
+                if part.stat().st_mtime < cutoff:
+                    part.unlink()
+                    _release_upload_reserve(part)
+            except OSError:
+                pass
+            finally:
+                lock.release()
     except OSError:
         pass
+
+
+def _purge_stale_upload_parts() -> None:
+    _purge_stale_parts(_UPLOAD_TMP_DIR, "*.part")
 
 
 def _upload_part_path(app_id: int, user_id: int, upload_id: str) -> Path:

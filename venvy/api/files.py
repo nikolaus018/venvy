@@ -182,7 +182,8 @@ async def file_operations(
     except AppPathError as exc:
         raise HTTPException(exc.status, exc.detail or None)
     except Exception as exc:
-        logging.error(f"File operation '{op}' failed for app {app_id}: {exc}")
+        reason = str(exc).replace("\r", " ").replace("\n", " ")
+        logging.error(f"File operation '{op}' failed for app {app_id}: {reason}")
         raise HTTPException(500, "File operation failed.")
     audit_log(user.username, f"file_{op}", f"app '{app_row.name}' (id={app_id}): {req.path}")
     return {"ok": True}

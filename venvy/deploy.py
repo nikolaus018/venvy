@@ -424,8 +424,19 @@ def _is_repo(app: App) -> bool:
 
 
 async def _git(app: App, log: _Log, args: List[str], timeout: int = 600) -> str:
-    safe_git = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "http.proxy=", *args]
-    return await _run(app, safe_git, log, _git_env(app, log), app.app_dir, timeout, "git " + " ".join(args))
+    env = _git_env(app, log)
+    # A proxy the app writes into .git/config would see the deploy token, so
+    # http.proxy is always set here — to the one this host is configured with
+    # (an empty value would turn the https_proxy/all_proxy variables off too).
+    # Passed in the environment, not as -c: a proxy URL may carry a password,
+    # and every user on the host can read a process's command line.
+    proxy = next((env[k] for k in ("https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY")
+                  if env.get(k)), "")
+    n = int(env.get("GIT_CONFIG_COUNT") or 0)
+    env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = "http.proxy", proxy
+    env["GIT_CONFIG_COUNT"] = str(n + 1)
+    safe_git = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args]
+    return await _run(app, safe_git, log, env, app.app_dir, timeout, "git " + " ".join(args))
 
 
 async def current_commit(app: App) -> Optional[Tuple[str, str]]:

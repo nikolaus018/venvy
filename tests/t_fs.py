@@ -2,6 +2,7 @@
 usage: t_fs.py <repo>"""
 import importlib.util as u
 import os, shutil, sys, tempfile
+import httpx
 from pathlib import Path
 from harness import admin, make_app, server
 
@@ -86,6 +87,20 @@ try:
     r = cl.req("POST", f"/api/apps/{app_id}/files/upload/chunk", files={"chunk": ("c", b"abc")},
                data={"upload_id": "ce" * 16, "path": "", "rel_path": "sub", "offset": "0", "total": "3"})
     check("chunk upload onto folder -> 409", r.status_code == 409, r.text)
+    # The first chunk sent again (its answer was lost): the sweep that runs at
+    # offset 0 meets this upload's own .part, whose lock the request holds.
+    for attempt in (1, 2):
+        try:
+            r = cl.req("POST", f"/api/apps/{app_id}/files/upload/chunk", files={"chunk": ("c", b"ab")},
+                       data={"upload_id": "cf" * 16, "path": "", "rel_path": "retry.bin", "offset": "0", "total": "4"},
+                       timeout=15)
+        except httpx.TimeoutException:
+            r = None
+        check(f"first chunk accepted (attempt {attempt})", r is not None and r.status_code == 200
+              and r.json().get("received") == 2, r.text if r is not None else "timed out: the sweep deadlocked")
+    r = cl.req("POST", f"/api/apps/{app_id}/files/upload/chunk", files={"chunk": ("c", b"cd")},
+               data={"upload_id": "cf" * 16, "path": "", "rel_path": "retry.bin", "offset": "2", "total": "4"})
+    check("upload completes after a resent first chunk", r.status_code == 200 and (app_dir / "retry.bin").read_bytes() == b"abcd", r.text)
     r = cl.req("POST", f"/api/apps/{app_id}/files/upload", data={"path": "sub"},
                files=[("files", ("multi/a.txt", b"A")), ("files", ("../evil.txt", b"E")), ("files", ("b.txt", b"B"))])
     j = r.json()

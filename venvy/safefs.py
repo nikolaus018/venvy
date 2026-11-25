@@ -331,6 +331,8 @@ def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner
             lst = _fs_lstat(dst_fd, dst_name)
             if lst is not None and _stat.S_ISLNK(lst.st_mode):
                 os.chown(dst_name, *owner, dir_fd=dst_fd, follow_symlinks=False)
+        with contextlib.suppress(OSError, NotImplementedError):
+            os.utime(dst_name, ns=(st.st_atime_ns, st.st_mtime_ns), dir_fd=dst_fd, follow_symlinks=False)
     elif _stat.S_ISDIR(st.st_mode):
         os.mkdir(dst_name, 0o700, dir_fd=dst_fd)
         s_sub = os.open(src_name, _O_NOFOLLOW_DIR, dir_fd=src_fd)
@@ -344,6 +346,9 @@ def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner
                 for name in names:
                     _fs_copy_entry(s_sub, name, d_sub, name, owner, _depth + 1, _budget)
                 os.fchmod(d_sub, st.st_mode & 0o777)
+                # Last, once its contents stop changing it.
+                with contextlib.suppress(OSError):
+                    os.utime(d_sub, ns=(st.st_atime_ns, st.st_mtime_ns))
             finally:
                 os.close(d_sub)
         finally:

@@ -108,9 +108,14 @@ with server(repo, PORT) as (base, data, srv):
           f"adm={adm_log[-3:]} vw={vw_log}")
 
     # ── 5. Dangerous env var blocking (H-6) ─────────────────────────────────
-    for bad_key in ("LD_PRELOAD", "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT", "BASH_ENV", "OPENSSL_CONF", "DBUS_SESSION_BUS_ADDRESS"):
+    for bad_key in ("LD_PRELOAD", "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT", "BASH_ENV", "DBUS_SESSION_BUS_ADDRESS"):
         r = cl.req("PUT", f"/api/apps/{app1}", json={"env_vars": {bad_key: "/tmp/evil"}})
         check(f"app env blocks {bad_key}", r.status_code == 400, f"{r.status_code} {r.text}")
+    # Ordinary configuration is the app's own business (applied after the privilege drop).
+    r = cl.req("PUT", f"/api/apps/{app1}", json={"env_vars": {
+        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt", "XDG_CACHE_HOME": "/tmp/c", "TMPDIR": "/tmp"}})
+    check("app env allows SSL_CERT_FILE, XDG_CACHE_HOME and TMPDIR", r.status_code == 200, f"{r.status_code} {r.text}")
+    cl.req("PUT", f"/api/apps/{app1}", json={"env_vars": {}})
     r = cl.req("PUT", "/api/system/shared-env", json={"vars": {"PYTHONINSPECT": "1"}})
     check("shared env blocks PYTHONINSPECT", r.status_code == 400, f"{r.status_code} {r.text}")
 
@@ -251,6 +256,59 @@ try:
     finally:
         tf.close()
     check("exec_env passes env via inherited fd", res.stdout.strip() == "yes-123", repr(res.stdout))
+
+    # Upload-part sweeps: they run while the caller holds one part's (striped,
+    # non-reentrant) lock, so they must never wait for a lock, and they must
+    # drop the disk reservation of what they delete. In a throwaway data dir.
+    sweep_dir = work / "sweep"
+    sweep_dir.mkdir()
+    sweep = subprocess.run([sys.executable, "-c", f"""
+import os, sys, threading, time
+sys.path.insert(0, {os.path.abspath(repo)!r})
+import venvy.backup as bk, venvy.uploads as up
+from venvy.config import _UPLOAD_TMP_DIR
+old = time.time() - 2 * 86400
+_UPLOAD_TMP_DIR.mkdir(parents=True, exist_ok=True)
+live = _UPLOAD_TMP_DIR / ("1-1-" + "ab" * 16 + ".part"); live.write_bytes(b"x"); os.utime(live, (old, old))
+lock = up._part_lock(live)
+lock.acquire()          # as upload_file_chunk holds it when it sweeps at offset 0
+t = threading.Thread(target=up._purge_stale_upload_parts, daemon=True); t.start(); t.join(5)
+print("no-deadlock" if not t.is_alive() else "DEADLOCK")
+lock.release()
+bk.BACKUP_DIR.mkdir(exist_ok=True)
+stale = bk.BACKUP_DIR / (".upload-1-" + "cd" * 16 + ".part"); stale.write_bytes(b"x"); os.utime(stale, (old, old))
+up._reserved_bytes[str(stale)] = 10 ** 9
+bk._purge_stale_backup_uploads()
+print("released" if not stale.exists() and str(stale) not in up._reserved_bytes else "LEAKED")
+"""], cwd=sweep_dir, capture_output=True, text=True, timeout=60)
+    check("upload sweep skips a lock the caller holds", "no-deadlock" in sweep.stdout, sweep.stdout + sweep.stderr[-800:])
+    check("backup-upload sweep releases the disk reservation", "released" in sweep.stdout, sweep.stdout + sweep.stderr[-800:])
+
+    # git gets this host's proxy (an empty http.proxy would switch proxies off),
+    # through the environment rather than the world-readable command line.
+    gitp = subprocess.run([sys.executable, "-c", f"""
+import asyncio, json, sys
+sys.path.insert(0, {os.path.abspath(repo)!r})
+import venvy.deploy as d
+from venvy.models import App
+cap = {{}}
+async def fake_run(app, argv, log, env, cwd, timeout, what):
+    cap.update(argv=argv, env=env); return ""
+d._run = fake_run
+app = App(id=1, name="x", app_dir=".", git_url="https://github.com/a/b.git", git_auth=None)
+asyncio.run(d._git(app, d._Log(1, [], persist=False), ["fetch"]))
+e = cap["env"]
+keys = {{e[f"GIT_CONFIG_KEY_{{i}}"]: e[f"GIT_CONFIG_VALUE_{{i}}"] for i in range(int(e["GIT_CONFIG_COUNT"]))}}
+print(json.dumps({{"proxy": keys.get("http.proxy"), "argv": cap["argv"]}}))
+"""], cwd=sweep_dir, capture_output=True, text=True, timeout=60,
+        env={**os.environ, "https_proxy": "http://u:pw@proxy.example:3128"})
+    try:
+        gp = json.loads(gitp.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        gp = {}
+    check("git uses the host's proxy, not on its command line",
+          gp.get("proxy") == "http://u:pw@proxy.example:3128" and not any("proxy" in a for a in gp.get("argv", [])),
+          gitp.stdout + gitp.stderr[-800:])
 finally:
     shutil.rmtree(work, ignore_errors=True)
 

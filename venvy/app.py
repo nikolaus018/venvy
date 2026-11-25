@@ -88,6 +88,16 @@ def _rebase_app_paths(app_row: App) -> bool:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Decided once, before anything is served: per-app users asked for but not
+    # possible as root stops Venvy here with the reason in its log, instead of
+    # answering every request that asks (auth, the app list) with a 500.
+    from venvy.isolation import _isolation_active
+    try:
+        _isolation_active()
+    except RuntimeError as exc:
+        logging.critical(f"{exc} Fix the host (install util-linux's setpriv and the shadow tools) "
+                         "or reinstall with install.sh --shared-user.")
+        raise
     create_db_and_tables()
     load_operation_state()
     with Session(engine) as session:

@@ -184,19 +184,21 @@ def _user_pids(uid: int, include_zombies: bool = False) -> list:
     return pids
 
 
-# Dynamic-linker, crypto/TLS, glibc, shell-hook, and systemd/D-Bus variables
-# that could alter privileged wrappers or loader/library behaviour.
+# Dynamic-linker, glibc, shell-hook, and systemd/D-Bus variables that could
+# alter loader behaviour or Venvy's own wrappers. App variables only take
+# effect after the privilege drop (exec_env.py), so ordinary configuration —
+# TMPDIR, XDG_*, SSL_CERT_FILE, CURL_CA_BUNDLE, OPENSSL_CONF, KRB5_* — is the
+# app's own business and stays allowed.
 _DANGEROUS_ENV_EXACT = frozenset({
     "GCONV_PATH", "LOCPATH", "HOSTALIASES", "GETCONF_DIR", "NLSPATH",
     "RESOLV_HOST_CONF", "RES_OPTIONS", "LOCALDOMAIN", "TZDIR",
-    "BASH_ENV", "ENV", "CDPATH", "IFS", "SHELLOPTS", "TERMINFO", "TERMINFO_DIRS",
+    "BASH_ENV", "ENV", "CDPATH", "IFS", "SHELLOPTS",
     "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT",
     "MALLOC_CHECK_", "MALLOC_TRACE",
-    "NOTIFY_SOCKET", "TMPDIR",
+    "NOTIFY_SOCKET",
 })
 _DANGEROUS_ENV_PREFIXES = (
-    "LD_", "DBUS_", "SYSTEMD_", "GLIBC_TUNABLES", "MALLOC_",
-    "OPENSSL_", "P11_KIT_", "XDG_", "LISTEN_", "KRB5_", "SSL_", "CURL_", "BASH_FUNC_",
+    "LD_", "DBUS_", "SYSTEMD_", "GLIBC_TUNABLES", "MALLOC_", "LISTEN_", "BASH_FUNC_",
 )
 
 

@@ -856,7 +856,8 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             _active_app_pids.pop(app_id, None)
         _cancel_log_task(app_id)
         if isinstance(exc, Exception):
-            logging.error(f"Failed to start app {app_id}: {exc}")
+            reason = str(exc).replace("\r", " ").replace("\n", " ")
+            logging.error(f"Failed to start app {app_id}: {reason}")
         with contextlib.suppress(Exception):
             session.rollback()
             fresh = session.get(App, app_id, populate_existing=True)
