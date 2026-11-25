@@ -16,6 +16,7 @@ from typing import Dict
 from fastapi import HTTPException, UploadFile
 
 from venvy.config import _UPLOAD_TMP_DIR
+from venvy.safefs import APP_FILE_MODE
 
 # A fixed set: one lock per upload would need evicting, and an evicted lock
 # that a thread is about to take no longer excludes anyone.
@@ -57,7 +58,7 @@ def _save_upload_file(file: UploadFile, dest: Path, limit: int) -> bool:
     removes the partial file) if it is larger than *limit* bytes."""
     written = 0
     file.file.seek(0)
-    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_NOFOLLOW | _O_CLOEXEC, 0o644)
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_NOFOLLOW | _O_CLOEXEC, APP_FILE_MODE)
     try:
         with os.fdopen(fd, "wb") as out:
             while True:

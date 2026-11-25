@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import List, Optional
 
 _FS_MAX_DEPTH = 64
+# New files in an app's folder: the app's user (owner) and group, nobody else.
+APP_FILE_MODE = 0o640
 _FS_COPY_MAX_BYTES = 10 * 1024 ** 3
 _FS_MIN_FREE_BYTES = 256 * 1024 * 1024
 
@@ -97,7 +99,14 @@ def _app_rel_parts(root: Path, rel_path: str, follow_last: bool = True) -> tuple
         raise AppPathError(400, "Invalid path.")
     try:
         root_r = root.resolve()
-        cand = root / (rel_path or "")
+        # Lexically first: a path that leaves the app directory by its own
+        # ".."s or by being absolute is refused before anything on disk is
+        # looked up. Symlinks are dealt with below, once resolved.
+        root_s = str(root_r)
+        joined = os.path.normpath(os.path.join(root_s, rel_path or ""))
+        if joined != root_s and not joined.startswith(root_s.rstrip(os.sep) + os.sep):
+            raise AppPathError(403, "Path is outside the app directory.")
+        cand = Path(joined)
         if follow_last or cand.name in ("", ".", ".."):
             target = cand.resolve()
         else:
@@ -218,7 +227,7 @@ def _fs_save(root: Path, parts: tuple, data: bytes, owner: Optional[tuple]) -> N
         st = _fs_lstat(dfd, parts[-1])
         if _fs_is_dir(st):
             raise AppPathError(409, "That path is a folder.")
-        mode = (st.st_mode & 0o777) if st is not None and _stat.S_ISREG(st.st_mode) else 0o644
+        mode = (st.st_mode & 0o777) if st is not None and _stat.S_ISREG(st.st_mode) else APP_FILE_MODE
         _fs_write_new(dfd, parts[-1], [data], mode, owner)
 
 
@@ -229,7 +238,7 @@ def _fs_write_stream(root: Path, parts: tuple, fileobj, limit: int, owner: Optio
     with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
         if _fs_is_dir(_fs_lstat(dfd, parts[-1])):
             raise AppPathError(409, f"'{parts[-1]}' already exists as a folder.")
-        return _fs_write_new(dfd, parts[-1], _fs_read_chunks(fileobj), 0o644, owner, limit)
+        return _fs_write_new(dfd, parts[-1], _fs_read_chunks(fileobj), APP_FILE_MODE, owner, limit)
 
 
 def _fs_install(root: Path, parts: tuple, src: Path, owner: Optional[tuple]) -> None:
@@ -239,7 +248,7 @@ def _fs_install(root: Path, parts: tuple, src: Path, owner: Optional[tuple]) -> 
     with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
         if _fs_is_dir(_fs_lstat(dfd, parts[-1])):
             raise AppPathError(409, f"'{parts[-1]}' already exists as a folder.")
-        os.chmod(src, 0o644)
+        os.chmod(src, APP_FILE_MODE)
         if owner:
             os.lchown(src, *owner)
         try:
@@ -250,7 +259,7 @@ def _fs_install(root: Path, parts: tuple, src: Path, owner: Optional[tuple]) -> 
             # Different filesystem (e.g. DATA_DIR/apps is a mount) — copy instead.
             try:
                 with open(src, "rb") as f:
-                    _fs_write_new(dfd, parts[-1], _fs_read_chunks(f), 0o644, owner)
+                    _fs_write_new(dfd, parts[-1], _fs_read_chunks(f), APP_FILE_MODE, owner)
             finally:
                 src.unlink(missing_ok=True)
 
@@ -260,7 +269,7 @@ def _fs_touch(root: Path, parts: tuple, owner: Optional[tuple]) -> None:
         raise AppPathError(400, "Invalid file path.")
     with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
         try:
-            fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, 0o644, dir_fd=dfd)
+            fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, APP_FILE_MODE, dir_fd=dfd)
         except FileExistsError:
             # Same as touch(1) on an existing entry: just bump its mtime.
             os.utime(parts[-1], dir_fd=dfd, follow_symlinks=False)

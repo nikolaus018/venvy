@@ -162,19 +162,43 @@ _port_alloc_lock = threading.Lock()
 _recent_allocated_ports: Dict[int, float] = {}
 
 
+def _listening_ports() -> Set[int]:
+    """Every TCP port something on the host listens on, on any interface and
+    address family: psutil, else Linux's /proc/net/tcp{,6} (state 0A = LISTEN)."""
+    ports: Set[int] = set()
+    for conn in _psutil_net_connections(kind="tcp"):
+        if getattr(conn, "status", None) == "LISTEN" and conn.laddr:
+            ports.add(conn.laddr.port)
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(table, "r") as f:
+                next(f, None)
+                for line in f:
+                    fields = line.split()
+                    if len(fields) >= 4 and fields[3] == "0A":
+                        with contextlib.suppress(ValueError, IndexError):
+                            ports.add(int(fields[1].rsplit(":", 1)[1], 16))
+        except OSError:
+            continue
+    return ports
+
+
 def find_free_port(start: int = 8001, end: int = 9000) -> Optional[int]:
-    """Return the first TCP port in [start, end) that can be bound to,
-    serialized across concurrent launches so two apps don't claim the same port."""
+    """Return the first TCP port in [start, end) that nothing listens on,
+    serialized across concurrent launches so two apps don't claim the same port.
+    A listener on any interface is found by the scan; the loopback bind also
+    catches one on the wildcard address (and anything the scan can't see)."""
     now = time.monotonic()
     with _port_alloc_lock:
         for p in [k for k, ts in _recent_allocated_ports.items() if now - ts > 10.0]:
             _recent_allocated_ports.pop(p, None)
+        busy = _listening_ports()
         for port in range(start, end):
-            if port in _recent_allocated_ports:
+            if port in _recent_allocated_ports or port in busy:
                 continue
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(("0.0.0.0", port))
+                    s.bind(("127.0.0.1", port))
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s2:
                     s2.settimeout(0.2)
                     if s2.connect_ex(("127.0.0.1", port)) == 0:
@@ -610,6 +634,8 @@ async def _start_app_process(app_id: int, session: Session) -> App:
     db_app = session.get(App, app_id, populate_existing=True)
     if not db_app:
         raise ValueError("App not found.")
+    # For log lines: the stored row's id, not the caller's (request-supplied) value.
+    log_id = int(db_app.id or 0)
 
     if db_app.pid and await asyncio.to_thread(_app_pid_alive, db_app):
         db_app.status = "running"
@@ -857,7 +883,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         _cancel_log_task(app_id)
         if isinstance(exc, Exception):
             reason = str(exc).replace("\r", " ").replace("\n", " ")
-            logging.error(f"Failed to start app {app_id}: {reason}")
+            logging.error("Failed to start app %d: %s", log_id, reason)
         with contextlib.suppress(Exception):
             session.rollback()
             fresh = session.get(App, app_id, populate_existing=True)

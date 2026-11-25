@@ -42,6 +42,7 @@ from venvy.uploads import (
     _upload_part_path,
 )
 
+_FILE_OPS = {name: name for name in ("create_file", "create_folder", "delete", "rename", "copy", "save")}
 _TREE_HASH_MAX_BYTES = 512 * 1024 * 1024
 _MAX_ACTIVE_UPLOADS_PER_USER = 32
 
@@ -141,7 +142,7 @@ async def file_operations(
         raise HTTPException(404)
     root = Path(app_row.app_dir)
     op = req.operation
-    if op not in ("create_file", "create_folder", "delete", "rename", "copy", "save"):
+    if op not in _FILE_OPS:
         raise HTTPException(400, f"Unknown operation: {op}")
     if "\x00" in req.path or (req.new_path is not None and "\x00" in req.new_path):
         raise HTTPException(400, "Invalid path.")
@@ -182,8 +183,9 @@ async def file_operations(
     except AppPathError as exc:
         raise HTTPException(exc.status, exc.detail or None)
     except Exception as exc:
+        # Logged from our own constants and the stored row, never the request's text.
         reason = str(exc).replace("\r", " ").replace("\n", " ")
-        logging.error(f"File operation '{op}' failed for app {app_id}: {reason}")
+        logging.error("File operation '%s' failed for app %d: %s", _FILE_OPS[op], int(app_row.id or 0), reason)
         raise HTTPException(500, "File operation failed.")
     audit_log(user.username, f"file_{op}", f"app '{app_row.name}' (id={app_id}): {req.path}")
     return {"ok": True}
