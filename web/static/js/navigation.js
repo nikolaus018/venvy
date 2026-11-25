@@ -75,12 +75,14 @@
 
         // Left/Right arrows move between tabs, Home/End jump to the ends (WAI-ARIA).
         function onTabListKey(e) {
-            const i = TABS.indexOf(currentTab);
+            const allowed = TABS.filter(tabAllowed);
+            if (!allowed.length) return;
+            const i = Math.max(0, allowed.indexOf(currentTab));
             let next = null;
-            if (e.key === 'ArrowRight') next = TABS[(i + 1) % TABS.length];
-            else if (e.key === 'ArrowLeft') next = TABS[(i - 1 + TABS.length) % TABS.length];
-            else if (e.key === 'Home') next = TABS[0];
-            else if (e.key === 'End') next = TABS[TABS.length - 1];
+            if (e.key === 'ArrowRight') next = allowed[(i + 1) % allowed.length];
+            else if (e.key === 'ArrowLeft') next = allowed[(i - 1 + allowed.length) % allowed.length];
+            else if (e.key === 'Home') next = allowed[0];
+            else if (e.key === 'End') next = allowed[allowed.length - 1];
             if (!next) return;
             e.preventDefault();
             switchTab(next, { focusTab: true });
@@ -172,7 +174,7 @@
 
         // ── Keyboard shortcuts ────────────────────────────────────────────────────
         document.addEventListener('keydown', (e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+            if ((e.metaKey || e.ctrlKey) && e.key === 's' && currentTab === 'files' && _openModalIds.length === 0) {
                 const path = document.getElementById('current-filename')?.dataset?.path;
                 if (path) { e.preventDefault(); saveCurrentFile(); }
             }

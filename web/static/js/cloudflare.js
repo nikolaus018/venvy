@@ -467,12 +467,14 @@
 
         /** Publish (first time) or Republish (update hostname) — with conflict pre-check */
         async function publishCfRoute() {
-            if (!activeAppId) return;
+            const appId = activeAppId;
+            const localPort = activeApp?.port;
+            if (!appId) return;
             const hostname = _getCfHostname();
             if (!hostname) { showToast('Select a domain first.', 'warn'); return; }
 
             // Guard: app must have a port set for the tunnel to route traffic anywhere
-            if (!activeApp?.port) {
+            if (!localPort) {
                 showToast('Set a port for this app in Settings → Networking first.', 'warn', 5000);
                 switchTab('settings');
                 return;
@@ -493,8 +495,13 @@
                 activeBtn.disabled = true;
                 activeBtn.innerHTML = '<svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Checking…';
                 try {
-                    const chk = await fetch(`${API}/apps/${activeAppId}/tunnel/check?hostname=${encodeURIComponent(hostname)}&local_port=${activeApp.port}`);
+                    const chk = await fetch(`${API}/apps/${appId}/tunnel/check?hostname=${encodeURIComponent(hostname)}&local_port=${localPort}`);
                     const chkData = await chk.json().catch(() => ({}));
+                    if (appId !== activeAppId) {
+                        activeBtn.disabled = false;
+                        activeBtn.innerHTML = originalHTML;
+                        return;
+                    }
                     if (chk.ok && chkData.conflict) {
                         // Restore button, show conflict modal
                         activeBtn.disabled = false;
@@ -504,8 +511,11 @@
                             showToast(chkData.reason || 'This hostname cannot be published here.', 'error');
                             return;
                         }
+                        const modal = document.getElementById('tunnel-conflict-modal');
                         document.getElementById('tunnel-conflict-msg').textContent = chkData.reason || 'This hostname is already in use.';
-                        document.getElementById('tunnel-conflict-modal').dataset.hostname = hostname;
+                        modal.dataset.hostname = hostname;
+                        modal.dataset.appId = String(appId);
+                        modal.dataset.port = String(localPort);
                         openModal('tunnel-conflict-modal');
                         return;
                     }
@@ -516,22 +526,27 @@
                 }
                 activeBtn.disabled = false;
                 activeBtn.innerHTML = originalHTML;
+                if (appId !== activeAppId) return;
             }
 
-            await _doPublish(hostname, isRepublish);
+            await _doPublish(hostname, isRepublish, appId, localPort);
         }
 
         /** Called when user clicks Overwrite in the conflict modal */
         async function confirmPublishOverwrite() {
-            const hostname = document.getElementById('tunnel-conflict-modal').dataset.hostname;
+            const modal = document.getElementById('tunnel-conflict-modal');
+            const hostname = modal.dataset.hostname;
+            const appId = Number(modal.dataset.appId) || activeAppId;
+            const localPort = Number(modal.dataset.port) || activeApp?.port;
             closeModal('tunnel-conflict-modal');
-            if (!hostname) return;
+            if (!hostname || !appId || !localPort) return;
             const isRepublish = !document.getElementById('cf-republish-btn').classList.contains('hidden');
-            await _doPublish(hostname, isRepublish);
+            await _doPublish(hostname, isRepublish, appId, localPort);
         }
 
         /** Core publish logic — shared by publishCfRoute and confirmPublishOverwrite */
-        async function _doPublish(hostname, isRepublish) {
+        async function _doPublish(hostname, isRepublish, appId = activeAppId, localPort = activeApp?.port) {
+            if (!appId || !localPort) return;
             const activeBtn = isRepublish
                 ? document.getElementById('cf-republish-btn')
                 : document.getElementById('cf-publish-btn');
@@ -549,10 +564,10 @@
                 const tId = setTimeout(() => controller.abort(), 30000);
                 let res;
                 try {
-                    res = await fetch(`${API}/apps/${activeAppId}/tunnel/publish`, {
+                    res = await fetch(`${API}/apps/${appId}/tunnel/publish`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ hostname, local_port: activeApp.port }),
+                        body: JSON.stringify({ hostname, local_port: localPort }),
                         signal: controller.signal,
                     });
                 } finally {
@@ -572,8 +587,10 @@
                 const appsRes = await fetch(`${API}/apps`).catch(() => null);
                 if (appsRes?.ok) {
                     const apps = await appsRes.json().catch(() => []);
-                    const updated = apps.find(a => a.id === activeAppId);
-                    if (updated) { activeApp = updated; _updateNetworkCard(updated); }
+                    if (appId === activeAppId) {
+                        const updated = apps.find(a => a.id === appId);
+                        if (updated) { activeApp = updated; _updateNetworkCard(updated); }
+                    }
                 }
             } catch (e) {
                 const msg = e.name === 'AbortError' ? 'Publish timed out — Cloudflare may be slow.' : 'Publish failed: ' + e.message;
@@ -585,12 +602,16 @@
                 if (removeBtn) removeBtn.disabled = false;
             }
 
-            if (publishOk) { _cfRouteInvalidate(activeAppId); await loadCfRouteStatus(); }
+            if (publishOk) {
+                _cfRouteInvalidate(appId);
+                if (appId === activeAppId) await loadCfRouteStatus();
+            }
         }
 
         /** Remove the published route + DNS record */
         async function unpublishCfRoute() {
-            if (!activeAppId) return;
+            const appId = activeAppId, localPort = activeApp?.port;
+            if (!appId || !localPort) return;
             const btn = document.getElementById('cf-unpublish-btn');
             const republishBtn = document.getElementById('cf-republish-btn');
             const originalHTML = btn.innerHTML;
@@ -605,7 +626,7 @@
                 const tId = setTimeout(() => controller.abort(), 30000);
                 let res;
                 try {
-                    res = await fetch(`${API}/apps/${activeAppId}/tunnel/publish?local_port=${activeApp.port}`, {
+                    res = await fetch(`${API}/apps/${appId}/tunnel/publish?local_port=${localPort}`, {
                         method: 'DELETE',
                         signal: controller.signal,
                     });
@@ -620,8 +641,10 @@
                 const appsRes = await fetch(`${API}/apps`).catch(() => null);
                 if (appsRes?.ok) {
                     const apps = await appsRes.json().catch(() => []);
-                    const updated = apps.find(a => a.id === activeAppId);
-                    if (updated) { activeApp = updated; _updateNetworkCard(updated); }
+                    if (appId === activeAppId) {
+                        const updated = apps.find(a => a.id === appId);
+                        if (updated) { activeApp = updated; _updateNetworkCard(updated); }
+                    }
                 }
             } catch (e) {
                 const msg = e.name === 'AbortError' ? 'Remove timed out.' : 'Remove failed: ' + e.message;
@@ -632,7 +655,10 @@
                 if (republishBtn) republishBtn.disabled = false;
             }
 
-            if (removeOk) { _cfRouteInvalidate(activeAppId); await loadCfRouteStatus(); }
+            if (removeOk) {
+                _cfRouteInvalidate(appId);
+                if (appId === activeAppId) await loadCfRouteStatus();
+            }
         }
 
         function copyCfRouteUrl() {

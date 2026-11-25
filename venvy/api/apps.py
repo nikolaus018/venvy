@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import signal
 import sys
@@ -18,10 +19,11 @@ from pydantic import BaseModel
 from sqlmodel import delete as sql_delete, select, Session
 
 from venvy import deploy, monitor, own_hosts, proxy, runtimes
+from venvy.api.cloudflare import _check_publish_port
 from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
 from venvy.auth import (
-    check_ip_allowlist, get_current_user, rate_limit_mutations, require_app_access,
+    check_ip_allowlist, get_current_user, has_app_access, rate_limit_mutations, require_app_access,
     require_operator, visible_app_ids,
 )
 from venvy.cloudflare import _cf_delete_dns_cname, _cf_find_zone_id, _cf_update_ingress, _get_cf_creds
@@ -56,6 +58,7 @@ from venvy.process import (
     _app_metrics,
     _app_pid_alive,
     _cancel_log_task,
+    forget_app_runtime,
     restart_app_process_logic,
     _restart_backoff,
     restore_in_progress,
@@ -258,7 +261,7 @@ async def upload_app(
 
     app_dir = user_apps_dir / slug
     if await asyncio.to_thread(app_dir.exists):
-        slug = f"{slug}-{int(time.time())}"
+        slug = f"{slug}-{int(time.time())}-{secrets.token_hex(3)}"
         app_dir = user_apps_dir / slug
     await asyncio.to_thread(app_dir.mkdir, parents=True, mode=0o750)
     if not _isolation_active():
@@ -269,8 +272,13 @@ async def upload_app(
         for file in (files or []):
             rel_path = file.filename or "upload"
             reason = _upload_rel_path_error(rel_path)
-            dest = (app_dir / rel_path).resolve()
-            if not reason and not is_safe_path(app_dir, dest):
+            dest = None
+            if not reason:
+                try:
+                    dest = (app_dir / rel_path).resolve()
+                except (OSError, ValueError):
+                    reason = "invalid path"
+            if not reason and (dest is None or not is_safe_path(app_dir, dest)):
                 reason = "path escapes app directory"
             if reason:
                 skipped_files.append({"path": rel_path, "reason": reason})
@@ -319,6 +327,8 @@ async def upload_app(
         try:
             with Session(engine) as s2:
                 row = s2.get(App, app_id)
+            if not row:
+                raise HTTPException(404, "App no longer exists.")
             await asyncio.to_thread(_ensure_app_user, row)
             if runtime == "python":
                 await _make_venv(row, python_version)
@@ -336,6 +346,8 @@ async def upload_app(
 
             with Session(engine) as s2:
                 row = s2.get(App, app_id)
+                if not row:
+                    raise HTTPException(404, "App no longer exists.")
                 row.status = "stopped"
                 s2.add(row)
                 s2.commit()
@@ -356,7 +368,8 @@ async def upload_app(
                 s2.commit()
             raise
 
-    return {**_start_job(user, "app_create", _finish), "app_id": app_id, "skipped_files": skipped_files}
+    return {**_start_job(user, "app_create", _finish, app_id=app_id, min_role="operator"),
+            "app_id": app_id, "skipped_files": skipped_files}
 
 
 @router.post("/apps/{app_id}/control")
@@ -475,6 +488,8 @@ async def update_app(
             raise HTTPException(400, "Port must be between 1 and 65535 (or 0 to clear).")
         app_row.port = None if req.port == 0 else req.port
     if req.manual_ports is not None:
+        if len(req.manual_ports) > 64:
+            raise HTTPException(400, "At most 64 manual ports are allowed.")
         valid_ports = []
         for p in req.manual_ports:
             if not (1 <= p <= 65535):
@@ -508,6 +523,8 @@ async def update_app(
         app_row.port = combined[0]
 
     if req.env_vars is not None:
+        if len(req.env_vars) > 500:
+            raise HTTPException(400, "At most 500 environment variables are allowed per app.")
         for env_key, env_value in req.env_vars.items():
             # Anything else can't be put in a process environment at all, and
             # only failed later, as an unexplained error on start.
@@ -574,10 +591,18 @@ async def update_app(
         if new_domain:
             other = session.exec(select(App).where(App.domain == new_domain, App.id != app_id)).first()
             if other:
-                raise HTTPException(409, f"{new_domain} already belongs to '{other.name}'.")
+                if has_app_access(session, user, other.id):
+                    raise HTTPException(409, f"{new_domain} already belongs to '{other.name}'.")
+                raise HTTPException(409, f"{new_domain} is already in use by another app.")
         if new_domain != app_row.domain:
             audit_log(user.username, "app_domain_change", f"app '{app_row.name}' (id={app_id}): {new_domain or 'removed'}")
         app_row.domain = new_domain
+    # An app served on its own domain proxies Host-matched traffic to its local
+    # port, so apply the same port ownership check as Cloudflare publishing.
+    if app_row.domain and app_row.port and (
+        req.domain is not None or req.port is not None or req.manual_ports is not None
+    ):
+        await _check_publish_port(session, app_row, app_row.port, request)
     if req.disk_limit_mb is not None:
         if req.disk_limit_mb != 0 and not (1 <= req.disk_limit_mb <= 100_000_000):
             raise HTTPException(400, "disk_limit_mb must be a positive number of MB (or 0 for no limit).")
@@ -617,6 +642,8 @@ def env_history(
     user: User = Depends(require_operator),
 ):
     """Who changed which environment variables, newest first (names only)."""
+    if not session.get(App, app_id):
+        raise HTTPException(404)
     rows = session.exec(select(EnvHistory).where(EnvHistory.app_id == app_id).order_by(EnvHistory.id.desc()).limit(100)).all()
     split = lambda s: [x for x in s.split(",") if x]
     return [{"ts": r.ts.isoformat(), "user": r.username, "added": split(r.added),
@@ -689,18 +716,20 @@ async def delete_app(
         # next app to bind it would be exposed to the internet unasked.
         cf_routes = session.exec(select(CfRoute).where(CfRoute.app_id == app_id)).all()
         published = {r.hostname for r in cf_routes if r.cf_route_id and r.hostname}
+        published_lower = {h.lower() for h in published}
         if published:
             try:
                 creds      = _get_cf_creds(session)
                 account_id = creds["cf_account_id"]
+                tunnel_id  = creds["cf_tunnel_id"]
                 api_token  = creds["cf_api_token"]
                 await _cf_update_ingress(
-                    creds, lambda named: [r for r in named if r["hostname"] not in published])
+                    creds, lambda named: [r for r in named if (r.get("hostname") or "").lower() not in published_lower])
                 for hostname in sorted(published):
                     try:
                         zone_id = await _cf_find_zone_id(hostname, account_id, api_token)
                         if zone_id:
-                            await _cf_delete_dns_cname(zone_id, hostname, api_token)
+                            await _cf_delete_dns_cname(zone_id, hostname, api_token, tunnel_id=tunnel_id)
                         logging.info(f"CF route cleaned up for deleted app {app_id} ({hostname})")
                     except Exception as exc:
                         logging.warning(f"CF DNS cleanup failed for app {app_id} ({hostname}): {exc}")
@@ -719,9 +748,9 @@ async def delete_app(
             await asyncio.to_thread(shutil.rmtree, app_row.app_dir, ignore_errors=True)
         await asyncio.to_thread(shutil.rmtree, APP_LOGS_DIR / str(app_id), True)
         (TERMINAL_RC_DIR / f"app-{app_id}.bashrc").unlink(missing_ok=True)
-        _restart_backoff.pop(app_id, None)
-        _app_metrics.pop(app_id, None)
+        forget_app_runtime(app_id)
         _package_locks.pop(app_id, None)
+        _packages_cache.pop(app_id, None)
         for model in (ScheduledJob, Release, EnvHistory, MetricSample, AppAccess):
             session.exec(sql_delete(model).where(model.app_id == app_id))
         session.exec(sql_delete(AlertRule).where(AlertRule.app_id == app_id))
@@ -778,6 +807,11 @@ async def list_runtimes(user: User = Depends(get_current_user)):
     return await asyncio.to_thread(runtimes.describe)
 
 
+_PACKAGES_LIST_SEM = asyncio.Semaphore(4)
+_PACKAGES_CACHE_TTL = 5.0
+_packages_cache: Dict[int, tuple] = {}
+
+
 @router.get("/apps/{app_id}/packages")
 async def list_packages(
     app_id: int,
@@ -789,60 +823,69 @@ async def list_packages(
         raise HTTPException(404)
     
     if app_row.runtime == "rust":
-        try:
-            manifest, _ = _fs_open_file(Path(app_row.app_dir), ("Cargo.toml",))
-        except AppPathError:
-            return []
-        if not _toml:
-            manifest.close()
-            raise HTTPException(500, "tomllib not available (requires Python 3.11+)")
-        try:
-            with manifest as f:
-                data = _toml.load(f)
-            deps = data.get("dependencies", {})
-            dev_deps = data.get("dev-dependencies", {})
-            
-            results = []
-            for name, val in {**deps, **dev_deps}.items():
-                version = val if isinstance(val, str) else val.get("version", "unknown")
-                results.append({"name": name, "version": version})
-            return results
-        except Exception as e:
-            logging.error(f"Failed to parse Cargo.toml: {e}")
-            return []
+        def _load_cargo():
+            try:
+                manifest, _ = _fs_open_file(Path(app_row.app_dir), ("Cargo.toml",))
+            except AppPathError:
+                return []
+            if not _toml:
+                manifest.close()
+                raise HTTPException(500, "tomllib not available (requires Python 3.11+)")
+            try:
+                with manifest as f:
+                    data = _toml.load(f)
+                deps = data.get("dependencies", {})
+                dev_deps = data.get("dev-dependencies", {})
+                results = []
+                for name, val in {**deps, **dev_deps}.items():
+                    version = val if isinstance(val, str) else val.get("version", "unknown")
+                    results.append({"name": name, "version": version})
+                return results
+            except Exception as e:
+                logging.error(f"Failed to parse Cargo.toml: {e}")
+                return []
+        return await asyncio.to_thread(_load_cargo)
 
     if app_row.runtime in runtimes.RUNTIMES and app_row.runtime != "python":
-        return runtimes.list_packages(app_row.runtime, lambda name: _read_manifest(app_row, name))
+        return await asyncio.to_thread(runtimes.list_packages, app_row.runtime, lambda name: _read_manifest(app_row, name))
 
     if app_row.runtime != "python":
         raise HTTPException(400, "This app's runtime is not known to this Venvy.")
 
     venv_python = Path(app_row.venv_path) / "bin" / "python"
-    if not venv_python.exists():
+    if not await asyncio.to_thread(venv_python.exists):
         raise HTTPException(500, "Virtual environment python not found.")
-    
+
+    cached = _packages_cache.get(app_id)
+    if cached and time.monotonic() - cached[0] < _PACKAGES_CACHE_TTL:
+        return cached[1]
+
     # The venv's python runs app-controlled code (.pth files, sitecustomize),
-    # so it runs as the app's user, never as Venvy's.
-    await asyncio.to_thread(_ensure_app_user, app_row)
-    proc = await asyncio.create_subprocess_exec(
-        *_as_app_user(app_row, [str(venv_python), "-m", "pip", "list", "--format=json"]),
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-        env=_app_tool_env(app_row),
-        cwd=_TOOL_CWD,
-        start_new_session=True,
-    )
+    # so it runs as the app's user, never as Venvy's. Bounded by semaphore to
+    # prevent concurrent subprocess exhaustion.
+    async with _PACKAGES_LIST_SEM:
+        await asyncio.to_thread(_ensure_app_user, app_row)
+        proc = await asyncio.create_subprocess_exec(
+            *_as_app_user(app_row, [str(venv_python), "-m", "pip", "list", "--format=json"]),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=_app_tool_env(app_row),
+            cwd=_TOOL_CWD,
+            start_new_session=True,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(Exception):
+                await proc.wait()
+            return []
     try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-    except asyncio.TimeoutError:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        with contextlib.suppress(Exception):
-            await proc.wait()
-        return []
-    try:
-        return json.loads(stdout)
+        pkgs = json.loads(stdout)
+        _packages_cache[app_id] = (time.monotonic(), pkgs)
+        return pkgs
     except Exception:
         return []
 
@@ -941,10 +984,11 @@ async def install_package(
             await _run_steps(row, steps)
         else:
             await _run_app_tool(row, argv, timeout, what)
+        _packages_cache.pop(app_id, None)
         audit_log(user.username, "package_install", f"app '{row.name}' (id={app_id}): {pkg_name}")
         return {"ok": True}
 
-    return _start_job(user, "package_install", _job)
+    return _start_job(user, "package_install", _job, app_id=app_id, min_role="operator")
 
 
 @router.delete("/apps/{app_id}/packages/{name:path}")
@@ -990,10 +1034,11 @@ async def uninstall_package(
             await _run_steps(row, steps)
         else:
             await _run_app_tool(row, argv, timeout, what)
+        _packages_cache.pop(app_id, None)
         audit_log(user.username, "package_uninstall", f"app '{row.name}' (id={app_id}): {name}")
         return {"ok": True}
 
-    return _start_job(user, "package_uninstall", _job)
+    return _start_job(user, "package_uninstall", _job, app_id=app_id, min_role="operator")
 
 
 class VenvReq(BaseModel):
@@ -1015,6 +1060,10 @@ async def rebuild_venv(
         raise HTTPException(404)
     if app_row.runtime != "python":
         raise HTTPException(400, "Only Python apps have a virtual environment.")
+    if restore_in_progress():
+        raise HTTPException(409, "A restore is in progress.")
+    if deploy.is_running(app_id):
+        raise HTTPException(409, "A deploy is running for this app — wait for it to finish.")
     if app_row.status in ("running", "starting", "stopping", "installing"):
         raise HTTPException(409, "Stop the app first.")
     try:
@@ -1024,6 +1073,10 @@ async def rebuild_venv(
 
     async def _job() -> dict:
         async with _app_lock(app_id), _package_locks.setdefault(app_id, asyncio.Lock()):
+            if restore_in_progress():
+                raise HTTPException(409, "A restore is in progress.")
+            if deploy.is_running(app_id):
+                raise HTTPException(409, "A deploy is running for this app — wait for it to finish.")
             with Session(engine) as s:
                 row = s.get(App, app_id)
                 if not row:
@@ -1058,10 +1111,11 @@ async def rebuild_venv(
                         s.add(row)
                         s.commit()
                 raise
+        _packages_cache.pop(app_id, None)
         audit_log(user.username, "app_venv_rebuild", f"app '{app_name}' (id={app_id}) python={version or 'default'}")
         return {"ok": True, "version": version}
 
-    return _start_job(user, "venv_rebuild", _job)
+    return _start_job(user, "venv_rebuild", _job, app_id=app_id, min_role="operator")
 
 
 @router.post("/apps/{app_id}/packages/sync")
@@ -1088,10 +1142,11 @@ async def sync_packages(
         if not row:
             raise HTTPException(404, "App no longer exists.")
         await _run_steps(row, steps)
+        _packages_cache.pop(app_id, None)
         audit_log(user.username, "package_sync", f"app '{row.name}' (id={app_id})")
         return {"ok": True}
 
-    return _start_job(user, "package_sync", _job)
+    return _start_job(user, "package_sync", _job, app_id=app_id, min_role="operator")
 
 
 @router.get("/apps/{app_id}/logs")
@@ -1142,8 +1197,14 @@ async def clear_app_logs(
     if not app_row:
         raise HTTPException(404)
     log_file = _app_log_file(app_row)
-    if log_file.exists():
-        await asyncio.to_thread(log_file.write_text, "", encoding="utf-8")
+
+    def _clear() -> None:
+        if log_file.exists() and not log_file.is_symlink():
+            fd = os.open(log_file, os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+            os.close(fd)
+
+    await asyncio.to_thread(_clear)
+    audit_log(user.username, "app_logs_clear", f"app '{app_row.name}' (id={app_id})")
     return {"ok": True}
 
 

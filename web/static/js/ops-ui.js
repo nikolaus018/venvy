@@ -28,7 +28,7 @@
         }
 
         // ── Activity ─────────────────────────────────────────────────────────────
-        let _auditOffset = 0;
+        let _auditOffset = 0, _auditReqSeq = 0;
         function openAuditModal() {
             const body = buildModal('audit-modal', 'Activity', { width: 'max-w-4xl' });
             body.innerHTML = `
@@ -53,12 +53,14 @@
 
         async function loadAudit(reset) {
             if (reset) { _auditOffset = 0; $id('aud-rows').innerHTML = ''; }
+            const seq = ++_auditReqSeq;
             const p = new URLSearchParams({ limit: 50, offset: _auditOffset });
             if (_val('aud-user')) p.set('user', _val('aud-user'));
             if (_val('aud-action')) p.set('action', _val('aud-action'));
             if (_val('aud-q')) p.set('q', _val('aud-q'));
             if ($id('aud-since').value !== '0') p.set('since_hours', $id('aud-since').value);
             const r = await apiJson('GET', `/audit?${p}`);
+            if (seq !== _auditReqSeq) return;
             if (!r.ok) { showToast(r.error, 'error'); return; }
             $id('aud-rows').insertAdjacentHTML('beforeend', r.data.entries.map(e => `
                 <tr><td class="px-3 py-2 whitespace-nowrap" style="color:var(--text3)" title="${escapeHtml(e.ts)}">${escapeHtml(fmtWhen(e.ts))}</td>
@@ -175,7 +177,11 @@
             };
             $id('ch-kind').addEventListener('change', renderFields);
             renderFields();
-            $id('ch-all').addEventListener('change', () => $id('ch-events').classList.toggle('opacity-40', $id('ch-all').checked) || $id('ch-events').classList.toggle('pointer-events-none', $id('ch-all').checked));
+            $id('ch-all').addEventListener('change', () => {
+                const all = $id('ch-all').checked;
+                $id('ch-events').classList.toggle('opacity-40', all);
+                $id('ch-events').classList.toggle('pointer-events-none', all);
+            });
             $id('ch-save').addEventListener('click', () => saveChannel(id));
             openModal('channel-modal');
         }
@@ -216,7 +222,10 @@
             };
             $id('al-scope').addEventListener('change', unit); $id('al-metric').addEventListener('change', unit); unit();
             $id('al-save').addEventListener('click', async () => {
+                const btn = $id('al-save');
+                btn.disabled = true;
                 const r = await apiJson('POST', '/system/alerts', { app_id: Number($id('al-scope').value), metric: $id('al-metric').value, threshold: Number($id('al-threshold').value), minutes: parseInt($id('al-minutes').value, 10) || 5 });
+                btn.disabled = false;
                 if (!r.ok) { showToast(r.error, 'error'); return; }
                 closeModal('alert-modal'); refreshNotify();
             });
@@ -225,6 +234,7 @@
 
         async function toggleAlert(id) {
             const r0 = _alertsData.find(x => x.id === id);
+            if (!r0) return;
             const r = await apiJson('PUT', `/system/alerts/${id}`, { app_id: r0.app_id, metric: r0.metric, threshold: r0.threshold, minutes: r0.minutes, enabled: !r0.enabled });
             if (!r.ok) { showToast(r.error, 'error'); return; }
             refreshNotify();
@@ -258,7 +268,7 @@
                 <p class="text-xs mb-3" style="color:var(--text3)">The same full backup as the button in Backups: the database, the key and every app. Server time.</p>
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     ${selectHtml('sch-preset', 'When', _BACKUP_PRESETS, preset)}
-                    <div id="sch-cron-row" class="${preset === 'custom' ? '' : 'hidden'}">${fieldHtml('sch-cron', 'Cron expression', { value: d.schedule, placeholder: '30 2 * * *', attrs: 'mono' })}</div>
+                    <div id="sch-cron-row" class="${preset === 'custom' ? '' : 'hidden'}">${fieldHtml('sch-cron', 'Cron expression', { value: d.schedule, placeholder: '30 2 * * *', mono: true })}</div>
                     ${fieldHtml('sch-keep', 'Keep the last', { type: 'number', value: String(d.keep), attrs: 'min="1" max="365"', hint: 'automatic backups (older ones are deleted)' })}
                 </div>
                 <div class="flex items-center gap-2 mt-3 flex-wrap">
@@ -366,7 +376,10 @@
             const st = _sharedEnv.state();
             if (st.error) { showToast(st.error, 'error'); _sharedEnv.focusProblem(); return; }
             if (st.untouched) { showToast('Nothing to save — these variables cannot be read here.', 'warn'); return; }
+            const btn = $id('genv-save');
+            if (btn) btn.disabled = true;
             const r = await apiJson('PUT', '/system/shared-env', { vars: st.vars });
+            if (btn) btn.disabled = false;
             if (!r.ok) { showToast(r.error, 'error'); return; }
             showToast('Saved — running apps pick this up when they restart', 'success');
             closeModal('shared-env-modal');

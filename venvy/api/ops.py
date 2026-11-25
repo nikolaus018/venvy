@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
-from venvy import monitor, notify, remote_backup, scheduler, shared_env
+from venvy import backup, monitor, notify, remote_backup, scheduler, shared_env
 from venvy.audit import audit_log
 from venvy.auth import check_admin, check_ip_allowlist, rate_limit_mutations
 from venvy.backup import _resolve_backup_path
@@ -18,6 +18,10 @@ from venvy.cron import CronError, validate as validate_cron
 from venvy.db import get_session
 from venvy.jobs import _start_job
 from venvy.models import AlertRule, App, AuditEntry, NotifyChannel, User
+
+_MAX_SHARED_ENV_VARS = 500
+_MAX_ALERT_RULES = 100
+_MAX_NOTIFY_CHANNELS = 50
 
 router = APIRouter(
     prefix="/api", tags=["ops"], dependencies=[Depends(check_ip_allowlist)]
@@ -68,6 +72,8 @@ class SharedEnvReq(BaseModel):
 
 def check_env_vars(values: Dict[str, str]) -> Dict[str, str]:
     from venvy.isolation import is_dangerous_env_var
+    if len(values) > _MAX_SHARED_ENV_VARS:
+        raise HTTPException(400, f"At most {_MAX_SHARED_ENV_VARS} shared environment variables are allowed.")
     for k, v in values.items():
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
             raise HTTPException(400, f"Invalid environment variable name: {k!r}")
@@ -135,7 +141,10 @@ def _validated_rule(req: AlertReq, session: Session) -> None:
 
 
 @router.post("/system/alerts")
-def create_alert(req: AlertReq, session: Session = Depends(get_session), admin: User = Depends(check_admin)):
+def create_alert(req: AlertReq, session: Session = Depends(get_session), admin: User = Depends(check_admin),
+                 _rl: None = Depends(rate_limit_mutations)):
+    if session.exec(select(func.count()).select_from(AlertRule)).one() >= _MAX_ALERT_RULES:
+        raise HTTPException(400, f"At most {_MAX_ALERT_RULES} alert rules are allowed.")
     _validated_rule(req, session)
     rule = AlertRule(app_id=req.app_id, metric=req.metric, threshold=req.threshold, minutes=req.minutes, enabled=req.enabled)
     session.add(rule)
@@ -146,7 +155,8 @@ def create_alert(req: AlertReq, session: Session = Depends(get_session), admin: 
 
 
 @router.put("/system/alerts/{rule_id}")
-def update_alert(rule_id: int, req: AlertReq, session: Session = Depends(get_session), admin: User = Depends(check_admin)):
+def update_alert(rule_id: int, req: AlertReq, session: Session = Depends(get_session), admin: User = Depends(check_admin),
+                 _rl: None = Depends(rate_limit_mutations)):
     rule = session.get(AlertRule, rule_id)
     if not rule:
         raise HTTPException(404)
@@ -160,7 +170,8 @@ def update_alert(rule_id: int, req: AlertReq, session: Session = Depends(get_ses
 
 
 @router.delete("/system/alerts/{rule_id}")
-def delete_alert(rule_id: int, session: Session = Depends(get_session), admin: User = Depends(check_admin)):
+def delete_alert(rule_id: int, session: Session = Depends(get_session), admin: User = Depends(check_admin),
+                 _rl: None = Depends(rate_limit_mutations)):
     rule = session.get(AlertRule, rule_id)
     if rule:
         session.delete(rule)
@@ -206,10 +217,13 @@ def list_channels(session: Session = Depends(get_session), _: User = Depends(che
 
 
 @router.post("/system/notify")
-def create_channel(req: ChannelReq, session: Session = Depends(get_session), admin: User = Depends(check_admin)):
+def create_channel(req: ChannelReq, session: Session = Depends(get_session), admin: User = Depends(check_admin),
+                   _rl: None = Depends(rate_limit_mutations)):
+    if session.exec(select(func.count()).select_from(NotifyChannel)).one() >= _MAX_NOTIFY_CHANNELS:
+        raise HTTPException(400, f"At most {_MAX_NOTIFY_CHANNELS} notification channels are allowed.")
     name = req.name.strip()
-    if not name or len(name) > 60:
-        raise HTTPException(400, "A channel needs a name of up to 60 characters.")
+    if not name or len(name) > 60 or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise HTTPException(400, "A channel needs a name of up to 60 characters with no control characters.")
     try:
         cfg = notify.check_config(req.kind, dict(req.config))
     except ValueError as exc:
@@ -223,13 +237,14 @@ def create_channel(req: ChannelReq, session: Session = Depends(get_session), adm
 
 
 @router.put("/system/notify/{channel_id}")
-def update_channel(channel_id: int, req: ChannelReq, session: Session = Depends(get_session), admin: User = Depends(check_admin)):
+def update_channel(channel_id: int, req: ChannelReq, session: Session = Depends(get_session), admin: User = Depends(check_admin),
+                   _rl: None = Depends(rate_limit_mutations)):
     ch = session.get(NotifyChannel, channel_id)
     if not ch:
         raise HTTPException(404)
     name = req.name.strip()
-    if not name or len(name) > 60:
-        raise HTTPException(400, "A channel needs a name of up to 60 characters.")
+    if not name or len(name) > 60 or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise HTTPException(400, "A channel needs a name of up to 60 characters with no control characters.")
     old = notify.load_config(ch) if ch.kind == req.kind else {}
     try:
         cfg = notify.check_config(req.kind, notify.merge_secrets(req.kind, dict(req.config), old))
@@ -244,7 +259,8 @@ def update_channel(channel_id: int, req: ChannelReq, session: Session = Depends(
 
 
 @router.delete("/system/notify/{channel_id}")
-def delete_channel(channel_id: int, session: Session = Depends(get_session), admin: User = Depends(check_admin)):
+def delete_channel(channel_id: int, session: Session = Depends(get_session), admin: User = Depends(check_admin),
+                   _rl: None = Depends(rate_limit_mutations)):
     ch = session.get(NotifyChannel, channel_id)
     if ch:
         session.delete(ch)
@@ -254,7 +270,11 @@ def delete_channel(channel_id: int, session: Session = Depends(get_session), adm
 
 
 @router.post("/system/notify/{channel_id}/test")
-async def test_channel(channel_id: int, _: User = Depends(check_admin), _rl: None = Depends(rate_limit_mutations)):
+async def test_channel(channel_id: int, session: Session = Depends(get_session), _: User = Depends(check_admin),
+                       _rl: None = Depends(rate_limit_mutations)):
+    if not session.get(NotifyChannel, channel_id):
+        raise HTTPException(404, "Channel not found.")
+    session.close()
     res = await notify.send_test(channel_id)
     return {"ok": res["status"] == "ok", "status": res["status"]}
 
@@ -274,7 +294,7 @@ def get_backup_schedule(_: User = Depends(check_admin)):
 
 
 @router.put("/system/backup/schedule")
-def put_backup_schedule(req: BackupScheduleReq, admin: User = Depends(check_admin)):
+def put_backup_schedule(req: BackupScheduleReq, admin: User = Depends(check_admin), _rl: None = Depends(rate_limit_mutations)):
     expr = req.schedule.strip()
     if expr:
         try:
@@ -290,7 +310,7 @@ def put_backup_schedule(req: BackupScheduleReq, admin: User = Depends(check_admi
 
 
 @router.put("/system/backup/remote")
-def put_backup_remote(cfg: Dict[str, object], admin: User = Depends(check_admin)):
+def put_backup_remote(cfg: Dict[str, object], admin: User = Depends(check_admin), _rl: None = Depends(rate_limit_mutations)):
     try:
         clean = remote_backup.clean(dict(cfg), remote_backup.load())
     except ValueError as exc:
@@ -301,7 +321,7 @@ def put_backup_remote(cfg: Dict[str, object], admin: User = Depends(check_admin)
 
 
 @router.delete("/system/backup/remote")
-def delete_backup_remote(admin: User = Depends(check_admin)):
+def delete_backup_remote(admin: User = Depends(check_admin), _rl: None = Depends(rate_limit_mutations)):
     remote_backup.save(None)
     audit_log(admin.username, "backup_remote_change", "removed")
     return {"ok": True}
@@ -341,12 +361,15 @@ async def upload_backup_offsite(filename: str, admin: User = Depends(check_admin
         audit_log(admin.username, "backup_remote_upload", f"{filename} -> {where}")
         return {"ok": True, "where": where}
 
-    return _start_job(admin, "backup_remote_upload", _job)
+    return _start_job(admin, "backup_remote_upload", _job, min_role="admin")
 
 
 @router.post("/system/backup/schedule/run")
 async def run_scheduled_backup_now(admin: User = Depends(check_admin), _rl: None = Depends(rate_limit_mutations)):
     """Run the scheduled backup (retention and off-site copy included) right now."""
+    op = backup.operation_status()
+    if op and op.get("state") == "running":
+        raise HTTPException(409, "A backup or restore is already running.")
     scheduler.start_scheduled_backup()
     audit_log(admin.username, "backup_schedule_run", "")
     return {"ok": True}

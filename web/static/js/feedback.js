@@ -50,7 +50,8 @@
             }
 
             // Cap the stack so a burst of errors can't cover the whole screen.
-            while (container.children.length >= _MAX_TOASTS) _dismissToast(container.firstElementChild);
+            const activeToasts = Array.from(container.children).filter(el => el.dataset.dismissed !== '1');
+            while (activeToasts.length >= _MAX_TOASTS) _dismissToast(activeToasts.shift());
 
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;

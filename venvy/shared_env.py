@@ -12,17 +12,23 @@ from venvy.models import SystemSetting
 KEY = "global_env"
 
 
-def load() -> Dict[str, str]:
-    """The shared variables ({} if none, or if they cannot be decrypted)."""
+def load(strict: bool = False) -> Dict[str, str]:
+    """The shared variables ({} if none, or if they cannot be decrypted unless strict=True)."""
     try:
         with Session(engine) as s:
             row = s.get(SystemSetting, KEY)
         if not row or not row.value:
             return {}
         ok, plain = _try_decrypt_secret(row.value)
-        data = json.loads(plain) if ok and plain else {}
+        if not ok:
+            if strict:
+                raise RuntimeError("Could not decrypt shared environment variables.")
+            return {}
+        data = json.loads(plain) if plain else {}
         return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
     except Exception as exc:
+        if strict:
+            raise
         logging.warning(f"Could not read the shared environment variables: {exc}")
         return {}
 

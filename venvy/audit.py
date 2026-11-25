@@ -1,6 +1,6 @@
 """Audit trail: who did what, kept in the database (and the log).
 
-Entries older than AUDIT_RETENTION_DAYS are dropped by the supervisor."""
+Entries older than AUDIT_RETENTION_DAYS are dropped periodically by monitor._flush."""
 import contextvars
 import datetime
 import logging
@@ -9,14 +9,14 @@ import re
 
 from sqlmodel import Session, delete
 
-AUDIT_RETENTION_DAYS = int(os.getenv("VENVY_AUDIT_RETENTION_DAYS", "180"))
+AUDIT_RETENTION_DAYS = max(1, int(os.getenv("VENVY_AUDIT_RETENTION_DAYS", "180")))
 
 # Set per request by the ASGI middleware in app.py, so an entry says where
 # the action came from without every caller having to pass the address along.
 _client_ip: contextvars.ContextVar = contextvars.ContextVar("venvy_client_ip", default="")
 
 
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u0085\u2028\u2029]")
 
 
 def set_client_ip(ip: str):
@@ -26,6 +26,7 @@ def set_client_ip(ip: str):
 def audit_log(username: str, action: str, detail: str = "") -> None:
     """Record an action. Never raises: the audit trail failing must not undo
     what it describes."""
+    detail = detail or ""
     suffix = f" — {detail}" if detail else ""
     # One entry, one log line: a newline in a name someone typed (a job, a
     # token, a hostname) must not start a line of its own that reads like
@@ -36,7 +37,7 @@ def audit_log(username: str, action: str, detail: str = "") -> None:
         from venvy.db import engine
         from venvy.models import AuditEntry
         with Session(engine) as s:
-            s.add(AuditEntry(username=username[:128], action=action[:64], detail=detail[:2000], ip=_client_ip.get()[:64]))
+            s.add(AuditEntry(username=(username or "")[:128], action=(action or "")[:64], detail=detail[:2000], ip=_client_ip.get()[:64]))
             s.commit()
     except Exception as exc:
         logging.warning(f"Could not write the audit entry: {exc}")

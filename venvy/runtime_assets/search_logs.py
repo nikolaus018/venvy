@@ -8,11 +8,41 @@ Reads one JSON object on stdin:  {"files": [...], "query": "...", "regex": bool,
 {"matches": [{"file", "line", "text", "before": [...], "after": [...]}], "truncated": bool,
  "scanned_bytes": int}."""
 import json
+import os
 import re
+import stat
 import sys
 
 MAX_LINE = 4000
+MAX_LINE_BYTES = 64 * 1024
 MAX_SCAN_BYTES = 400 * 1024 * 1024
+_CHUNK_BYTES = 64 * 1024
+_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
+def _iter_lines_bounded(fh):
+    """Yield (byte_count, decoded_line) chunks without ever loading an unbounded
+    newline-free file into memory."""
+    pending = b""
+    while True:
+        chunk = fh.read(_CHUNK_BYTES)
+        if not chunk:
+            if pending:
+                yield len(pending), pending.rstrip(b"\r\n").decode("utf-8", errors="replace")[:MAX_LINE]
+            return
+        pending += chunk
+        while True:
+            idx = pending.find(b"\n")
+            if idx != -1:
+                raw_line = pending[:idx + 1]
+                pending = pending[idx + 1:]
+                yield len(raw_line), raw_line.rstrip(b"\r\n").decode("utf-8", errors="replace")[:MAX_LINE]
+            elif len(pending) >= MAX_LINE_BYTES:
+                raw_line = pending[:MAX_LINE_BYTES]
+                pending = pending[MAX_LINE_BYTES:]
+                yield len(raw_line), raw_line.rstrip(b"\r\n").decode("utf-8", errors="replace")[:MAX_LINE]
+            else:
+                break
 
 
 def main() -> None:
@@ -28,17 +58,32 @@ def main() -> None:
     ctx = max(0, min(int(req.get("context", 0)), 5))
     matches, scanned, truncated = [], 0, False
     for path in req["files"]:
-        name = path.rsplit("/", 1)[-1]
+        name = os.path.basename(path)
         try:
-            fh = open(path, "r", encoding="utf-8", errors="replace")
+            fd = os.open(path, _OPEN_FLAGS)
         except OSError:
+            continue
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                os.close(fd)
+                continue
+            try:
+                os.set_blocking(fd, True)
+            except (OSError, AttributeError):
+                pass
+            fh = os.fdopen(fd, "rb")
+        except OSError:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
             continue
         with fh:
             window = []
             pending = []        # matches still collecting their "after" lines
-            for n, raw in enumerate(fh, 1):
-                scanned += len(raw)
-                line = raw.rstrip("\n")[:MAX_LINE]
+            for n, (nbytes, line) in enumerate(_iter_lines_bounded(fh), 1):
+                scanned += nbytes
                 for m in pending:
                     if len(m["after"]) < ctx:
                         m["after"].append(line)

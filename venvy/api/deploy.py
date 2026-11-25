@@ -3,8 +3,10 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 import shutil
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Optional
 
@@ -42,18 +44,28 @@ def _app_or_404(session: Session, app_id: int) -> App:
     return app
 
 
-_USERINFO_RE = re.compile(r"\A(https://)[^/@]+@")
+_USERINFO_RE = re.compile(r"\A((?:https|ssh)://)[^/@]+@")
 
 
 def _redact_url(url: str) -> str:
-    """https://user:password@host/… with the credentials taken out."""
+    """https://user:password@host/… or ssh://user@host/… with credentials taken out."""
     return _USERINFO_RE.sub(r"\1***@", url or "")
 
 
 def _url_host(url: Optional[str]) -> str:
-    """The host an https:// URL sends a stored token to ('' for anything else)."""
-    m = re.match(r"https://(?:[^/@]+@)?([^/:]+)", url or "")
-    return m.group(1).lower() if m else ""
+    """The host[:port] an https:// URL sends a stored token to ('' for anything else)."""
+    raw = (url or "").strip()
+    if not raw.startswith("https://"):
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return ""
+        port = parsed.port
+        return f"{host}:{port}" if port else host
+    except ValueError:
+        return ""
 
 
 def _git_info(app: App, reveal: bool, operator: bool = True) -> dict:
@@ -79,9 +91,13 @@ def get_deploy(app_id: int, request: Request, session: Session = Depends(get_ses
     # (a read-only one must not be a way to get hold of it).
     operator = user.role in ("admin", "operator")
     reveal = operator and not getattr(request.state, "via_token", False)
+    st = deploy.state(app_id)
+    if not operator:
+        # Deploy logs may include build/command output that viewers shouldn't read.
+        st = {**st, "log": []}
     return {
         "git": _git_info(app, reveal=reveal, operator=operator),
-        "state": deploy.state(app_id),
+        "state": st,
         "last": {"at": app.last_deploy_at.isoformat() if app.last_deploy_at else None,
                  "status": app.last_deploy_status, "commit": app.last_deploy_commit},
         "releases": deploy.list_releases(app_id),
@@ -228,33 +244,39 @@ async def make_release(
     _rl: None = Depends(rate_limit_mutations),
 ):
     """Mark the app as it is now as a point to return to (a snapshot of its files, or the git commit)."""
-    from venvy.process import restore_in_progress
     if restore_in_progress():
         raise HTTPException(409, "A backup restore is in progress.")
     app = _app_or_404(session, app_id)
     if app.status == "installing":
         raise HTTPException(409, "The app is still being installed.")
+    username = user.username
 
     async def _job() -> dict:
         if deploy.is_running(app_id):
             raise HTTPException(409, "A deploy is running for this app.")
         async with deploy._lock(app_id):
-            now = await deploy.current_commit(app)
+            with Session(engine) as s:
+                row = s.get(App, app_id)
+            if not row:
+                raise HTTPException(404, "App no longer exists.")
+            if row.status == "installing":
+                raise HTTPException(409, "The app is still being installed.")
+            now = await deploy.current_commit(row)
             if now:
-                deploy._add_release(app_id, "manual", now[0], now[1], None, 0, user.username)
+                deploy._add_release(app_id, "manual", now[0], now[1], None, 0, username)
             else:
                 log = deploy._Log(app_id, [], persist=False)
                 try:
-                    name, size = await deploy._snapshot(app, log)
+                    name, size = await deploy._snapshot(row, log)
                 except deploy.DeployError as exc:
                     raise HTTPException(500, str(exc))
                 finally:
                     log.close()
-                deploy._add_release(app_id, "manual", None, "Snapshot", name, size, user.username)
-        audit_log(user.username, "app_release_create", f"app '{app.name}' (id={app_id})")
+                deploy._add_release(app_id, "manual", None, "Snapshot", name, size, username)
+        audit_log(username, "app_release_create", f"app '{row.name}' (id={app_id})")
         return {"ok": True}
 
-    return _start_job(user, "release", _job)
+    return _start_job(user, "release", _job, app_id=app_id, min_role="operator")
 
 
 @router.delete("/apps/{app_id}/releases/{release_id}")
@@ -327,6 +349,10 @@ async def deploy_webhook(app_id: int, request: Request):
     if len(_hook_hits) > 5000:
         for k in [k for k, v in _hook_hits.items() if not v or now - v[-1] >= 60]:
             _hook_hits.pop(k, None)
+        if len(_hook_hits) > 5000:
+            oldest = sorted(_hook_hits.items(), key=lambda kv: kv[1][-1] if kv[1] else 0.0)
+            for k, _ in oldest[:len(_hook_hits) - 5000]:
+                _hook_hits.pop(k, None)
     body = await request.body()
     with Session(engine) as s:
         app = s.get(App, app_id)
@@ -335,6 +361,7 @@ async def deploy_webhook(app_id: int, request: Request):
         branch = app.git_branch if app else "main"
         name = app.name if app else ""
         status = app.status if app else None
+        has_source = bool(app and (app.git_url or app.build_command))
     # One answer for "no such app", "no secret" and "wrong secret".
     if not secret or not deploy.verify_webhook(request.headers, body, secret):
         raise HTTPException(401, "Invalid signature or token.")
@@ -346,6 +373,10 @@ async def deploy_webhook(app_id: int, request: Request):
         return {"ok": True, "deployed": False, "reason": f"'{event}' event, not a push"}
     if not enabled:
         return {"ok": True, "deployed": False, "reason": "auto-deploy is off for this app"}
+    if restore_in_progress():
+        return {"ok": True, "deployed": False, "reason": "a backup restore is in progress"}
+    if not has_source:
+        return {"ok": True, "deployed": False, "reason": "no git repository or build command configured"}
     pushed, skip = deploy.webhook_push(request.headers, body)
     if pushed is not None and pushed != branch:
         return {"ok": True, "deployed": False, "reason": f"push to {pushed[:200]}, not {branch}"}
@@ -392,7 +423,7 @@ async def duplicate_app(
     await asyncio.to_thread(user_dir.mkdir, exist_ok=True)
     new_dir = user_dir / slug
     if await asyncio.to_thread(new_dir.exists):
-        slug = f"{slug}-{int(time.time())}"
+        slug = f"{slug}-{int(time.time())}-{secrets.token_hex(3)}"
         new_dir = user_dir / slug
     await asyncio.to_thread(new_dir.mkdir, parents=True, mode=0o750)
     new = App(
@@ -419,6 +450,8 @@ async def duplicate_app(
             from venvy.api.apps import _create_environment
             with Session(engine) as s:
                 src_row, row = s.get(App, app_id), s.get(App, new_id)
+            if not src_row or not row:
+                raise HTTPException(404, "App no longer exists.")
             await asyncio.to_thread(_ensure_app_user, row)
             log = deploy._Log(new_id, [], persist=False)
             try:
@@ -426,11 +459,13 @@ async def duplicate_app(
                 await deploy._restore_snapshot(row, archive, log, RELEASES_TMP(new_id))
             finally:
                 log.close()
-                shutil.rmtree(RELEASES_TMP(new_id), ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, RELEASES_TMP(new_id), True)
             await asyncio.to_thread(_chown_app_dir, row)
             await _create_environment(row, row.runtime_version)
             with Session(engine) as s:
                 row = s.get(App, new_id)
+                if not row:
+                    raise HTTPException(404, "App no longer exists.")
                 row.status = "stopped"
                 s.add(row)
                 s.commit()
@@ -449,7 +484,7 @@ async def duplicate_app(
             await asyncio.to_thread(_delete_app_user, new_id)
             raise
 
-    return {**_start_job(user, "app_duplicate", _job), "app_id": new_id}
+    return {**_start_job(user, "app_duplicate", _job, app_id=new_id, min_role="operator"), "app_id": new_id}
 
 
 def RELEASES_TMP(app_id: int) -> Path:

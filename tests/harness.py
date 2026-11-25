@@ -94,15 +94,19 @@ def server(repo, port, entry="main.py", env=None, data=None, keep=False):
     base = f"http://127.0.0.1:{port}"
     _DATA_DIRS[base] = data
     try:
+        ready = False
         for _ in range(240):
             try:
                 if httpx.get(base + "/api/health", timeout=1).status_code == 200:
+                    ready = True
                     break
             except Exception:
                 pass
             if srv.poll() is not None:
                 raise RuntimeError("server died:\n" + (data / "server.log").read_text()[-3000:])
             time.sleep(0.5)
+        if not ready:
+            raise RuntimeError("server timed out waiting for /api/health:\n" + (data / "server.log").read_text(errors="replace")[-3000:])
         yield base, data, srv
     except BaseException:
         # The server's side of a crashed script; the data dir is about to go.
@@ -110,11 +114,15 @@ def server(repo, port, entry="main.py", env=None, data=None, keep=False):
             print("--- server.log (last 6000 chars) ---\n" + (data / "server.log").read_text(errors="replace")[-6000:])
         raise
     finally:
-        srv.send_signal(signal.SIGINT)
-        try:
-            srv.wait(15)
-        except subprocess.TimeoutExpired:
-            srv.kill()
+        _DATA_DIRS.pop(base, None)
+        if srv.poll() is None:
+            srv.send_signal(signal.SIGINT)
+            try:
+                srv.wait(15)
+            except subprocess.TimeoutExpired:
+                srv.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    srv.wait(5)
         log.close()
         if not keep:
             shutil.rmtree(data, ignore_errors=True)
@@ -176,6 +184,7 @@ class Sink:
 
     def __init__(self, status=200):
         self.got = []            # [{"method", "path", "headers", "body"}]
+        self._lock = _threading.Lock()
         self.status = status
         sink = self
 
@@ -183,7 +192,8 @@ class Sink:
             def _take(self):
                 n = int(self.headers.get("content-length") or 0)
                 body = self.rfile.read(n) if n else b""
-                sink.got.append({"method": self.command, "path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
+                with sink._lock:
+                    sink.got.append({"method": self.command, "path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
                 self.send_response(sink.status)
                 self.send_header("content-length", "0")
                 self.end_headers()
@@ -199,12 +209,15 @@ class Sink:
         self.url = f"http://127.0.0.1:{self.port}"
 
     def json(self):
-        return [_json.loads(g["body"]) for g in self.got if g["body"][:1] == b"{"]
+        with self._lock:
+            snap = list(self.got)
+        return [_json.loads(g["body"]) for g in snap if g["body"][:1] == b"{"]
 
     def wait(self, pred, timeout=30):
         end = time.time() + timeout
         while time.time() < end:
-            hit = [g for g in self.got if pred(g)]
+            with self._lock:
+                hit = [g for g in self.got if pred(g)]
             if hit:
                 return hit
             time.sleep(0.3)
@@ -212,6 +225,7 @@ class Sink:
 
     def close(self):
         self.httpd.shutdown()
+        self.httpd.server_close()
 
 
 SERVER_APP = '''\

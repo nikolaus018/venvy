@@ -5,6 +5,22 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v4.9.5
+
+- Setting an app's custom domain now checks port ownership the same way Cloudflare tunnel routes do, so an app cannot proxy requests to Venvy's own port or another service listening on localhost.
+- Creating/deleting users, changing user app access, and restoring a full backup now require a browser session (an API token can no longer perform them), and `POST /api/auth/logout` verifies the session key before revoking the session.
+- Viewers no longer receive raw deploy logs in `GET /api/apps/{id}/deploy`; restricted operators only see their own apps' ports in `/api/system/ports`; and background job results enforce current role and per-app access.
+- Hardened the WebSocket terminal handshake: IP allowlist, Origin/scheme checks, and pre-auth connection limits run before accepting the upgrade, and viewers are rejected immediately.
+- Hardened process isolation, runtime helpers, and file safety: root wrappers (`systemd-run`, `setpriv`) receive only minimal host environment variables and pass the app's environment through an unprivileged helper; dangerous env var names (`PYTHONSTARTUP`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONINSPECT`, `BASH_ENV`, `LD_*`, `DBUS_*`, `SYSTEMD_*`, etc.) are blocked across app env, shared env, and terminal, while ordinary settings such as `SSL_CERT_FILE`, `TMPDIR` and `XDG_*` stay allowed; the PHP router and static file server block dot-segments, `//` bypasses, symlink escapes, and private files (`composer.json`, `logs/`, `app.log`); and backup/restore rejects symlinks in sidecar/staging paths and verifies restored databases and keys before swapping.
+- Hardened outbound notifications, off-site backups, and domain proxy: blocked cloud metadata IPs (`169.254.169.254`, `fd00:ec2::254`, etc.), fixed WebSocket proxy hop-by-hop headers and idle timeouts, capped proxy/upload/log-search resource usage, validated `ssh://` URLs and S3/WebDAV/scp inputs, and tightened Cloudflare tunnel ingress locking and DNS cleanup.
+- Fixed cron weekday wrap-around ranges (`fri-sun`), stepped start values (`1/2`), wildcard list deduplication (`1,*`), pre-release version ordering, and release/snapshot race conditions.
+- Hardened the installer and release pipeline: added hash-verified `requirements.lock` (`pip install --require-hashes`), verified Ed25519 signatures before parsing `.sha256`, enforced fail-closed downgrade protection in `update.sh` before extracting the new installer, enabled switching back from `--shared-user` to `--app-users`, backed up unit files and `update.sh` for rollback, and added systemd hardening directives for `--shared-user`.
+- Venvy now refuses to start, with the reason in its log, when per-app users are requested but the host lacks `setpriv`/`useradd`, instead of answering every request with an error.
+- Git deploys keep using the host's `https_proxy`/`all_proxy` while still ignoring a proxy written into the app's own `.git/config`.
+- Resending the first chunk of an upload no longer hangs it, and an abandoned backup upload no longer keeps its disk space reserved after it is cleaned up.
+- Files created or uploaded in an app's folder are now `0600` (the app's own user only) instead of `0644`, and a file path leaving the app's folder by `..` or as an absolute path is refused before anything on disk is looked up.
+- Fixed frontend bugs and UX issues: backup restore confirmation guard, toast auto-dismiss loop, disk-full (507) upload reporting, auth form and cache clearing on logout/session expiry, terminal reconnect races, stale app selection races during async fetches, service worker offline fallback and cache cleanup (`venvy-v4`), keyboard shortcuts for viewers, and pinch-to-zoom accessibility.
+
 ## v4.9.4
 
 - Scheduled job output is now masked where it is stored and shown, not only in failure notifications. Values of the app's and the shared environment variables (6 characters or longer) appear as `***`.

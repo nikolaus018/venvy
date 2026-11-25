@@ -18,9 +18,11 @@
         }
 
         // ── Sidebar ──────────────────────────────────────────────────────────────
+        let _sidebarOverlayTimer = null;
         function openSidebar() {
             const sidebar = document.getElementById('main-sidebar');
             const overlay = document.getElementById('sidebar-overlay');
+            if (_sidebarOverlayTimer) { clearTimeout(_sidebarOverlayTimer); _sidebarOverlayTimer = null; }
             sidebar.classList.remove('-translate-x-full');
             sidebar.style.transform = ''; sidebar.style.transition = '';
             overlay.style.transition = ''; overlay.style.opacity = ''; overlay.style.display = '';
@@ -30,11 +32,12 @@
         function closeSidebar() {
             const sidebar = document.getElementById('main-sidebar');
             const overlay = document.getElementById('sidebar-overlay');
+            if (_sidebarOverlayTimer) { clearTimeout(_sidebarOverlayTimer); _sidebarOverlayTimer = null; }
             sidebar.classList.add('-translate-x-full');
             sidebar.style.transform = ''; sidebar.style.transition = '';
             overlay.style.transition = ''; overlay.style.opacity = ''; overlay.style.display = '';
             overlay.classList.add('opacity-0');
-            setTimeout(() => overlay.classList.add('hidden'), 300);
+            _sidebarOverlayTimer = setTimeout(() => { _sidebarOverlayTimer = null; overlay.classList.add('hidden'); }, 300);
         }
         function toggleSidebar() {
             const isClosed = document.getElementById('main-sidebar').classList.contains('-translate-x-full');
@@ -109,7 +112,9 @@
                             if (!prev || prev.port !== app.port || prev.external_url !== app.external_url) {
                                 _updateNetworkCard(app);
                                 const portEl = document.getElementById('setting-port');
-                                if (portEl && (!prev || prev.port !== app.port)) portEl.value = app.port || '';
+                                if (portEl && (!prev || prev.port !== app.port) && document.activeElement !== portEl && !isSettingsDirty()) {
+                                    portEl.value = _formatAppPorts(app);
+                                }
                                 // Clear port poll timer if port just appeared
                                 if (app.port && _portPollTimer) { clearInterval(_portPollTimer); _portPollTimer = null; }
                             }

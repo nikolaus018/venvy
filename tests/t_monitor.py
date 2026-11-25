@@ -163,9 +163,15 @@ with server(repo, 55022, env={"VENVY_METRICS_FLUSH_SEC": "5", "VENVY_BACKUP_KEEP
             if last != before:
                 return last
             time.sleep(0.5)
-    # The list of the schedule's own backups is a plain setting; whatever it holds,
-    # only backup files are ever pruned from it.
-    cl.req("PUT", "/api/system/settings/backup_scheduled_names", json={"value": json.dumps(["../data.db", files[0]["filename"]])})
+    # backup_scheduled_names is reserved (not writable through the generic API),
+    # and even if tampered with in SQLite only real backup filenames are pruned.
+    check("backup_scheduled_names is reserved in settings API",
+          cl.req("PUT", "/api/system/settings/backup_scheduled_names",
+                 json={"value": json.dumps(["../data.db", files[0]["filename"]])}).status_code == 400)
+    con = sqlite3.connect(str(d / "data.db"))
+    con.execute("INSERT OR REPLACE INTO systemsetting (key, value) VALUES ('backup_scheduled_names', ?)",
+                (json.dumps(["../data.db", files[0]["filename"]]),))
+    con.commit(); con.close()
     cl.req("PUT", "/api/system/backup/schedule", json={"schedule": "", "keep": 3})
     runs = [run_scheduled() for _ in range(3)]
     check("scheduled runs succeed", all(r and r["ok"] for r in runs), str(runs))

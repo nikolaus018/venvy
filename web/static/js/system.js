@@ -429,14 +429,15 @@
             const what = op?.kind === 'restore' ? 'Restore' : 'Backup';
             const pct = p => p == null ? '…' : ` ${p}%`;
 
-            const busy = up ? `Uploading${pct(Math.floor(up.sent * 100 / up.total))}`
+            const upPct = up ? (up.total > 0 ? Math.floor(up.sent * 100 / up.total) : 100) : 0;
+            const busy = up ? `Uploading${pct(upPct)}`
                 : running ? `${op.kind === 'restore' ? 'Restoring' : 'Backing up'}${pct(op.kind === 'backup' ? op.percent : null)}` : '';
             const nav = document.getElementById('system-nav-op');
             nav.textContent = busy;
             nav.classList.toggle('hidden', !busy);
             const summary = document.getElementById('sys-backups-summary');
             if (summary) {
-                summary.textContent = up ? `Uploading ${up.name} — ${Math.floor(up.sent * 100 / up.total)}%`
+                summary.textContent = up ? `Uploading ${up.name} — ${upPct}%`
                     : running ? `${op.steps[op.step]}${op.percent != null ? ` — ${op.percent}%` : '…'}`
                         : _backupsSummaryIdle;
             }
@@ -496,8 +497,9 @@
             if (up) {
                 const sent = Math.min(up.sent, up.total), secs = (Date.now() - up.startedAt) / 1000;
                 const checking = sent >= up.total;
-                _setOpBar(panel.querySelector('[data-op-fill]'), checking ? null : Math.floor(sent * 100 / up.total));
-                panel.querySelector('[data-op-side]').textContent = checking ? '' : `${Math.floor(sent * 100 / up.total)}%`;
+                const pctNow = up.total > 0 ? Math.floor(sent * 100 / up.total) : 100;
+                _setOpBar(panel.querySelector('[data-op-fill]'), checking ? null : pctNow);
+                panel.querySelector('[data-op-side]').textContent = checking ? '' : `${pctNow}%`;
                 panel.querySelector('[data-op-detail]').textContent = checking
                     ? 'Upload complete — the server is checking that this is a Venvy backup…'
                     : `${formatBytes(sent)} of ${formatBytes(up.total)}${secs > 2 ? ` · ${formatBytes(sent / secs)}/s` : ''}`;
@@ -520,6 +522,10 @@
             if (!file || _backupUpload) return;
             if (!/\.(tar\.gz|tgz)$/i.test(file.name)) {
                 showToast('Choose the .tar.gz file that downloading a backup gave you.', 'error', 6000);
+                return;
+            }
+            if (file.size === 0) {
+                showToast('Backup file is empty.', 'error', 6000);
                 return;
             }
             const ctl = { cancelled: false, xhrs: new Set() };
@@ -557,7 +563,7 @@
                         continue;
                     }
                     const retryable = !r || r.status >= 500 || r.status === 408 || r.status === 429;
-                    if (!retryable || r.status === 507 || ++retries > UPLOAD_MAX_RETRIES) throw new Error(_uploadErrorText(r));
+                    if (!retryable || r?.status === 507 || ++retries > UPLOAD_MAX_RETRIES) throw new Error(_uploadErrorText(r));
                     progress(start);
                     await new Promise(res => setTimeout(res, Math.min(1000 * 2 ** (retries - 1), 15000)));
                 }
@@ -634,6 +640,12 @@
 
         async function confirmRestoreBackup() {
             if (!_pendingRestoreFilename) return;
+            const typed = document.getElementById('restore-backup-confirm-input')?.value || '';
+            if (typed !== 'RESTORE') {
+                showToast('Type RESTORE exactly to confirm.', 'warn');
+                document.getElementById('restore-backup-confirm-input')?.focus();
+                return;
+            }
             const btn = document.getElementById('restore-backup-confirm-btn');
             const original = btn.innerHTML;
             btn.disabled = true;
@@ -642,7 +654,7 @@
                 const res = await fetch(`${API}/system/backup/restore/${encodeURIComponent(_pendingRestoreFilename)}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ confirm: 'RESTORE' }),
+                    body: JSON.stringify({ confirm: typed }),
                 });
                 if (!res.ok) {
                     const e = await res.json().catch(() => ({ detail: 'Restore failed' }));

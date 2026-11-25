@@ -2,8 +2,10 @@
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
         // ── Context Menu ─────────────────────────────────────────────────────────
+        let _ctxCloseTimer = null;
         function showContextMenu(e, target) {
             e.preventDefault();
+            if (_ctxCloseTimer) { clearTimeout(_ctxCloseTimer); _ctxCloseTimer = null; }
             const menu = document.getElementById('ctx-menu');
             const cutBtn = document.getElementById('ctx-cut');
             const copyBtn = document.getElementById('ctx-copy');
@@ -64,9 +66,10 @@
         });
         function closeCtxMenu() {
             const menu = document.getElementById('ctx-menu');
+            if (_ctxCloseTimer) { clearTimeout(_ctxCloseTimer); _ctxCloseTimer = null; }
             menu.classList.remove('scale-100', 'opacity-100');
             menu.classList.add('scale-95', 'opacity-0');
-            setTimeout(() => menu.classList.add('hidden'), 100);
+            _ctxCloseTimer = setTimeout(() => { _ctxCloseTimer = null; menu.classList.add('hidden'); }, 100);
         }
 
         // Context Actions helper to get all selection items

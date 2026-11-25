@@ -35,7 +35,7 @@ from venvy.models import App, SystemSetting, User
 from venvy.process import set_restore_in_progress, stop_app_process_logic
 from venvy.safefs import foreign_hardlink, is_safe_path
 from venvy.terminal import terminal_manager
-from venvy.uploads import _UPLOAD_ID_RE, _UPLOAD_STALE_SEC
+from venvy.uploads import _UPLOAD_ID_RE, _purge_stale_parts
 
 
 # ---------------------------------------------------------------------------
@@ -433,12 +433,20 @@ def _create_full_backup_archive(
         tmp_db.unlink(missing_ok=True)
 
     report("finish")
-    try:
-        os.link(str(tmp_archive), str(dest))
-    except FileExistsError:
-        raise HTTPException(409, "A backup for this exact timestamp already exists — try again.")
-    finally:
-        tmp_archive.unlink(missing_ok=True)
+    dest_final = None
+    for i in range(60):
+        ts = (utc_now() if i == 0 else utc_now() + datetime.timedelta(seconds=i)).strftime("%Y%m%d-%H%M%S")
+        cand = dest if i == 0 else (BACKUP_DIR / f"full-{ts}.tar.gz")
+        try:
+            os.link(str(tmp_archive), str(cand))
+            dest_final = cand
+            break
+        except FileExistsError:
+            continue
+    tmp_archive.unlink(missing_ok=True)
+    if dest_final is None:
+        raise HTTPException(409, "Could not find a free filename for this backup — try again.")
+    dest = dest_final
     dest.chmod(0o600)
 
     # Retention: keep the newest _BACKUP_KEEP full backups. Not counting the
@@ -446,9 +454,14 @@ def _create_full_backup_archive(
     # as many of its own as it is set to, which used to be cut down to
     # _BACKUP_KEEP here whatever it said.
     exempt = _scheduled_backup_names() | ({dest.name} if scheduled else set())
-    fulls = sorted((f for f in BACKUP_DIR.glob("full-*.tar.gz") if f.name not in exempt),
-                   key=lambda f: f.stat().st_mtime, reverse=True)
-    for old in fulls[_BACKUP_KEEP:]:
+    fulls_with_mtime = []
+    for f in BACKUP_DIR.glob("full-*.tar.gz"):
+        if f.name in exempt:
+            continue
+        with contextlib.suppress(OSError):
+            fulls_with_mtime.append((f.stat().st_mtime, f))
+    fulls_with_mtime.sort(key=lambda x: x[0], reverse=True)
+    for _, old in fulls_with_mtime[_BACKUP_KEEP:]:
         if protect is not None and old.name == protect.name:
             continue  # e.g. the backup a restore is about to read
         with contextlib.suppress(OSError):
@@ -520,20 +533,32 @@ def _backup_upload_part(user_id: int, upload_id: str) -> Path:
 
 
 def _purge_stale_backup_uploads() -> None:
-    cutoff = utc_now().timestamp() - _UPLOAD_STALE_SEC
-    for part in BACKUP_DIR.glob(".upload-*.part"):
-        with contextlib.suppress(OSError):
-            if part.stat().st_mtime < cutoff:
-                part.unlink()
+    # Also drops the parts' disk reservations (venvy.uploads), which would
+    # otherwise outlive the files and refuse later uploads with 507.
+    _purge_stale_parts(BACKUP_DIR, ".upload-*.part")
+
+
+_BACKUP_MAX_MEMBERS = 500_000
 
 
 def _adopt_uploaded_backup(part: Path, original_name: str) -> Path:
     """Check that a finished upload is a Venvy backup and move it into the
     backup list. Blocking. Removes the part and raises 400 if it is not one."""
+    import posixpath
     try:
+        found = False
         with tarfile.open(part, "r:gz") as tar:
             # Venvy writes data.db first, so this normally reads one header.
-            found = any(m.isreg() and m.name.lstrip("./") == "data.db" for m in tar)
+            for idx, m in enumerate(tar):
+                if idx >= _BACKUP_MAX_MEMBERS:
+                    raise HTTPException(400, "Backup archive has too many entries.")
+                norm = posixpath.normpath(m.name).lstrip("/")
+                if m.isreg() and norm == "data.db":
+                    found = True
+                    break
+    except HTTPException:
+        part.unlink(missing_ok=True)
+        raise
     except (tarfile.TarError, OSError, EOFError):
         part.unlink(missing_ok=True)
         raise HTTPException(400, "That file is not a Venvy backup — expected the .tar.gz a backup download gives you.")
@@ -559,14 +584,16 @@ def _adopt_uploaded_backup(part: Path, original_name: str) -> Path:
 
 
 def _restore_tar_filter(member, dest_path):
-    """tarfile's "data" filter, except for symlinks: every venv links
-    bin/python3 to the system interpreter (and other names to that link),
+    """tarfile's "data" filter, except for symlinks inside apps/: every venv
+    links bin/python3 to the system interpreter (and other names to that link),
     which "data" rejects as pointing outside the archive — so restoring any
-    Python app used to fail. A symlink by itself writes nothing; the "tar"
-    filter still refuses any later member whose real path (following links
-    extracted earlier) would land outside the staging directory."""
+    Python app used to fail. Symlinks outside apps/ are never allowed, and
+    archive uid/gid are stripped so root never lchowns to arbitrary owners."""
     if member.issym():
-        return tarfile.tar_filter(member, dest_path)
+        filtered = tarfile.tar_filter(member, dest_path)
+        if filtered is not None:
+            filtered = filtered.replace(uid=0, gid=0, uname="", gname="")
+        return filtered
     if not (member.isreg() or member.isdir() or member.islnk()):
         # FIFOs, sockets, devices. "data" doesn't skip these, it aborts the
         # whole extraction — so one named pipe in one app's directory made
@@ -661,26 +688,53 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
 
             total = 0
             members = tar.getmembers()
+            if len(members) > _BACKUP_MAX_MEMBERS:
+                raise ValueError("Backup archive contains too many entries.")
             links = {_norm_tar_name(m.name) for m in members if m.issym() or m.islnk()}
             links.discard("")
+            seen_paths = set()
             for member in members:
                 norm = _norm_tar_name(member.name)
                 if not norm or norm == ".." or norm.startswith("../") or member.name.startswith("/"):
                     if member.name not in (".", "./"):
                         raise ValueError(f"Backup archive contains an unsafe path: {member.name}")
+                    continue
+                # Only Venvy's own top-level entries are allowed — rejects
+                # SQLite sidecars (data.db-wal, data.db-shm, data.db-journal)
+                # that sqlite3.connect() would open/follow as root.
+                top = norm.split("/", 1)[0]
+                if top not in ("data.db", _VENVY_KEY_FILE.name, "apps"):
+                    raise ValueError(f"Backup archive contains an unexpected top-level entry: {member.name}")
+                if norm in ("data.db", _VENVY_KEY_FILE.name) and not member.isreg():
+                    raise ValueError(f"Backup archive entry must be a regular file: {member.name}")
+                if member.issym() and not norm.startswith("apps/"):
+                    raise ValueError(f"Backup archive contains a symlink outside apps/: {member.name}")
+                # Reject duplicate paths (e.g. symlink apps/x followed by regular file apps/x).
+                if norm in seen_paths:
+                    raise ValueError(f"Backup archive contains a duplicate entry: {member.name}")
+                seen_paths.add(norm)
                 target = (staging / member.name).resolve()
                 if not is_safe_path(staging, target):
                     raise ValueError(f"Backup archive contains an unsafe path: {member.name}")
-                # Nothing may be written *through* a link stored earlier in
-                # the archive. Venvy's own backups never contain that (a real
-                # directory tree can't), so this only ever refuses a crafted
-                # file — and it holds whatever the interpreter's tarfile does.
+                # Nothing may be written *through* or *over* a link stored in the archive.
                 parts = norm.split("/") if norm else []
                 if any("/".join(parts[:i]) in links for i in range(1, len(parts))):
                     raise ValueError(f"Backup archive contains a path through a link: {member.name}")
-                if member.islnk() and not is_safe_path(staging, (staging / member.linkname).resolve()):
-                    raise ValueError(f"Backup archive contains an unsafe hard link: {member.name}")
+                if not member.issym() and not member.islnk() and norm in links:
+                    raise ValueError(f"Backup archive contains a path colliding with a link: {member.name}")
+                if member.islnk():
+                    lnk_norm = _norm_tar_name(member.linkname)
+                    if (not lnk_norm or lnk_norm == ".." or lnk_norm.startswith("../")
+                            or member.linkname.startswith("/") or lnk_norm in links
+                            or not is_safe_path(staging, (staging / member.linkname).resolve())):
+                        raise ValueError(f"Backup archive contains an unsafe hard link: {member.name}")
                 total += member.size if member.isreg() else 0
+            free = shutil.disk_usage(BACKUP_DIR).free
+            if total + 256 * 1024 * 1024 > free:
+                raise ValueError(
+                    f"Not enough free disk space to unpack this backup "
+                    f"(≈{total // (1024 * 1024)} MB needed, {free // (1024 * 1024)} MB free)."
+                )
             unpacked = 0
             last = None
 
@@ -743,7 +797,9 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
                     shutil.move(str(staging / "apps"), str(APPS_BASE_DIR))
             _load_database_and_key()
         except BaseException:
-            if replaced is not None:
+            if new_apps_in_place and replaced is None:
+                shutil.rmtree(APPS_BASE_DIR, ignore_errors=True)
+            elif replaced is not None:
                 if new_apps_in_place:
                     shutil.rmtree(APPS_BASE_DIR, ignore_errors=True)
                 with contextlib.suppress(OSError):
@@ -762,12 +818,31 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
         # which SQLite would then replay onto it. The backup API takes the
         # proper locks and goes through the WAL like any other write.
         _op_step("replace", "Loading the backup's database")
+        # Copy the verified data.db into a clean isolated directory with zero
+        # sidecar files (-wal/-shm/-journal) and open it read-only immutable so
+        # sqlite3.connect() as root can never follow a sidecar symlink.
+        db_iso_dir = staging / ".db-isolated"
+        db_iso_dir.mkdir(mode=0o700, exist_ok=True)
+        iso_db = db_iso_dir / "data.db"
+        raw_db_fd = os.open(staging / "data.db", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | _O_CLOEXEC)
+        try:
+            st = os.fstat(raw_db_fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError("Restored data.db is not a regular file.")
+            with os.fdopen(raw_db_fd, "rb") as src_f, open(iso_db, "wb") as dst_f:
+                shutil.copyfileobj(src_f, dst_f, 1024 * 1024)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(raw_db_fd)
+            raise
+
         # The key is the last thing to change, and by then changing it is a
         # rename within one directory: a new database under the old key (or
         # the other way round) could not decrypt a single stored secret.
         restored_key = staging / _VENVY_KEY_FILE.name
         key_tmp = _VENVY_KEY_FILE.with_name(_VENVY_KEY_FILE.name + ".restoring")
         have_key = restored_key.is_file() and not restored_key.is_symlink()
+        db_overwritten = False
         try:
             if have_key:
                 fd = os.open(key_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -776,11 +851,12 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
                     f.flush()
                     os.fsync(f.fileno())
             engine.dispose()
-            src = sqlite3.connect(str(staging / "data.db"))
+            src = sqlite3.connect(f"file:{iso_db}?mode=ro&immutable=1", uri=True)
             try:
                 dst = sqlite3.connect(str(DB_FILE), timeout=60)
                 try:
                     src.backup(dst)
+                    db_overwritten = True
                 finally:
                     dst.close()
             finally:
@@ -788,6 +864,28 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
             engine.dispose()
             if have_key:
                 os.replace(key_tmp, _VENVY_KEY_FILE)
+        except BaseException:
+            if db_overwritten and have_key:
+                # Best-effort: roll back data.db from the safety backup so
+                # data.db is not left paired with the old .venvy_key.
+                logging.error("Key replacement failed after DB restore; attempting DB rollback from safety backup.")
+                with contextlib.suppress(Exception):
+                    with tarfile.open(pre_restore, "r:gz") as safe_tar:
+                        m = safe_tar.getmember("data.db")
+                        rb_db = db_iso_dir / "rollback.db"
+                        with safe_tar.extractfile(m) as rf, open(rb_db, "wb") as wf:
+                            shutil.copyfileobj(rf, wf, 1024 * 1024)
+                        rb_src = sqlite3.connect(f"file:{rb_db}?mode=ro&immutable=1", uri=True)
+                        try:
+                            rb_dst = sqlite3.connect(str(DB_FILE), timeout=60)
+                            try:
+                                rb_src.backup(rb_dst)
+                            finally:
+                                rb_dst.close()
+                        finally:
+                            rb_src.close()
+                        engine.dispose()
+            raise
         finally:
             key_tmp.unlink(missing_ok=True)
 

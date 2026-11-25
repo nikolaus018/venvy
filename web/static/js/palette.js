@@ -238,12 +238,11 @@
         document.addEventListener('keydown', (e) => {
             const mod = e.metaKey || e.ctrlKey;
 
-            // Command palette works from anywhere, including the terminal.
+            // Command palette works from anywhere, including the terminal (but not over another modal).
             if (mod && (e.key === 'k' || e.key === 'K')) {
-                e.preventDefault();
-                if (document.getElementById('command-palette').classList.contains('hidden')) openPalette();
-                else closePalette();
-                return;
+                const isOpen = !document.getElementById('command-palette').classList.contains('hidden');
+                if (isOpen) { e.preventDefault(); closePalette(); return; }
+                if (_openModalIds.length === 0) { e.preventDefault(); openPalette(); return; }
             }
 
             if (isTypingTarget(e.target) || _openModalIds.length > 0) return;

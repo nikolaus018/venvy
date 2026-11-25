@@ -140,14 +140,14 @@
                 if (currentUser) {
                     if (!pollInterval) {
                         // Re-verify session is still good before resuming poll
-                        fetch(`${API}/auth/status`).then(r => r.json()).then(d => {
+                        fetch(`${API}/auth/status`).then(r => { if (!r.ok) throw new Error(); return r.json(); }).then(d => {
                             if (d.authenticated) {
                                 startPolling();
                                 if (logsTabVisible && activeAppId) startLogPolling();
                             } else {
                                 _showReAuthOverlay();
                             }
-                        }).catch(() => { startPolling(); }); // network error — optimistically resume
+                        }).catch(() => { startPolling(); }); // network/proxy error — optimistically resume
                     } else {
                         if (logsTabVisible && activeAppId && !logInterval) startLogPolling();
                     }
@@ -162,7 +162,7 @@
             // e.persisted = true means restored from bfcache (iOS background)
             if (e.persisted && currentUser) {
                 if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-                fetch(`${API}/auth/status`).then(r => r.json()).then(d => {
+                fetch(`${API}/auth/status`).then(r => { if (!r.ok) throw new Error(); return r.json(); }).then(d => {
                     if (d.authenticated) { startPolling(); }
                     else { _showReAuthOverlay(); }
                 }).catch(() => startPolling());

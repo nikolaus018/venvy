@@ -68,8 +68,8 @@ def _order(version: str) -> tuple:
     while len(numbers) > 1 and numbers[-1] == 0:      # v4.5 == v4.5.0
         numbers.pop()
     numbers = tuple(numbers)
-    suffix = m.group(2).lstrip(".-")
-    parts = tuple((0, int(t), "") if t.isdigit() else (1, 0, t) for t in re.findall(r"\d+|[A-Za-z]+", suffix))
+    suffix = m.group(2).lstrip(".-").lower()
+    parts = tuple((0, int(t), "") if t.isdigit() else (1, 0, t) for t in re.findall(r"\d+|[a-z]+", suffix))
     return (numbers, 0 if suffix else 1, parts)
 
 
@@ -100,7 +100,8 @@ async def _github_latest(http: aiohttp.ClientSession) -> Optional[str]:
                             headers={"Accept": "application/vnd.github+json", "User-Agent": "Venvy"}) as resp:
             if resp.status != 200:
                 return None
-            tag = (await resp.json(content_type=None) or {}).get("tag_name")
+            raw = await resp.content.read(128 * 1024)
+            tag = (json.loads(raw.decode(errors="replace")) or {}).get("tag_name")
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
         return None
     return tag if isinstance(tag, str) and _VERSION_RE.fullmatch(tag) else None
@@ -126,14 +127,15 @@ async def latest_version(force: bool = False) -> Tuple[Optional[str], Optional[s
                     if resp.status != 200:
                         error = f"The release server answered {resp.status}."
                     else:
-                        text = (await resp.text()).strip()
+                        text = (await resp.content.read(4096)).decode(errors="replace").strip()
                         if _VERSION_RE.fullmatch(text):
                             version = text
                         else:
                             error = "The release server did not say which version is the latest."
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             error = f"Could not reach the release server: {exc.__class__.__name__}"
-        _checked.update(at=time.monotonic(), version=version, error=error,
+        # Don't cache transient failures for an hour: the next check retries.
+        _checked.update(at=0.0 if error else time.monotonic(), version=version, error=error,
                         when=datetime.datetime.now(datetime.timezone.utc).isoformat())
         return version, error
 
@@ -199,11 +201,12 @@ async def release_notes(current: str, latest: Optional[str], force: bool = False
             # A failure is not kept for an hour: the next look tries again.
             _notes_cache.update(at=0.0 if error else time.monotonic(), sections=sections, error=error,
                                 **{"for": latest})
-    sections = _notes_cache["sections"] or []
+        sections = list(_notes_cache["sections"] or [])
+        cached_err = _notes_cache["error"]
     newer = [sec for sec in sections if is_newer(sec["version"], current)]
     if newer:
-        return newer[:30], True, _notes_cache["error"]
-    return sections[:1], False, _notes_cache["error"]
+        return newer[:30], True, cached_err
+    return sections[:1], False, cached_err
 
 
 def last_checked() -> Optional[str]:

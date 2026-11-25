@@ -4,11 +4,17 @@ import errno
 import os
 import secrets
 import shutil
+import stat as _stat
 import urllib.parse
 from pathlib import Path
 from typing import List, Optional
 
 _FS_MAX_DEPTH = 64
+# New files in an app's folder: readable and writable by the app's own user
+# (their owner) only. Venvy itself works on them as that user or as root.
+APP_FILE_MODE = 0o600
+_FS_COPY_MAX_BYTES = 10 * 1024 ** 3
+_FS_MIN_FREE_BYTES = 256 * 1024 * 1024
 
 
 def is_safe_path(root: Path, target: Path) -> bool:
@@ -17,7 +23,7 @@ def is_safe_path(root: Path, target: Path) -> bool:
         root_r = root.resolve()
         target_r = target.resolve()
         return target_r == root_r or root_r in target_r.parents
-    except (ValueError, OSError):
+    except (ValueError, OSError, RuntimeError):
         return False
 
 
@@ -90,12 +96,26 @@ def _app_rel_parts(root: Path, rel_path: str, follow_last: bool = True) -> tuple
     component is taken literally rather than resolved, for operations that
     act on a directory entry itself (delete, rename): deleting a symlink
     should remove the link, not what it points to."""
-    root_r = root.resolve()
-    cand = root / (rel_path or "")
-    if follow_last or cand.name in ("", ".", ".."):
-        target = cand.resolve()
-    else:
-        target = cand.parent.resolve() / cand.name
+    if rel_path and "\x00" in rel_path:
+        raise AppPathError(400, "Invalid path.")
+    try:
+        root_r = root.resolve()
+        # Lexically first: a path that leaves the app directory by its own
+        # ".."s or by being absolute is refused before anything on disk is
+        # looked up. Symlinks are dealt with below, once resolved.
+        root_s = str(root_r)
+        joined = os.path.normpath(os.path.join(root_s, rel_path or ""))
+        if joined == root_s:
+            return ()
+        if not joined.startswith(root_s.rstrip(os.sep) + os.sep):
+            raise AppPathError(403, "Path is outside the app directory.")
+        cand = Path(joined)
+        if follow_last or cand.name in ("", ".", ".."):
+            target = cand.resolve()
+        else:
+            target = cand.parent.resolve() / cand.name
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise AppPathError(400, "Invalid path.") from exc
     if not (target == root_r or root_r in target.parents):
         raise AppPathError(403, "Path is outside the app directory.")
     return target.relative_to(root_r).parts
@@ -106,7 +126,12 @@ def _open_app_dir(root: Path, parts: tuple, create: bool = False, owner: Optiona
     """Yield a directory fd for root/parts, reached without following any
     symlink below root. create=True makes missing directories on the way
     (owned by *owner* when given)."""
-    fd = os.open(root.resolve(), _O_NOFOLLOW_DIR)
+    try:
+        fd = os.open(root.resolve(), _O_NOFOLLOW_DIR)
+    except FileNotFoundError as exc:
+        raise AppPathError(404, "App directory not found.") from exc
+    except OSError as exc:
+        raise AppPathError(409, "App directory is not accessible.") from exc
     try:
         for part in parts:
             try:
@@ -124,9 +149,15 @@ def _open_app_dir(root: Path, parts: tuple, create: bool = False, owner: Optiona
                         except OSError:
                             os.close(nfd)
                             raise
+            except AppPathError:
+                raise
             except OSError as exc:
-                # ELOOP / ENOTDIR: a symlink or a plain file where a folder
-                # was expected.
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise AppPathError(409, f"'{part}' is not a folder.") from exc
+                if exc.errno == errno.ENOSPC:
+                    raise AppPathError(507, "Not enough free disk space.") from exc
+                if exc.errno in (errno.EACCES, errno.EPERM):
+                    raise AppPathError(403, f"Permission denied on '{part}'.") from exc
                 raise AppPathError(409, f"'{part}' is not a folder.") from exc
             os.close(fd)
             fd = nfd
@@ -153,7 +184,6 @@ def _fs_lstat(dir_fd: int, name: str) -> Optional[os.stat_result]:
 
 
 def _fs_is_dir(st: Optional[os.stat_result]) -> bool:
-    import stat as _stat
     return st is not None and _stat.S_ISDIR(st.st_mode)
 
 
@@ -194,28 +224,34 @@ def _fs_read_chunks(fileobj):
 
 def _fs_save(root: Path, parts: tuple, data: bytes, owner: Optional[tuple]) -> None:
     """Create or overwrite the file root/parts, keeping an existing file's mode."""
-    import stat as _stat
+    if not parts:
+        raise AppPathError(400, "Invalid file path.")
     with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
         st = _fs_lstat(dfd, parts[-1])
         if _fs_is_dir(st):
             raise AppPathError(409, "That path is a folder.")
-        mode = (st.st_mode & 0o777) if st is not None and _stat.S_ISREG(st.st_mode) else 0o644
+        mode = (st.st_mode & 0o777) if st is not None and _stat.S_ISREG(st.st_mode) else APP_FILE_MODE
         _fs_write_new(dfd, parts[-1], [data], mode, owner)
 
 
 def _fs_write_stream(root: Path, parts: tuple, fileobj, limit: int, owner: Optional[tuple]) -> bool:
     """Stream *fileobj* into root/parts. False if it is larger than *limit*."""
+    if not parts:
+        raise AppPathError(400, "Invalid file path.")
     with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
         if _fs_is_dir(_fs_lstat(dfd, parts[-1])):
             raise AppPathError(409, f"'{parts[-1]}' already exists as a folder.")
-        return _fs_write_new(dfd, parts[-1], _fs_read_chunks(fileobj), 0o644, owner, limit)
+        return _fs_write_new(dfd, parts[-1], _fs_read_chunks(fileobj), APP_FILE_MODE, owner, limit)
 
 
 def _fs_install(root: Path, parts: tuple, src: Path, owner: Optional[tuple]) -> None:
     """Move *src* — a finished file in Venvy's own temp space — to root/parts."""
+    if not parts:
+        raise AppPathError(400, "Invalid file path.")
     with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
         if _fs_is_dir(_fs_lstat(dfd, parts[-1])):
             raise AppPathError(409, f"'{parts[-1]}' already exists as a folder.")
+        os.chmod(src, APP_FILE_MODE)
         if owner:
             os.lchown(src, *owner)
         try:
@@ -224,16 +260,19 @@ def _fs_install(root: Path, parts: tuple, src: Path, owner: Optional[tuple]) -> 
             if exc.errno != errno.EXDEV:
                 raise
             # Different filesystem (e.g. DATA_DIR/apps is a mount) — copy instead.
-            mode = os.stat(src).st_mode & 0o777
-            with open(src, "rb") as f:
-                _fs_write_new(dfd, parts[-1], _fs_read_chunks(f), mode, owner)
-            src.unlink(missing_ok=True)
+            try:
+                with open(src, "rb") as f:
+                    _fs_write_new(dfd, parts[-1], _fs_read_chunks(f), APP_FILE_MODE, owner)
+            finally:
+                src.unlink(missing_ok=True)
 
 
 def _fs_touch(root: Path, parts: tuple, owner: Optional[tuple]) -> None:
+    if not parts:
+        raise AppPathError(400, "Invalid file path.")
     with _open_app_dir(root, parts[:-1], create=True, owner=owner) as dfd:
         try:
-            fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, 0o644, dir_fd=dfd)
+            fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, APP_FILE_MODE, dir_fd=dfd)
         except FileExistsError:
             # Same as touch(1) on an existing entry: just bump its mtime.
             os.utime(parts[-1], dir_fd=dfd, follow_symlinks=False)
@@ -277,6 +316,8 @@ def _fs_rmtree(dir_fd: int, name: str, _depth: int = 0) -> None:
 
 
 def _fs_delete(root: Path, parts: tuple) -> None:
+    if not parts:
+        raise AppPathError(400, "Invalid path.")
     with _open_app_dir(root, parts[:-1]) as dfd:
         st = _fs_lstat(dfd, parts[-1])
         if st is None:
@@ -287,17 +328,23 @@ def _fs_delete(root: Path, parts: tuple) -> None:
             os.unlink(parts[-1], dir_fd=dfd)
 
 
-def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner: Optional[tuple], _depth: int = 0) -> None:
+def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner: Optional[tuple],
+                   _depth: int = 0, _budget: Optional[list] = None) -> None:
     """Copy one directory entry (file, symlink or whole directory) between
     two directory fds. Symlinks are copied as symlinks, never followed."""
-    import stat as _stat
     if _depth > _FS_MAX_DEPTH:
         raise AppPathError(400, "Folder nesting is too deep.")
+    if _budget is None:
+        _budget = [0]
     st = os.stat(src_name, dir_fd=src_fd, follow_symlinks=False)
     if _stat.S_ISLNK(st.st_mode):
         os.symlink(os.readlink(src_name, dir_fd=src_fd), dst_name, dir_fd=dst_fd)
         if owner:
-            os.chown(dst_name, *owner, dir_fd=dst_fd, follow_symlinks=False)
+            lst = _fs_lstat(dst_fd, dst_name)
+            if lst is not None and _stat.S_ISLNK(lst.st_mode):
+                os.chown(dst_name, *owner, dir_fd=dst_fd, follow_symlinks=False)
+        with contextlib.suppress(OSError, NotImplementedError):
+            os.utime(dst_name, ns=(st.st_atime_ns, st.st_mtime_ns), dir_fd=dst_fd, follow_symlinks=False)
     elif _stat.S_ISDIR(st.st_mode):
         os.mkdir(dst_name, 0o700, dir_fd=dst_fd)
         s_sub = os.open(src_name, _O_NOFOLLOW_DIR, dir_fd=src_fd)
@@ -309,8 +356,11 @@ def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner
                 with os.scandir(s_sub) as it:
                     names = [e.name for e in it]
                 for name in names:
-                    _fs_copy_entry(s_sub, name, d_sub, name, owner, _depth + 1)
+                    _fs_copy_entry(s_sub, name, d_sub, name, owner, _depth + 1, _budget)
                 os.fchmod(d_sub, st.st_mode & 0o777)
+                # Last, once its contents stop changing it.
+                with contextlib.suppress(OSError):
+                    os.utime(d_sub, ns=(st.st_atime_ns, st.st_mtime_ns))
             finally:
                 os.close(d_sub)
         finally:
@@ -322,22 +372,46 @@ def _fs_copy_entry(src_fd: int, src_name: str, dst_fd: int, dst_name: str, owner
             fst = os.fstat(fd)
             if not _stat.S_ISREG(fst.st_mode) or foreign_hardlink(fst, os.fstat(src_fd)):
                 return
+            if fst.st_size + _budget[0] > _FS_COPY_MAX_BYTES:
+                raise AppPathError(413, "Copy exceeds the maximum allowed size.")
+            try:
+                stvfs = os.fstatvfs(dst_fd)
+                free = stvfs.f_bavail * stvfs.f_frsize
+                if fst.st_size + _FS_MIN_FREE_BYTES > free:
+                    raise AppPathError(507, "Not enough free disk space for this copy.")
+            except (OSError, AttributeError):
+                pass
             with contextlib.suppress(OSError, AttributeError):
                 os.set_blocking(fd, True)
             out = os.open(dst_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, 0o600, dir_fd=dst_fd)
-            with os.fdopen(out, "wb") as o:
-                shutil.copyfileobj(f, o, _FS_COPY_BUF)
-                if owner:
-                    os.fchown(o.fileno(), *owner)
-                os.fchmod(o.fileno(), st.st_mode & 0o777)
-        os.utime(dst_name, ns=(st.st_atime_ns, st.st_mtime_ns), dir_fd=dst_fd, follow_symlinks=False)
-
+            try:
+                with os.fdopen(out, "wb") as o:
+                    while True:
+                        buf = f.read(_FS_COPY_BUF)
+                        if not buf:
+                            break
+                        _budget[0] += len(buf)
+                        if _budget[0] > _FS_COPY_MAX_BYTES:
+                            raise AppPathError(413, "Copy exceeds the maximum allowed size.")
+                        o.write(buf)
+                    o.flush()
+                    if owner:
+                        os.fchown(o.fileno(), *owner)
+                    os.fchmod(o.fileno(), fst.st_mode & 0o777)
+                    with contextlib.suppress(OSError, TypeError):
+                        os.utime(o.fileno(), ns=(fst.st_atime_ns, fst.st_mtime_ns))
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(dst_name, dir_fd=dst_fd)
+                raise
 
     # Sockets, FIFOs and devices are not copied.
 
 
 def _fs_move_or_copy(root: Path, src: tuple, dst: tuple, copy: bool, owner: Optional[tuple], dst_label: str) -> None:
     """Rename (copy=False) or copy the entry root/src to root/dst."""
+    if not src or not dst:
+        raise AppPathError(400, "Invalid path.")
     if len(dst) > len(src) and dst[:len(src)] == src:
         # A copy would land in what is being copied, and keep finding itself
         # there until the disk is full. A rename the kernel refuses itself,
@@ -362,7 +436,6 @@ def _fs_move_or_copy(root: Path, src: tuple, dst: tuple, copy: bool, owner: Opti
 def _fs_open_file(root: Path, parts: tuple):
     """Open the regular file root/parts for reading; returns (file object,
     stat). Raises AppPathError(404) for anything else."""
-    import stat as _stat
     if not parts:
         raise AppPathError(404, "File not found.")
     with _open_app_dir(root, parts[:-1]) as dfd:
@@ -380,31 +453,59 @@ def _fs_open_file(root: Path, parts: tuple):
     return os.fdopen(fd, "rb"), st
 
 
+def _stat_inside_no_follow(root: Path, rel_parts: tuple) -> Optional[os.stat_result]:
+    """Stat root/rel_parts without ever following a symlink below root."""
+    try:
+        if not rel_parts:
+            with _open_app_dir(root, ()) as dfd:
+                return os.fstat(dfd)
+        with _open_app_dir(root, rel_parts[:-1]) as dfd:
+            st = _fs_lstat(dfd, rel_parts[-1])
+            if st is None or _stat.S_ISLNK(st.st_mode):
+                return None
+            if _stat.S_ISREG(st.st_mode) and foreign_hardlink(st, os.fstat(dfd)):
+                return None
+            return st
+    except (AppPathError, OSError):
+        return None
+
+
 def _fs_listdir(root: Path, parts: tuple) -> List[dict]:
     """[{name, is_dir, size}] for the directory root/parts ([] if it isn't one).
     A symlink is described by what it points to only when that is inside the
-    app directory: otherwise the listing would tell whoever can plant a link
-    the size of any file on the host, and whether any folder exists."""
+    app directory — re-walked via dir_fd with O_NOFOLLOW so a symlink swapped
+    mid-listing can never disclose the size or existence of host files."""
     root_r = root.resolve()
     here = root_r.joinpath(*parts)
     try:
         with _open_app_dir(root, parts) as dfd:
+            folder_st = os.fstat(dfd)
             out = []
             with os.scandir(dfd) as it:
                 for entry in it:
-                    follow = False
                     try:
-                        follow = is_safe_path(root_r, here / entry.name) if entry.is_symlink() else True
+                        lst = entry.stat(follow_symlinks=False)
                     except OSError:
-                        follow = False
-                    try:
-                        size = entry.stat(follow_symlinks=follow).st_size
-                    except OSError:
-                        size = 0
-                    try:
-                        is_dir = entry.is_dir(follow_symlinks=follow)
-                    except OSError:
-                        is_dir = False
+                        continue
+                    if _stat.S_ISLNK(lst.st_mode):
+                        st = None
+                        try:
+                            target = (here / entry.name).resolve()
+                            if target == root_r or root_r in target.parents:
+                                st = _stat_inside_no_follow(root_r, target.relative_to(root_r).parts)
+                        except (OSError, ValueError, RuntimeError):
+                            st = None
+                        if st is not None:
+                            is_dir = _stat.S_ISDIR(st.st_mode)
+                            size = st.st_size
+                        else:
+                            is_dir = False
+                            size = 0
+                    else:
+                        if _stat.S_ISREG(lst.st_mode) and foreign_hardlink(lst, folder_st):
+                            continue
+                        is_dir = _stat.S_ISDIR(lst.st_mode)
+                        size = lst.st_size
                     out.append({"name": entry.name, "is_dir": is_dir, "size": size})
             return out
     except AppPathError:
@@ -415,6 +516,7 @@ def _file_download_response(fileobj, st: os.stat_result, filename: str, media_ty
     """What FileResponse(path, filename=...) would send, but from a file that
     is already open — the path is not looked up a second time."""
     import mimetypes
+    from starlette.background import BackgroundTask
     from starlette.responses import StreamingResponse
 
     def _iter():
@@ -430,7 +532,11 @@ def _file_download_response(fileobj, st: os.stat_result, filename: str, media_ty
                 remaining -= len(buf)
                 yield buf
 
-    quoted = urllib.parse.quote(filename)
+    def _close_if_open():
+        with contextlib.suppress(Exception):
+            fileobj.close()
+
+    quoted = urllib.parse.quote(filename, safe="")
     disposition = (f'attachment; filename="{filename}"' if quoted == filename
                    else f"attachment; filename*=utf-8''{quoted}")
     return StreamingResponse(
@@ -442,4 +548,5 @@ def _file_download_response(fileobj, st: os.stat_result, filename: str, media_ty
             "Cache-Control": "no-store, no-cache, must-revalidate",
             "Pragma": "no-cache",
         },
+        background=BackgroundTask(_close_if_open),
     )

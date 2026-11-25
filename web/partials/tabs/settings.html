@@ -227,15 +227,14 @@
                                     <div class="mt-3 pl-5 space-y-2">
                                         <div class="flex justify-between items-center mb-1">
                                             <label class="block section-label">Port Numbers</label>
-                                            <button
-                                                data-on-click="clearValue('setting-port'); saveSettings()"
+                                            <button data-requires-operator
+                                                data-on-click="clearValue('setting-port'); checkSettingsDirty()"
                                                 class="text-[10px] uppercase font-bold tracking-wider opacity-40 hover:opacity-100 transition-opacity">Clear
                                                 All</button>
                                         </div>
                                         <div class="flex gap-2">
                                             <input type="text" id="setting-port"
-                                                class="inp flex-1 px-4 py-3 mono text-sm" placeholder="e.g. 8000, 8080"
-                                                data-on-blur="saveSettings()">
+                                                class="inp flex-1 px-4 py-3 mono text-sm" placeholder="e.g. 8000, 8080">
                                         </div>
                                         <p class="text-xs leading-relaxed" style="color:var(--text3)">Injected as
                                             <code class="px-1 py-0.5 rounded mono text-[10px]"

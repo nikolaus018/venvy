@@ -12,7 +12,9 @@ from venvy.auth import (
     check_admin,
     check_ip_allowlist,
     _clean_username,
+    get_session_user,
     hash_password,
+    rate_limit_mutations,
     _validate_password_strength,
 )
 from venvy.db import get_session
@@ -53,6 +55,8 @@ def set_user_access(
     req: AccessReq,
     session: Session = Depends(get_session),
     admin: User = Depends(check_admin),
+    _session: User = Depends(get_session_user),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     """Which apps a user may see and use: all of them, or just the listed ones. Admins always see all."""
     user = session.get(User, user_id)
@@ -83,6 +87,8 @@ def create_user(
     req: UserReq,
     session: Session = Depends(get_session),
     admin: User = Depends(check_admin),
+    _session: User = Depends(get_session_user),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     username = _clean_username(req.username)
     if session.exec(select(User).where(User.username == username)).first():
@@ -107,10 +113,12 @@ def create_user(
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(
+def delete_user(
     user_id: int,
     session: Session = Depends(get_session),
     current_user: User = Depends(check_admin),
+    _session: User = Depends(get_session_user),
+    _rl: None = Depends(rate_limit_mutations),
 ):
     if user_id == current_user.id:
         raise HTTPException(400, "Cannot delete yourself.")

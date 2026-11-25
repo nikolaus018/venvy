@@ -116,9 +116,12 @@ def make(cl, name, runtime, entry, files, **settings):
 
 def main() -> None:
     env = {"VENVY_METRICS_FLUSH_SEC": "5", "VENVY_HEALTH_WAIT_SEC": "10", "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
-    with server(str(REPO), PORT, env=env) as (base, data, srv):
+    with server(str(REPO), free_port(), env=env) as (base, data, srv):
         cl = admin(base)
-        shop_port, chat_port = free_port(), free_port()
+        shop_port = free_port()
+        chat_port = free_port()
+        while chat_port == shop_port:
+            chat_port = free_port()
         shop = make(cl, "Shop API", "python", "main.py", {
             "main.py": SHOP,
             "requirements.txt": "# standard library only\n",
@@ -159,111 +162,113 @@ def main() -> None:
                         pass
                 stop.wait(2.5)
         threading.Thread(target=traffic, daemon=True).start()
-        print(f"Letting the apps run for {WARMUP_SEC} s so the charts have a history…")
-        time.sleep(WARMUP_SEC)
+        try:
+            print(f"Letting the apps run for {WARMUP_SEC} s so the charts have a history…")
+            time.sleep(WARMUP_SEC)
 
-        OUT.mkdir(parents=True, exist_ok=True)
-        with sync_playwright() as p:
-            br = p.chromium.launch(channel="chrome", headless=True)
+            OUT.mkdir(parents=True, exist_ok=True)
+            with sync_playwright() as p:
+                br = p.chromium.launch(channel="chrome", headless=True)
 
-            def as_installed(route):
-                resp = route.fetch()
-                try:
-                    data = resp.json()
-                except Exception:
-                    return route.fulfill(response=resp)
-                for a in data if isinstance(data, list) else [data]:
-                    if isinstance(a, dict) and "isolated" in a:
-                        a.update(isolated=True, resource_limits_enforced=True)
-                route.fulfill(response=resp, body=json.dumps(data))
+                def as_installed(route):
+                    resp = route.fetch()
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        return route.fulfill(response=resp)
+                    for a in data if isinstance(data, list) else [data]:
+                        if isinstance(a, dict) and "isolated" in a:
+                            a.update(isolated=True, resource_limits_enforced=True)
+                    route.fulfill(response=resp, body=json.dumps(data))
 
-            def signed_in(**ctx):
-                c = br.new_context(**ctx)
-                c.route("**/api/apps", as_installed)
-                c.route("**/api/apps/*[0-9]", as_installed)
-                pg = c.new_page()
-                pg.goto(base + "/")
-                pg.wait_for_selector("#username")
-                pg.fill("#username", "admin")
-                pg.fill("#password", "hunter2hunter2")
-                pg.click("#login-submit-btn")
-                pg.wait_for_selector("#app-shell", state="visible")
-                pg.wait_for_timeout(1500)
-                return c, pg
+                def signed_in(**ctx):
+                    c = br.new_context(**ctx)
+                    c.route("**/api/apps", as_installed)
+                    c.route("**/api/apps/*[0-9]", as_installed)
+                    pg = c.new_page()
+                    pg.goto(base + "/")
+                    pg.wait_for_selector("#username")
+                    pg.fill("#username", "admin")
+                    pg.fill("#password", "hunter2hunter2")
+                    pg.click("#login-submit-btn")
+                    pg.wait_for_selector("#app-shell", state="visible")
+                    pg.wait_for_timeout(1500)
+                    return c, pg
 
-            def shot(pg, name, wait=900):
-                pg.mouse.move(5, pg.viewport_size["height"] - 5)    # no hover highlight in the picture
-                pg.wait_for_timeout(wait)
-                pg.screenshot(path=str(OUT / f"{name}.png"))
-                print("  ", name)
+                def shot(pg, name, wait=900):
+                    pg.mouse.move(5, pg.viewport_size["height"] - 5)    # no hover highlight in the picture
+                    pg.wait_for_timeout(wait)
+                    pg.screenshot(path=str(OUT / f"{name}.png"))
+                    print("  ", name)
 
-            def open_app(pg, app_id):
-                pg.evaluate(f"selectApp({app_id})")
-                pg.wait_for_timeout(1500)
+                def open_app(pg, app_id):
+                    pg.evaluate(f"selectApp({app_id})")
+                    pg.wait_for_timeout(1500)
 
-            def type_commands(pg, commands):
-                for c in commands:
-                    pg.keyboard.type(c + "\n", delay=8)
-                    pg.wait_for_timeout(1300)
+                def type_commands(pg, commands):
+                    for c in commands:
+                        pg.keyboard.type(c + "\n", delay=8)
+                        pg.wait_for_timeout(1300)
 
-            terminal = ["clear", "ls", "python --version",
-                        f"curl -s localhost:{shop_port}/api/products | python -m json.tool",
-                        "cat config/settings.json"]
+                terminal = ["clear", "ls", "python --version",
+                            f"curl -s localhost:{shop_port}/api/products | python -m json.tool",
+                            "cat config/settings.json"]
 
-            ctx, pg = signed_in(viewport={"width": 1440, "height": 900}, device_scale_factor=2, color_scheme="dark")
-            pg.evaluate("setTheme('dark')")
-            open_app(pg, shop)
-            pg.wait_for_function("window.term && termSocket && termSocket.readyState === 1", timeout=15000)
-            type_commands(pg, terminal)
-            shot(pg, "terminal")
-            pg.click("#tabbtn-files"); pg.wait_for_timeout(900)
-            pg.click("#file-tree .file-row[data-name='main.py']")
-            shot(pg, "files", 1500)
-            pg.click("#tabbtn-logs")
-            shot(pg, "logs", 2000)
-            pg.evaluate("switchTab('deploy')")
-            shot(pg, "deploy", 1500)
-            pg.evaluate("switchTab('settings')")
-            pg.wait_for_timeout(2000)
-            pg.evaluate("document.getElementById('usage-cpu').closest('.card').scrollIntoView({block: 'start'})")
-            shot(pg, "settings", 1200)
-            open_app(pg, reports)
-            pg.evaluate("switchTab('jobs')")
-            shot(pg, "jobs", 1200)
-            pg.click("#system-nav-btn")
-            pg.wait_for_timeout(3000)
-            pg.evaluate("document.getElementById('sys-history-card').scrollIntoView({block: 'start'})")
-            shot(pg, "system", 1200)
-            open_app(pg, shop)
-            pg.evaluate("switchTab('logs')")
-            pg.wait_for_timeout(800)
-            pg.evaluate("openPalette()")
-            shot(pg, "palette", 700)
-            pg.keyboard.press("Escape")
-            pg.evaluate("setTheme('light')")
-            pg.evaluate("switchTab('logs')")
-            shot(pg, "light", 2000)
-            pg.evaluate("setTheme('dark')")
-            ctx.unroute_all(behavior="ignoreErrors")
-            ctx.close()
+                ctx, pg = signed_in(viewport={"width": 1440, "height": 900}, device_scale_factor=2, color_scheme="dark")
+                pg.evaluate("setTheme('dark')")
+                open_app(pg, shop)
+                pg.wait_for_function("window.term && termSocket && termSocket.readyState === 1", timeout=15000)
+                type_commands(pg, terminal)
+                shot(pg, "terminal")
+                pg.click("#tabbtn-files"); pg.wait_for_timeout(900)
+                pg.click("#file-tree .file-row[data-name='main.py']")
+                shot(pg, "files", 1500)
+                pg.click("#tabbtn-logs")
+                shot(pg, "logs", 2000)
+                pg.evaluate("switchTab('deploy')")
+                shot(pg, "deploy", 1500)
+                pg.evaluate("switchTab('settings')")
+                pg.wait_for_timeout(2000)
+                pg.evaluate("document.getElementById('usage-cpu').closest('.card').scrollIntoView({block: 'start'})")
+                shot(pg, "settings", 1200)
+                open_app(pg, reports)
+                pg.evaluate("switchTab('jobs')")
+                shot(pg, "jobs", 1200)
+                pg.click("#system-nav-btn")
+                pg.wait_for_timeout(3000)
+                pg.evaluate("document.getElementById('sys-history-card').scrollIntoView({block: 'start'})")
+                shot(pg, "system", 1200)
+                open_app(pg, shop)
+                pg.evaluate("switchTab('logs')")
+                pg.wait_for_timeout(800)
+                pg.evaluate("openPalette()")
+                shot(pg, "palette", 700)
+                pg.keyboard.press("Escape")
+                pg.evaluate("setTheme('light')")
+                pg.evaluate("switchTab('logs')")
+                shot(pg, "light", 2000)
+                pg.evaluate("setTheme('dark')")
+                ctx.unroute_all(behavior="ignoreErrors")
+                ctx.close()
 
-            phone = {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 3, "is_mobile": True,
-                     "has_touch": True, "color_scheme": "dark"}
-            ctx, pg = signed_in(**phone)
-            pg.evaluate("setTheme('dark')")
-            pg.evaluate("toggleSidebar()")
-            shot(pg, "mobile-sidebar", 900)
-            pg.evaluate("toggleSidebar()")
-            open_app(pg, shop)
-            pg.wait_for_function("window.term && termSocket && termSocket.readyState === 1", timeout=15000)
-            type_commands(pg, ["clear", "ls", f"curl -s localhost:{shop_port}/health; echo"])
-            shot(pg, "mobile-terminal")
-            pg.evaluate("switchTab('logs')")
-            shot(pg, "mobile-logs", 2000)
-            ctx.unroute_all(behavior="ignoreErrors")
-            ctx.close()
-            br.close()
-        stop.set()
+                phone = {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 3, "is_mobile": True,
+                         "has_touch": True, "color_scheme": "dark"}
+                ctx, pg = signed_in(**phone)
+                pg.evaluate("setTheme('dark')")
+                pg.evaluate("toggleSidebar()")
+                shot(pg, "mobile-sidebar", 900)
+                pg.evaluate("toggleSidebar()")
+                open_app(pg, shop)
+                pg.wait_for_function("window.term && termSocket && termSocket.readyState === 1", timeout=15000)
+                type_commands(pg, ["clear", "ls", f"curl -s localhost:{shop_port}/health; echo"])
+                shot(pg, "mobile-terminal")
+                pg.evaluate("switchTab('logs')")
+                shot(pg, "mobile-logs", 2000)
+                ctx.unroute_all(behavior="ignoreErrors")
+                ctx.close()
+                br.close()
+        finally:
+            stop.set()
 
 
 if __name__ == "__main__":

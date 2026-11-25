@@ -100,11 +100,12 @@
             return document.getElementById(`${id}-body`);
         }
 
-        function fieldHtml(id, label, { type = 'text', value = '', placeholder = '', hint = '', attrs = '' } = {}) {
+        function fieldHtml(id, label, { type = 'text', value = '', placeholder = '', hint = '', attrs = '', mono = false } = {}) {
+            const isMono = mono || type === 'password';
             return `<div>
                 <label class="block section-label mb-1.5" for="${id}">${escapeHtml(label)}</label>
                 <input id="${id}" type="${type}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" spellcheck="false"
-                    class="inp w-full px-3.5 py-2.5 text-sm ${type === 'password' || attrs.includes('mono') ? 'mono' : ''}" ${attrs}>
+                    class="inp w-full px-3.5 py-2.5 text-sm ${isMono ? 'mono' : ''}" ${attrs}>
                 ${hint ? `<p class="text-xs mt-1" style="color:var(--text3)">${hint}</p>` : ''}
             </div>`;
         }

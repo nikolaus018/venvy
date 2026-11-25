@@ -9,14 +9,16 @@ with server(repo, 54998) as (base, data, srv):
     cl = admin(base)
     app_id = make_app(cl, restart_policy="always", start_on_boot=True)
     cl.req("POST", f"/api/apps/{app_id}/control?action=start")
-    cl.wait_status(app_id, "running")
+    assert cl.wait_status(app_id, "running"), "app never started"
     b = cl.job(cl.req("POST", "/api/system/backup"))
     name = cl.req("GET", "/api/system/backups").json()[0]["filename"]
     r = cl.req("POST", f"/api/system/backup/restore/{name}", json={"confirm": "RESTORE"})
     import os
+    second_ok = True
     if not os.environ.get("SKIP_DOUBLE"):
         r2 = cl.req("POST", f"/api/system/backup/restore/{name}", json={"confirm": "RESTORE"})
         print("second concurrent restore:", r2.status_code)
+        second_ok = r2.status_code == 409
     cl.job(r)
     # the window between the swap and the re-exec (3 s after the job is done).
     # Bounded by the clock, not by a sample count: listing processes is slow
@@ -41,10 +43,10 @@ with server(repo, 54998) as (base, data, srv):
     print("after restart: status", st["status"], "pid", st["pid"], "procs", procs)
     cl.req("DELETE", f"/api/apps/{app_id}/logs")
     cl.req("POST", f"/api/apps/{app_id}/control?action=stop")
-    cl.wait_status(app_id, "stopped")
+    stopped_ok = cl.wait_status(app_id, "stopped")
     time.sleep(1)
     logs = cl.req("GET", f"/api/apps/{app_id}/logs").json()["content"]
     left = app_procs(data)
     print("shutdown output reached the log:", "SHUTDOWN-MARKER" in logs, "| left running:", left)
-    ok = max(mid) == 0 and st["status"] == "running" and procs == [st["pid"]] and "SHUTDOWN-MARKER" in logs and not left
+    ok = second_ok and stopped_ok and max(mid) == 0 and st["status"] == "running" and procs == [st["pid"]] and "SHUTDOWN-MARKER" in logs and not left
     sys.exit(0 if ok else 1)

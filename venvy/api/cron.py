@@ -39,8 +39,8 @@ def _json(job: ScheduledJob) -> dict:
 
 def _clean(req: JobReq) -> dict:
     name = req.name.strip()
-    if not name or len(name) > 60:
-        raise HTTPException(400, "A job needs a name of up to 60 characters.")
+    if not name or len(name) > 60 or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise HTTPException(400, "A job needs a name of up to 60 characters with no control characters.")
     command = req.command.strip()
     if not command or len(command) > 2000 or "\0" in command:
         raise HTTPException(400, "A job needs a command (up to 2000 characters).")

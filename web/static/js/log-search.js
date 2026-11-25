@@ -2,6 +2,16 @@
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
 
+        function resetLogSearchPanel() {
+            const panel = $id('log-search-panel');
+            if (panel) panel.classList.add('hidden');
+            $id('log-search-all-btn')?.setAttribute('aria-pressed', 'false');
+            const q = $id('lsp-q');
+            if (q) q.value = '';
+            const out = $id('lsp-results');
+            if (out) { out.innerHTML = ''; out.classList.add('hidden'); }
+        }
+
         function toggleLogSearchPanel(force) {
             const panel = $id('log-search-panel');
             const open = force !== undefined ? force : panel.classList.contains('hidden');

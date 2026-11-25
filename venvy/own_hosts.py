@@ -8,6 +8,7 @@ app's port — either way the next admin to sign in would be typing their
 password into the app."""
 import json
 import logging
+import re
 import threading
 from typing import Optional, Set
 
@@ -21,6 +22,7 @@ KEY = "venvy_hosts"
 # made way for new ones, anyone able to sign in could push the real one out
 # with made-up Host headers and then claim it.
 _MAX = 64
+_VALID_HOST_RE = re.compile(r"\A(?:[a-z0-9.\-]{1,253}|[0-9a-f:]{2,45})\Z")
 
 _lock = threading.Lock()
 _cache: Optional[Set[str]] = None
@@ -55,14 +57,22 @@ def names() -> Set[str]:
 
 def is_own(host: str) -> bool:
     name = host_name(host)
-    return bool(name) and name in names()
+    if not name:
+        return False
+    known = names()
+    if name in known:
+        return True
+    if name.startswith("*."):
+        suffix = name[1:]
+        return any(k.endswith(suffix) and k != suffix[1:] for k in known)
+    return False
 
 
 def remember(host: str) -> None:
     """Note that Venvy was signed in to under *host*. Best effort."""
     global _cache
     name = host_name(host)
-    if not name or name in names():
+    if not name or not _VALID_HOST_RE.fullmatch(name) or name in names():
         return
     try:
         with _lock, Session(engine) as s:

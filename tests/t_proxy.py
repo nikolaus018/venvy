@@ -34,10 +34,11 @@ with server(repo, 55004, env={"VENVY_PROXY_SECRET": "s3kr1t", "IP_ALLOWLIST": "1
 # Who opened a loopback connection, from /proc/net/tcp as Linux writes it
 # (no server needed): the client end of 127.0.0.1:40001 -> 127.0.0.1:54783
 # belongs to uid 1001; its server end (Venvy's, uid 0) must not be the one found.
-import os, tempfile
+import atexit, os, shutil, tempfile
 sys.path.insert(0, repo)
 from venvy.auth import _proc_address, _socket_owner   # noqa: E402
 d = tempfile.mkdtemp()
+atexit.register(shutil.rmtree, d, True)
 v4, v6 = os.path.join(d, "tcp"), os.path.join(d, "tcp6")
 head = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
 with open(v4, "w") as f:

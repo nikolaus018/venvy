@@ -208,6 +208,11 @@
                 // Fill the editor from an app as the API returned it.
                 load(app) {
                     if (!wired) { wired = true; $('editor').addEventListener('input', changed); }
+                    revealAll = false;
+                    const revLabel = $('reveal-label');
+                    if (revLabel) revLabel.textContent = 'Show values';
+                    const hist = $('history');
+                    if (hist) { hist.classList.add('hidden'); hist.innerHTML = ''; }
                     $('rows').replaceChildren();
                     $('import').classList.add('hidden');
                     $('error').classList.add('hidden');

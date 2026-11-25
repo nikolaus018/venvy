@@ -127,46 +127,58 @@
         }
 
         async function clearGitToken() {
-            const r = await apiJson('PUT', `/apps/${activeAppId}/git`, { token: '' });
+            const appId = activeAppId;
+            if (!appId) return;
+            const r = await apiJson('PUT', `/apps/${appId}/git`, { token: '' });
             if (!r.ok) { showToast(r.error, 'error'); return; }
             showToast('Token removed', 'info', 1500);
-            loadDeploy({ keepForm: true });
+            if (appId === activeAppId) loadDeploy({ keepForm: true });
         }
 
         async function makeDeployKey() {
+            const appId = activeAppId;
+            if (!appId) return;
             if (_depData?.git.public_key) {
                 const ok = await confirmDialog({ title: 'Replace the deploy key?', body: 'The old key stops working — add the new one to the repository afterwards.', confirmLabel: 'Generate', danger: true });
                 if (!ok) return;
             }
-            const r = await apiJson('POST', `/apps/${activeAppId}/git/key`);
+            const r = await apiJson('POST', `/apps/${appId}/git/key`);
             if (!r.ok) { showToast(r.error, 'error'); return; }
             showToast('Key generated — add it to the repository', 'success');
-            loadDeploy({ keepForm: true });
+            if (appId === activeAppId) loadDeploy({ keepForm: true });
         }
 
         async function toggleAutoDeploy(on) {
-            const r = await apiJson('PUT', `/apps/${activeAppId}/git`, { auto_deploy: on });
-            if (!r.ok) { showToast(r.error, 'error'); $id('git-auto').checked = !on; return; }
-            loadDeploy({ keepForm: true });
+            const appId = activeAppId;
+            if (!appId) return;
+            const r = await apiJson('PUT', `/apps/${appId}/git`, { auto_deploy: on });
+            if (!r.ok) { showToast(r.error, 'error'); if (appId === activeAppId) $id('git-auto').checked = !on; return; }
+            if (appId === activeAppId) loadDeploy({ keepForm: true });
         }
 
         async function regenWebhookSecret() {
+            const appId = activeAppId;
+            if (!appId) return;
             const ok = await confirmDialog({ title: 'Make a new webhook secret?', body: 'The old secret stops working at once — update it at the git host.', confirmLabel: 'New secret', danger: true });
             if (!ok) return;
-            const r = await apiJson('POST', `/apps/${activeAppId}/git/webhook-secret`);
+            const r = await apiJson('POST', `/apps/${appId}/git/webhook-secret`);
             if (!r.ok) { showToast(r.error, 'error'); return; }
-            loadDeploy({ keepForm: true });
+            if (appId === activeAppId) loadDeploy({ keepForm: true });
         }
 
         async function deployNow(start) {
+            const appId = activeAppId;
+            if (!appId) return;
             const g = _depData?.git;
             if (!g || (!g.url && !g.build_command)) { showToast('Set a repository or a build command first, and save.', 'warn'); return; }
-            const r = await apiJson('POST', `/apps/${activeAppId}/deploy`, { start: !!start });
+            const r = await apiJson('POST', `/apps/${appId}/deploy`, { start: !!start });
             if (!r.ok) { showToast(r.error, 'error'); return; }
-            loadDeploy({ keepForm: true });
+            if (appId === activeAppId) loadDeploy({ keepForm: true });
         }
 
         async function rollbackTo(id) {
+            const appId = activeAppId;
+            if (!appId) return;
             const rel = (_depData?.releases || []).find(x => x.id === id);
             const ok = await confirmDialog({
                 title: 'Roll back?',
@@ -174,19 +186,25 @@
                 confirmLabel: 'Roll back', danger: true,
             });
             if (!ok) return;
-            const r = await apiJson('POST', `/apps/${activeAppId}/releases/${id}/rollback`);
+            const r = await apiJson('POST', `/apps/${appId}/releases/${id}/rollback`);
             if (!r.ok) { showToast(r.error, 'error'); return; }
-            loadDeploy({ keepForm: true });
+            if (appId === activeAppId) loadDeploy({ keepForm: true });
         }
 
         async function snapshotNow() {
-            const res = await fetch(`${API}/apps/${activeAppId}/releases`, { method: 'POST' });
-            try { await waitForJob(res); showToast('Snapshot taken', 'success'); }
-            catch (e) { showToast(e.message, 'error'); }
-            loadDeploy({ keepForm: true });
+            const appId = activeAppId;
+            if (!appId) return;
+            try {
+                const res = await fetch(`${API}/apps/${appId}/releases`, { method: 'POST' });
+                await waitForJob(res);
+                showToast('Snapshot taken', 'success');
+            } catch (e) { showToast(e.message || 'Snapshot failed', 'error'); }
+            if (appId === activeAppId) loadDeploy({ keepForm: true });
         }
 
         async function deleteRelease(id) {
+            const appId = activeAppId;
+            if (!appId) return;
             const rel = (_depData?.releases || []).find(x => x.id === id);
             const ok = await confirmDialog({
                 title: 'Delete this release?',
@@ -194,13 +212,15 @@
                 confirmLabel: 'Delete', danger: true,
             });
             if (!ok) return;
-            const r = await apiJson('DELETE', `/apps/${activeAppId}/releases/${id}`);
+            const r = await apiJson('DELETE', `/apps/${appId}/releases/${id}`);
             if (!r.ok) { showToast(r.error, 'error'); return; }
             showToast('Release deleted', 'info', 1500);
-            loadDeploy({ keepForm: true });
+            if (appId === activeAppId) loadDeploy({ keepForm: true });
         }
 
         async function setKeepReleases(n) {
+            const appId = activeAppId;
+            if (!appId) return;
             const num = Number(n);
             const cnt = (_depData?.releases || []).length;
             if (cnt > num) {
@@ -209,9 +229,9 @@
                     body: `${cnt - num} older release${cnt - num === 1 ? '' : 's'} will be deleted now.`,
                     confirmLabel: 'Delete older', danger: true,
                 });
-                if (!ok) { loadDeploy({ keepForm: true }); return; }
+                if (!ok) { if (appId === activeAppId) loadDeploy({ keepForm: true }); return; }
             }
-            const r = await apiJson('PUT', `/apps/${activeAppId}/git`, { keep_releases: num });
+            const r = await apiJson('PUT', `/apps/${appId}/git`, { keep_releases: num });
             if (!r.ok) { showToast(r.error, 'error'); return; }
-            loadDeploy({ keepForm: true });
+            if (appId === activeAppId) loadDeploy({ keepForm: true });
         }

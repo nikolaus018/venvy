@@ -1,6 +1,6 @@
 # Venvy API Documentation
 
-**Version:** 0.1.0 (server build v4.0.0)
+**Version:** v4.9.5
 **Base URL:** `http://<host>:<port>/api` (default `http://127.0.0.1:54783`)
 **Protocol:** REST over HTTP/1.1, JSON request/response bodies unless noted
 **Auth:** Session cookie (server-issued), CSRF double-submit token
@@ -90,7 +90,7 @@ Every user has exactly one role, checked on every request:
 |---|---|
 | **admin** | Everything an operator can, plus: manage users, view/change system settings, view host metrics, create/list DB backups, test & configure Cloudflare credentials |
 | **operator** | Full app lifecycle (create, start/stop/restart, edit config, delete), file management, package management, log management, tunnel publish/unpublish |
-| **viewer** | Read-only — list apps, view stats/logs/file trees, download files, view system info/ports. Cannot mutate anything |
+| **viewer** | Read-only — list permitted apps, view stats/metrics/logs/packages/tunnel mappings, and view basic system info. Cannot mutate anything, browse/download app files, read deploy logs/build commands/job commands, open terminals, or list host ports |
 
 Apps, files, and settings belong to the **Venvy instance**, not to the individual user who created them — any authenticated user of sufficient role can act on any app.
 
@@ -585,7 +585,7 @@ Serves the single-page application shell (`index.html`).
 Everything that touches the app's files (git, the build command, tar) runs as the app's own user.
 
 #### `GET /api/apps/{app_id}/deploy`
-Any role with access to the app. `git` (repository, branch, `has_token`, `build_command`, `auto_deploy`, `public_key`, `webhook_path`, and — for operators and admins signed in through a browser, never through an API token — `webhook_secret`; a viewer gets `build_command` empty, like a job's command), `state` (`running`, `status`, `log` — the last lines of the current or last deploy, with the values of the app's and the shared environment variables of 6 characters or more replaced by `***`, `started`, `finished`, `trigger`), `last` (`at`, `status`, `commit`) and `releases`.
+Any role with access to the app. `git` (repository, branch, `has_token`, `build_command`, `auto_deploy`, `public_key`, `webhook_path`, and — for operators and admins signed in through a browser, never through an API token — `webhook_secret`; a viewer gets `build_command` empty, like a job's command), `state` (`running`, `status`, `log` — the last lines of the current or last deploy, with the values of the app's and the shared environment variables of 6 characters or more replaced by `***`, redacted to `[]` for viewers, `started`, `finished`, `trigger`), `last` (`at`, `status`, `commit`) and `releases`.
 
 #### `PUT /api/apps/{app_id}/git`
 `require_operator`. `{ "git_url", "git_branch", "build_command", "auto_deploy", "token" }` — all optional. `git_url` is `https://…`, `ssh://…` or `user@host:path`; credentials in the URL, `ext::`/`file:` and anything with spaces or shell characters are refused (local paths only with `VENVY_ALLOW_LOCAL_GIT=1`). `token` (https only; `""` removes it) is stored encrypted and only ever sent to the repository's own host: changing `git_url` to another host without sending a new `token` removes the stored one. Turning `auto_deploy` on creates the webhook secret. Answers like `git` in `GET …/deploy` (`webhook_secret` not to an API token).
@@ -791,14 +791,14 @@ Tracks each app's published Cloudflare hostname: `app_id`, `local_port`, `hostna
 
 ## 7a. Installing and Updating
 
-On a fresh Debian 12+ / Ubuntu 22.04+ machine:
+On a fresh Debian 12+ / Ubuntu 24.04+ machine:
 
 ```
 curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install.sh | sudo bash
 ```
 
 Options follow `bash -s --`, e.g. `… | sudo bash -s -- --host 127.0.0.1 --port 8080`
-(`--version TAG`, `--with-rust`, `--with-node`, `--with-go`, `--with-bun`, `--with-deno`, `--with-php`, `--with-ruby`, `--with-java`, `--with-all`, `--shared-user`, `--app-users`, `--uninstall`). The installer adds
+(`--version TAG`, `--with-rust`, `--with-node`, `--with-go`, `--with-bun`, `--with-deno`, `--with-php`, `--with-ruby`, `--with-java`, `--with-all`, `--shared-user`, `--app-users`, `--allow-downgrade`, `--uninstall`). The installer adds
 missing system packages, runs the service as root with one Unix user per app (`--shared-user`: as a `venvy` system user), puts the code in
 `/opt/venvy/releases/<version>/` (with its own Python venv), data in `/var/lib/venvy/`,
 settings in `/etc/venvy/venvy.env`, and a `venvy` systemd service that starts at boot.
@@ -858,48 +858,84 @@ A frozen build must bundle `web/` next to the executable's code.
 | GET | `/api/auth/status` | none |
 | POST | `/api/auth/setup` | none (first run only) |
 | POST | `/api/auth/login` | none |
-| POST | `/api/auth/logout` | authenticated |
-| PUT | `/api/auth/password` | authenticated |
-| GET | `/api/auth/totp/setup` | authenticated |
-| POST | `/api/auth/totp/setup/confirm` | authenticated |
-| POST | `/api/auth/totp/disable` | authenticated |
+| POST | `/api/auth/logout` | none (session revoked only with valid key) |
+| PUT | `/api/auth/password` | authenticated (browser session) |
+| GET | `/api/auth/totp/setup` | authenticated (browser session) |
+| POST | `/api/auth/totp/setup/confirm` | authenticated (browser session) |
+| POST | `/api/auth/totp/disable` | authenticated (browser session) |
+| GET/POST | `/api/tokens` | authenticated (browser session) |
+| DELETE | `/api/tokens/{id}` | authenticated (browser session) |
 | GET | `/api/users` | admin |
-| POST | `/api/users` | admin |
-| DELETE | `/api/users/{id}` | admin |
+| POST | `/api/users` | admin (browser session) |
+| DELETE | `/api/users/{id}` | admin (browser session) |
+| PUT | `/api/users/{id}/access` | admin (browser session) |
+| GET | `/api/runtimes` | viewer |
 | GET | `/api/apps` | viewer |
 | POST | `/api/apps/upload` | operator |
 | PUT | `/api/apps/{id}` | operator |
 | DELETE | `/api/apps/{id}` | operator |
 | POST | `/api/apps/{id}/control` | operator |
+| POST | `/api/apps/{id}/duplicate` | operator |
+| POST | `/api/apps/{id}/venv/rebuild` | operator |
+| GET | `/api/apps/{id}/env-history` | operator |
 | GET | `/api/apps/{id}/stats` | viewer |
+| GET | `/api/apps/{id}/metrics/history` | viewer |
+| GET | `/api/apps/{id}/disk` | viewer |
 | GET | `/api/apps/{id}/files/tree` | operator |
 | POST | `/api/apps/{id}/files/op` | operator |
 | GET | `/api/apps/{id}/files/download` | operator |
 | POST | `/api/apps/{id}/files/upload` | operator |
 | POST | `/api/apps/{id}/files/upload/chunk` | operator |
-| GET | `/api/jobs/{job_id}` | any (own jobs) |
+| GET | `/api/jobs/{job_id}` | any (own jobs + app access) |
 | POST | `/api/auth/download-ticket` | any |
 | DELETE | `/api/apps/{id}/files/upload/{upload_id}` | operator |
 | GET | `/api/apps/{id}/packages` | viewer |
 | POST | `/api/apps/{id}/packages` | operator |
 | DELETE | `/api/apps/{id}/packages/{name}` | operator |
+| POST | `/api/apps/{id}/packages/sync` | operator |
 | GET | `/api/apps/{id}/logs` | viewer |
+| GET | `/api/apps/{id}/logs/search` | viewer |
+| GET | `/api/apps/{id}/logs/download` | viewer |
 | DELETE | `/api/apps/{id}/logs` | operator |
 | GET | `/api/apps/{id}/scan-imports` | operator |
+| GET | `/api/apps/{id}/deploy` | viewer (logs/build_command redacted) |
+| POST | `/api/apps/{id}/deploy` | operator |
+| PUT | `/api/apps/{id}/git` | operator |
+| POST | `/api/apps/{id}/git/key` | operator |
+| POST | `/api/apps/{id}/git/webhook-secret` | operator |
+| GET | `/api/apps/{id}/releases` | viewer |
+| POST | `/api/apps/{id}/releases` | operator |
+| DELETE | `/api/apps/{id}/releases/{release_id}` | operator |
+| POST | `/api/apps/{id}/releases/{release_id}/rollback` | operator |
+| POST | `/api/hooks/deploy/{app_id}` | webhook secret |
+| GET | `/api/apps/{id}/jobs` | viewer (command/output redacted) |
+| POST/PUT/DELETE | `/api/apps/{id}/jobs[/{job_id}]` | operator |
+| POST | `/api/apps/{id}/jobs/{job_id}/run` | operator |
+| GET | `/api/audit` | admin |
 | GET | `/api/system/info` | viewer |
 | GET | `/api/system/update` | admin |
 | GET | `/api/system/update/notes` | admin |
 | POST | `/api/system/update` | admin (browser session) |
 | GET | `/api/system/ports` | operator |
 | GET | `/api/system/metrics` | admin |
+| GET | `/api/system/metrics/history` | admin |
+| GET/PUT | `/api/system/shared-env` | admin |
+| GET/POST/PUT/DELETE | `/api/system/alerts[/{id}]` | admin |
+| GET/POST/PUT/DELETE | `/api/system/notify[/{id}]` | admin |
+| POST | `/api/system/notify/{id}/test` | admin |
 | POST | `/api/system/backup` | admin |
 | GET | `/api/system/backup/status` | admin |
+| GET/PUT | `/api/system/backup/schedule` | admin |
+| POST | `/api/system/backup/schedule/run` | admin |
+| PUT/DELETE | `/api/system/backup/remote` | admin |
+| POST | `/api/system/backup/remote/test` | admin |
+| POST | `/api/system/backups/{filename}/upload` | admin |
 | POST | `/api/system/backups/upload/chunk` | admin |
 | DELETE | `/api/system/backups/upload/{upload_id}` | admin |
 | GET | `/api/system/backups` | admin |
 | GET | `/api/system/backups/{filename}/download` | admin |
 | DELETE | `/api/system/backups/{filename}` | admin |
-| POST | `/api/system/backup/restore/{filename}` | admin |
+| POST | `/api/system/backup/restore/{filename}` | admin (browser session) |
 | GET/PUT | `/api/system/settings/{key}` | admin |
 | POST | `/api/system/settings/batch` | admin |
 | GET | `/api/system/cloudflare/status` | operator |
@@ -909,4 +945,4 @@ A frozen build must bundle `web/` next to the executable's code.
 | GET | `/api/apps/{id}/tunnel/check` | operator |
 | POST | `/api/apps/{id}/tunnel/publish` | operator |
 | DELETE | `/api/apps/{id}/tunnel/publish` | operator |
-| WS | `/api/apps/{id}/terminal` | authenticated |
+| WS | `/api/apps/{id}/terminal` | operator |

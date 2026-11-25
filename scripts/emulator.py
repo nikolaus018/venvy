@@ -41,7 +41,7 @@ app = FastAPI(title="Venvy Emulator")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,7 +80,7 @@ FAKE_APPS: Dict[int, dict] = {
         "start_on_boot": True,
         "restart_policy": "always",
         "last_exit_code": None,
-        "last_start_time": (datetime.datetime.utcnow() - datetime.timedelta(hours=2)).isoformat(),
+        "last_start_time": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)).isoformat(),
         "last_stop_time": None,
         "last_manually_stopped_at": None,
         "venv_path": "C:\\venvy\\apps\\1\\fastapi-demo\\venv",
@@ -89,8 +89,8 @@ FAKE_APPS: Dict[int, dict] = {
         "external_url": "https://fastapi-demo.example.com",
         "healthcheck_path": "/health",
         "url_source_pref": "local",
-        "created_at": (datetime.datetime.utcnow() - datetime.timedelta(days=10)).isoformat(),
-        "updated_at": (datetime.datetime.utcnow() - datetime.timedelta(hours=1)).isoformat(),
+        "created_at": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=10)).isoformat(),
+        "updated_at": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)).isoformat(),
         "local_url": "http://127.0.0.1:8000",
         "access_url": "http://127.0.0.1:8000",
         "url_source": "local",
@@ -114,8 +114,8 @@ FAKE_APPS: Dict[int, dict] = {
         "start_on_boot": False,
         "restart_policy": "on-failure",
         "last_exit_code": 0,
-        "last_start_time": (datetime.datetime.utcnow() - datetime.timedelta(days=1)).isoformat(),
-        "last_stop_time": (datetime.datetime.utcnow() - datetime.timedelta(hours=5)).isoformat(),
+        "last_start_time": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).isoformat(),
+        "last_stop_time": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=5)).isoformat(),
         "last_manually_stopped_at": None,
         "venv_path": "C:\\venvy\\apps\\1\\data-pipeline\\venv",
         "app_dir": "C:\\venvy\\apps\\1\\data-pipeline",
@@ -123,8 +123,8 @@ FAKE_APPS: Dict[int, dict] = {
         "external_url": None,
         "healthcheck_path": None,
         "url_source_pref": "local",
-        "created_at": (datetime.datetime.utcnow() - datetime.timedelta(days=5)).isoformat(),
-        "updated_at": (datetime.datetime.utcnow() - datetime.timedelta(hours=5)).isoformat(),
+        "created_at": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=5)).isoformat(),
+        "updated_at": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=5)).isoformat(),
         "local_url": "http://127.0.0.1:8001",
         "access_url": "http://127.0.0.1:8001",
         "url_source": "local",
@@ -148,7 +148,7 @@ FAKE_APPS: Dict[int, dict] = {
         "start_on_boot": True,
         "restart_policy": "always",
         "last_exit_code": None,
-        "last_start_time": (datetime.datetime.utcnow() - datetime.timedelta(minutes=30)).isoformat(),
+        "last_start_time": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=30)).isoformat(),
         "last_stop_time": None,
         "last_manually_stopped_at": None,
         "venv_path": "",
@@ -157,8 +157,8 @@ FAKE_APPS: Dict[int, dict] = {
         "external_url": "https://rust-service.example.com",
         "healthcheck_path": "/ping",
         "url_source_pref": "public",
-        "created_at": (datetime.datetime.utcnow() - datetime.timedelta(days=3)).isoformat(),
-        "updated_at": (datetime.datetime.utcnow() - datetime.timedelta(minutes=30)).isoformat(),
+        "created_at": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=3)).isoformat(),
+        "updated_at": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=30)).isoformat(),
         "local_url": "http://127.0.0.1:9000",
         "access_url": "https://rust-service.example.com",
         "url_source": "cloudflare",
@@ -286,7 +286,7 @@ def _app_or_404(app_id: int) -> dict:
     return FAKE_APPS[app_id]
 
 def _now_iso():
-    return datetime.datetime.utcnow().isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 # ---------------------------------------------------------------------------
 # Static — serve index.html
@@ -346,7 +346,8 @@ def login(payload: LoginReq, response: Response):
     if payload.username != FAKE_USER["username"] or payload.password != FAKE_USER["password"]:
         raise HTTPException(401, "Invalid credentials.")
     response.set_cookie("session", FAKE_SESSION_TOKEN, httponly=True, path="/", samesite="strict")
-    return {"ok": True, "username": FAKE_USER["username"], "is_admin": FAKE_USER["is_admin"], "auth_key": FAKE_AUTH_KEY}
+    return {"ok": True, "username": FAKE_USER["username"], "role": "admin" if FAKE_USER["is_admin"] else "operator",
+            "is_admin": FAKE_USER["is_admin"], "auth_key": FAKE_AUTH_KEY}
 
 class SetupReq(BaseModel):
     username: str
@@ -356,7 +357,7 @@ class SetupReq(BaseModel):
 @app.post("/api/auth/setup")
 def auth_setup(payload: SetupReq, response: Response):
     response.set_cookie("session", FAKE_SESSION_TOKEN, httponly=True, path="/", samesite="strict")
-    return {"ok": True, "username": payload.username, "is_admin": True, "auth_key": FAKE_AUTH_KEY}
+    return {"ok": True, "username": payload.username, "role": "admin", "is_admin": True, "auth_key": FAKE_AUTH_KEY}
 
 @app.post("/api/auth/logout")
 def logout(response: Response):
@@ -630,7 +631,7 @@ async def get_app_logs(app_id: int, lines: int = Query(default=2000, ge=1, le=10
     log_lines = SAMPLE_LOG.strip().splitlines()
     # Append a few timestamped live lines
     for i in range(8):
-        ts = (datetime.datetime.utcnow() - datetime.timedelta(seconds=i * 10)).strftime("%Y-%m-%d %H:%M:%S")
+        ts = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=i * 10)).strftime("%Y-%m-%d %H:%M:%S")
         log_lines.append(f"{ts} INFO  [emulator] heartbeat ping #{random.randint(100, 9999)}")
     content = "\n".join(log_lines[-lines:])
     return {"content": content, "truncated": False, "total_lines": len(log_lines)}
@@ -1296,7 +1297,7 @@ async def terminal_ws(websocket: WebSocket, app_id: int):
 # ---------------------------------------------------------------------------
 
 def _iso(minutes_ago: float = 0) -> str:
-    return (datetime.datetime.utcnow() - datetime.timedelta(minutes=minutes_ago)).replace(tzinfo=datetime.timezone.utc).isoformat()
+    return (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes_ago)).isoformat()
 
 FAKE_GIT: Dict[int, dict] = {}
 FAKE_RELEASES: Dict[int, list] = {}
@@ -1433,7 +1434,7 @@ def list_cron_jobs(app_id: int, request: Request):
 def create_cron_job(app_id: int, req: _JobReq, request: Request):
     _check_auth(request); _app_or_404(app_id)
     FAKE_NEXT_ID["job"] += 1
-    j = {"id": FAKE_NEXT_ID["job"], **req.dict(), "last_run_at": None, "last_status": None, "last_exit_code": None, "last_duration": None, "last_output": ""}
+    j = {"id": FAKE_NEXT_ID["job"], **req.model_dump(), "last_run_at": None, "last_status": None, "last_exit_code": None, "last_duration": None, "last_output": ""}
     FAKE_JOBS_CRON.setdefault(app_id, []).append(j)
     return _job_json(j)
 
@@ -1442,7 +1443,7 @@ def update_cron_job(app_id: int, job_id: int, req: _JobReq, request: Request):
     _check_auth(request)
     for j in FAKE_JOBS_CRON.get(app_id, []):
         if j["id"] == job_id:
-            j.update(req.dict()); return _job_json(j)
+            j.update(req.model_dump()); return _job_json(j)
     raise HTTPException(404)
 
 @app.delete("/api/apps/{app_id}/jobs/{job_id}")
@@ -1467,8 +1468,8 @@ def env_history(app_id: int, request: Request):
 
 def _series(minutes: int, base: float, wobble: float, scale: float = 1.0) -> list:
     n = min(120, max(10, minutes // 2))
-    now = datetime.datetime.utcnow()
-    return [{"ts": (now - datetime.timedelta(minutes=minutes * (n - i) / n)).replace(tzinfo=datetime.timezone.utc).isoformat(),
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return [{"ts": (now - datetime.timedelta(minutes=minutes * (n - i) / n)).isoformat(),
              "cpu": round(max(0, base + wobble * random.uniform(-1, 1)), 2), "mem": (base * 1e6 + wobble * 1e6 * random.uniform(-1, 1)) * scale,
              "disk": 48 + i / n * 2} for i in range(n)]
 
@@ -1541,7 +1542,7 @@ class _ChannelReq(BaseModel):
 def create_channel(req: _ChannelReq, request: Request):
     _check_auth(request)
     FAKE_NEXT_ID["channel"] += 1
-    ch = {"id": FAKE_NEXT_ID["channel"], **req.dict(), "last_status": None, "last_sent_at": None}
+    ch = {"id": FAKE_NEXT_ID["channel"], **req.model_dump(), "last_status": None, "last_sent_at": None}
     FAKE_CHANNELS.append(ch)
     return ch
 
@@ -1550,7 +1551,7 @@ def update_channel(channel_id: int, req: _ChannelReq, request: Request):
     _check_auth(request)
     for ch in FAKE_CHANNELS:
         if ch["id"] == channel_id:
-            ch.update(req.dict()); return ch
+            ch.update(req.model_dump()); return ch
     raise HTTPException(404)
 
 @app.delete("/api/system/notify/{channel_id}")
@@ -1582,7 +1583,7 @@ def create_alert(req: _AlertReq, request: Request):
     FAKE_NEXT_ID["alert"] += 1
     name = FAKE_APPS[req.app_id]["name"] if req.app_id in FAKE_APPS else None
     who = name or "The host"
-    r = {"id": FAKE_NEXT_ID["alert"], **req.dict(), "app": name, "firing": False, "since": None,
+    r = {"id": FAKE_NEXT_ID["alert"], **req.model_dump(), "app": name, "firing": False, "since": None,
          "description": f"{who}: {req.metric} above {req.threshold:g} for {req.minutes} min"}
     FAKE_ALERTS.append(r)
     return r
@@ -1592,7 +1593,7 @@ def update_alert(rule_id: int, req: _AlertReq, request: Request):
     _check_auth(request)
     for r in FAKE_ALERTS:
         if r["id"] == rule_id:
-            r.update(req.dict()); return r
+            r.update(req.model_dump()); return r
     raise HTTPException(404)
 
 @app.delete("/api/system/alerts/{rule_id}")

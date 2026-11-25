@@ -62,6 +62,7 @@
                 let r;
                 try { r = await fetch(`${API}/jobs/${body.job_id}`, { cache: 'no-store' }); }
                 catch { if (++misses > 60) throw new Error('Lost contact with the server.'); continue; }
+                if (r.status === 401 || r.status === 403) throw new Error('Session expired or access denied.');
                 if (r.status === 404) throw new Error('The server lost track of this task (did it restart?).');
                 if (!r.ok) { if (++misses > 60) throw new Error(`HTTP ${r.status}`); continue; }
                 misses = 0;
