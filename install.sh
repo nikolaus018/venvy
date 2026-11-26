@@ -388,7 +388,9 @@ install_sops() {
   case "$(uname -m)" in x86_64|amd64) a=amd64 ;; aarch64|arm64) a=arm64 ;; *) die "sops: unsupported CPU $(uname -m)" ;; esac
   say "Installing sops..."
   WORK="$(mktemp -d)"
-  tag="$(curl -fsSL https://api.github.com/repos/getsops/sops/releases/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')" \
+  # Read into a file first: nothing downloaded is piped into an interpreter.
+  fetch_to https://api.github.com/repos/getsops/sops/releases/latest "$WORK/release.json"
+  tag="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tag_name"])' "$WORK/release.json")" \
     || die "Could not find the current sops release."
   case "$tag" in v[0-9]*) ;; *) die "Unexpected sops release tag." ;; esac
   base="https://github.com/getsops/sops/releases/download/$tag"; f="sops-$tag.linux.$a"
@@ -419,7 +421,8 @@ if [ "$WITH_DOCKER" -eq 1 ]; then install_compose; systemctl enable --now docker
 [ "$WITH_UV" -eq 1 ]   && install_uv
 [ "$WITH_SOPS" -eq 1 ] && install_sops
 if [ "$WITH_PNPM" -eq 1 ] && command -v corepack >/dev/null 2>&1; then corepack enable >/dev/null 2>&1 || true; fi
-if [ "$WITH_PNPM" -eq 1 ] && ! command -v corepack >/dev/null 2>&1; then npm install -g --no-fund --no-audit corepack >/dev/null && corepack enable || warn "corepack could not be installed"; fi
+# Node ships corepack up to v24; nothing unpinned is fetched from npm for a newer one.
+if [ "$WITH_PNPM" -eq 1 ] && ! command -v corepack >/dev/null 2>&1; then warn "corepack is not part of this Node: pnpm and Yarn apps need it (npm install -g corepack@<version>)."; fi
 if [ "$WITH_TAILSCALE" -eq 1 ] && ! command -v tailscale >/dev/null 2>&1; then
   say "Installing Tailscale..."
   add_apt_repo tailscale "https://pkgs.tailscale.com/stable/$OS_ID/$OS_CODENAME.noarmor.gpg" \

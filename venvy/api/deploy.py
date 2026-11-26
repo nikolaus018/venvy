@@ -20,7 +20,7 @@ from venvy.audit import audit_log
 from venvy.auth import (
     _resolve_client_ip, check_ip_allowlist, get_current_user, rate_limit_mutations, require_app_access, require_operator,
 )
-from venvy.config import APPS_BASE_DIR, utc_now
+from venvy.config import APPS_BASE_DIR, one_line, utc_now
 from venvy.crypto import _decrypt_secret, _encrypt_secret
 from venvy.db import engine, get_session
 from venvy.isolation import _chown_app_dir, _delete_app_user, _ensure_app_user
@@ -215,12 +215,13 @@ async def start_deploy(
     if app.parent_app_id:
         raise HTTPException(400, "Deploy the app this process belongs to.")
     queued = deploy.is_running(app_id)
+    a_id = app.id
 
     async def _go() -> None:
         try:
             await deploy.run_deploy(app_id, user.username, "manual", start_if_stopped=req.start)
         except deploy.DeployError as exc:
-            logging.warning(f"Deploy of app {app_id} not started: {exc}")
+            logging.warning("Deploy of app %s not started: %s", a_id, one_line(exc))
 
     _start_background(_go())
     if queued:
@@ -321,7 +322,7 @@ async def rollback(
         try:
             await deploy.run_deploy(app_id, user.username, "rollback", target=rel)
         except deploy.DeployError as exc:
-            logging.warning(f"Rollback of app {app_id} not started: {exc}")
+            logging.warning("Rollback of app %d not started: %s", int(app_id), one_line(exc))
 
     _start_background(_go())
     for _ in range(20):
@@ -400,7 +401,7 @@ async def deploy_webhook(app_id: int, request: Request):
         try:
             await deploy.run_deploy(app_id, "webhook", "webhook")
         except deploy.DeployError as exc:
-            logging.warning(f"Webhook deploy of app {app_id} not started: {exc}")
+            logging.warning("Webhook deploy of app %d not started: %s", int(app_id), one_line(exc))
 
     _start_background(_go())
     audit_log("webhook", "app_webhook_deploy", f"app '{name}' (id={app_id})")
