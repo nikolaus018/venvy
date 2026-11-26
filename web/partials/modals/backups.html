@@ -1,11 +1,11 @@
     <!-- Backups Modal -->
     <div role="dialog" aria-modal="true" aria-labelledby="backups-modal-title" id="backups-modal"
         class="fixed inset-0 z-[80] modal-overlay hidden flex items-end md:items-center justify-center p-4 md:p-0">
-        <div class="modal-panel p-5 w-full max-w-lg shadow-lg h-[80vh] md:h-[560px] flex flex-col">
+        <div class="modal-panel p-5 w-full max-w-lg shadow-lg max-h-[80vh] md:max-h-[560px] flex flex-col">
             <div class="flex justify-between items-center mb-2 shrink-0">
                 <h2 class="text-lg font-bold" id="backups-modal-title" style="color:var(--text)">Backups
                 </h2>
-                <button data-on-click="closeModal('backups-modal')" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
+                <button data-on-click="closeModal('backups-modal')" aria-label="Close" class="p-1.5 rounded-lg" style="color:var(--text3)"><i
                         data-feather="x" class="w-4 h-4"></i></button>
             </div>
             <p class="text-xs mb-4 leading-relaxed shrink-0" style="color:var(--text3)">

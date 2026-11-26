@@ -17,7 +17,7 @@
             const emptyText = opts.emptyText || 'No variables yet. Each one becomes an environment variable of the app.';
             const importBtn = opts.noImport ? '' : `<button type="button" data-env-act="import" data-requires-operator class="btn-ghost text-xs font-semibold px-2.5 py-1 rounded-lg">Import .env</button>`;
             document.getElementById(mountId).innerHTML = `
-                <div class="flex items-center justify-between gap-3 mb-2">
+                <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 mb-2">
                     <span class="section-label"><span id="${P}-title">${opts.title || 'Environment Variables'}</span> <span id="${P}-count" class="font-normal normal-case ml-1" style="color:var(--text3)"></span></span>
                     <div class="flex items-center gap-1.5">
                         <button type="button" data-env-act="reveal" class="btn-ghost text-xs font-semibold px-2.5 py-1 rounded-lg"><span id="${P}-reveal-label">Show values</span></button>
@@ -39,7 +39,7 @@
                                 <button type="button" data-env-act="run-import" class="btn-secondary text-xs px-4 py-1.5">Import</button>
                             </div>
                         </div>
-                        <div id="${P}-head" class="hidden grid gap-2 px-3 pt-2.5 pb-1 section-label" style="grid-template-columns:minmax(0,2fr) minmax(0,3fr) 2.25rem">
+                        <div id="${P}-head" class="env-head hidden grid gap-2 px-3 pt-2.5 pb-1 section-label">
                             <span>Name</span><span>Value</span><span></span>
                         </div>
                         <div id="${P}-rows"></div>
@@ -64,7 +64,6 @@
             function _addRow(name = '', value = '', focus = false) {
                 const row = document.createElement('div');
                 row.className = 'env-row grid items-center gap-2 px-3 py-1.5';
-                row.style.gridTemplateColumns = 'minmax(0,2fr) minmax(0,3fr) auto';
                 row.innerHTML = `
                     <input type="text" class="env-key inp w-full px-3 py-2 mono text-xs" placeholder="API_KEY"
                         autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Variable name">

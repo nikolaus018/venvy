@@ -49,7 +49,7 @@
 
         function _card(title, icon, body, sub = '') {
             return `<div class="card p-5 space-y-3"><div><h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
-                <i data-feather="${icon}" class="w-4 h-4"></i> ${_H(title)}</h3>${sub ? `<p class="text-xs mt-0.5" style="color:var(--text3)">${sub}</p>` : ''}</div>${body}</div>`;
+                <i data-feather="${icon}" class="w-4 h-4"></i> ${_H(title)}</h3>${sub ? `<p class="text-xs mt-0.5" style="color:var(--text3);overflow-wrap:anywhere">${sub}</p>` : ''}</div>${body}</div>`;
         }
 
         function _btn(label, call, kind = 'btn-ghost', needs = 'operator') {
@@ -215,7 +215,7 @@
                 `<div class="space-y-1">${svcList.map(b => `<div class="text-xs flex gap-2 items-center"><span class="font-semibold">${_H(b.service)}</span>
                     <span style="color:var(--text3)">${_H(b.template)} → ${b.variables.map(_H).join(', ')}</span><span class="flex-1"></span>${_btn('Detach', _ha('unbind', b.id))}</div>`).join('')
                     || '<p class="text-xs" style="color:var(--text3)">Uses no managed service. Make one under System → Platform → Services.</p>'}</div>
-                 ${allApps.length ? `<div class="flex gap-2" data-requires-operator><select id="h-bind" class="inp px-3 py-2 text-xs flex-1">${allApps.map(a => `<option value="${a.id}">${_H(a.name)} (${_H(a.service_template)})</option>`).join('')}</select>
+                 ${allApps.length ? `<div class="flex flex-wrap gap-2" data-requires-operator><select id="h-bind" class="inp px-3 py-2 text-xs flex-1">${allApps.map(a => `<option value="${a.id}">${_H(a.name)} (${_H(a.service_template)})</option>`).join('')}</select>
                  <input id="h-bind-prefix" class="inp px-3 py-2 text-xs w-28" placeholder="PREFIX">${_btn('Use', _ha('bind'))}</div>` : ''}
                  <div class="space-y-1">${(vols && vols.ok ? vols.data : []).map(v => {
                     const at = v.apps.find(x => x.app_id === appId);
@@ -226,10 +226,10 @@
             sections.push(_card('Publish', 'globe',
                 `<div class="space-y-1">${fl.map(f => `<div class="text-xs flex gap-2"><span class="mono">${_H(f.protocol)} ${_H(f.listen_host)}:${f.listen_port} → ${f.target_port}</span>
                     <span style="color:${f.listening ? 'var(--green)' : 'var(--red)'}">${f.listening ? 'listening' : _H(f.error || 'not listening')}</span><span class="flex-1"></span>${_btn('Remove', _ha('deleteForward', f.id), 'btn-ghost', 'admin')}</div>`).join('')}</div>
-                 <div class="flex gap-2 flex-wrap" data-requires-admin><select id="h-f-proto" class="inp px-3 py-2 text-xs"><option>tcp</option><option>udp</option></select>
+                 <div class="flex flex-wrap gap-2" data-requires-admin><select id="h-f-proto" class="inp px-3 py-2 text-xs"><option>tcp</option><option>udp</option></select>
                  <input id="h-f-port" type="number" class="inp px-3 py-2 text-xs w-28" placeholder="host port">
                  <input id="h-f-target" type="number" class="inp px-3 py-2 text-xs w-28" placeholder="app port">${_btn('Forward', _ha('addForward'), 'btn-ghost', 'admin')}</div>
-                 <div class="flex gap-2 flex-wrap" data-requires-admin><select id="h-p-mode" class="inp px-3 py-2 text-xs">
+                 <div class="flex flex-wrap gap-2" data-requires-admin><select id="h-p-mode" class="inp px-3 py-2 text-xs">
                  <option value="serve">Tailscale (tailnet)</option><option value="funnel">Tailscale Funnel (internet)</option><option value="ngrok">ngrok</option></select>
                  <input id="h-p-arg" class="inp px-3 py-2 text-xs flex-1" placeholder="https port (443/8443/10000) or ngrok domain">
                  ${_btn('Publish', _ha('publish'), 'btn-ghost', 'admin')}${_btn('Unpublish', _ha('unpublish'), 'btn-ghost', 'admin')}</div>
@@ -244,7 +244,7 @@
                     'The app\'s folder and $APP_DATA_DIR, with consistent copies of SQLite databases.'));
             }
             sections.push(_card('Run a command', 'terminal',
-                `<div class="flex gap-2" data-requires-operator><input id="h-run" class="inp px-3 py-2 text-xs mono flex-1" placeholder="python manage.py createsuperuser --noinput" data-on-enter="${_ha('run')}">
+                `<div class="flex flex-wrap gap-2" data-requires-operator><input id="h-run" class="inp px-3 py-2 text-xs mono flex-1" placeholder="python manage.py createsuperuser --noinput" data-on-enter="${_ha('run')}">
                  ${_btn('Run', _ha('run'), 'btn-primary')}</div><pre id="h-run-out" class="text-[11px] mono hidden overflow-x-auto p-2 rounded max-h-80" style="background:var(--surface)"></pre>`,
                 'Once, as the app, in its folder, with its variables.'));
             root.innerHTML = sections.join('');
@@ -387,22 +387,23 @@
             out.push(_card('Toolchains', 'tool', (tc.ok ? tc.data.kinds : []).map(k => `<div class="text-xs flex gap-2 items-center">
                 <span class="font-semibold w-16">${_H(k.kind)}</span><span class="mono flex-1" style="color:var(--text2)">${k.installed.map(_H).join(', ') || '—'}</span>
                 ${k.installed.map(v => _btn('×' + v, _pa('removeToolchain', k.kind + '/' + v), 'btn-ghost', 'admin')).join('')}</div>`).join('')
-                + `<div class="flex gap-2" data-requires-admin><select id="p-tc-kind" class="inp px-3 py-2 text-xs">${(tc.ok ? tc.data.kinds : []).map(k => `<option ${k.can_install ? '' : 'disabled'}>${_H(k.kind)}</option>`).join('')}</select>
+                + `<div class="flex flex-wrap gap-2" data-requires-admin><select id="p-tc-kind" class="inp px-3 py-2 text-xs">${(tc.ok ? tc.data.kinds : []).map((k, i, all) => `<option value="${_H(k.kind)}" ${k.can_install ? '' : 'disabled'} ${i === Math.max(0, all.findIndex(x => x.can_install)) ? 'selected' : ''}>${_H(k.kind)}${k.can_install ? '' : ' (unavailable)'}</option>`).join('')
+                  || '<option disabled>none</option>'}</select>
                   <input id="p-tc-ver" class="inp px-3 py-2 text-xs flex-1" placeholder="version: 20, 1.82, 3.13, latest">${_btn('Install', _pa('installToolchain'), 'btn-primary', 'admin')}</div>`,
                 `Language versions apps can choose (Settings or Hosting → Version), checksum-verified. In ${_H(tc.ok ? tc.data.dir : '')}.`));
             out.push(_card('Services', 'database', `${st.ok && !st.data.docker ? '<p class="text-xs" style="color:var(--yellow)">Docker is not installed (installer: --with-docker).</p>' : ''}
-                <div class="flex gap-2"><select id="p-svc" class="inp px-3 py-2 text-xs">${(st.ok ? st.data.templates : []).map(t => `<option value="${_H(t.key)}">${_H(t.label)}</option>`).join('')}</select>
+                <div class="flex flex-wrap gap-2"><select id="p-svc" class="inp px-3 py-2 text-xs">${(st.ok ? st.data.templates : []).map(t => `<option value="${_H(t.key)}">${_H(t.label)}</option>`).join('')}</select>
                 <input id="p-svc-name" class="inp px-3 py-2 text-xs flex-1" placeholder="name, e.g. main-db">${_btn('Create', _pa('createService'), 'btn-primary')}</div>`,
                 'Databases, caches and queues as containers with generated credentials; attach them to apps in Hosting → Services.'));
             out.push(_card('Volumes', 'folder', (vols.ok ? vols.data : []).map(v => `<div class="text-xs flex gap-2"><span class="mono">${_H(v.name)}</span>
                 <span style="color:var(--text3)">${v.apps.length} app(s) · $${_H(v.env)}</span><span class="flex-1"></span>${_btn('Delete', _pa('deleteVolume', v.id), 'btn-ghost', 'admin')}</div>`).join('')
-                + `<div class="flex gap-2" data-requires-admin><input id="p-vol" class="inp px-3 py-2 text-xs flex-1" placeholder="shared-uploads">${_btn('Create', _pa('createVolume'), 'btn-primary', 'admin')}</div>`,
+                + `<div class="flex flex-wrap gap-2" data-requires-admin><input id="p-vol" class="inp px-3 py-2 text-xs flex-1" placeholder="shared-uploads">${_btn('Create', _pa('createVolume'), 'btn-primary', 'admin')}</div>`,
                 'Folders apps can share (attach in Hosting).'));
             out.push(_card('Monitors', 'radio', (mons.ok ? mons.data : []).map(m => `<div class="text-xs flex gap-2 items-center">
                 ${statusPill(m.last_ok == null ? 'unknown' : m.last_ok ? 'healthy' : 'unhealthy')}<span class="font-semibold">${_H(m.name)}</span>
                 <span class="mono truncate flex-1" style="color:var(--text3)">${_H(m.target)}</span><span>${m.uptime_24h != null ? m.uptime_24h.toFixed(2) + '%' : ''}</span>
                 ${_btn('Delete', _pa('deleteMonitor', m.id))}</div>`).join('')
-                + `<div class="flex gap-2 flex-wrap"><input id="p-mon-name" class="inp px-3 py-2 text-xs" placeholder="name">
+                + `<div class="flex flex-wrap gap-2"><input id="p-mon-name" class="inp px-3 py-2 text-xs" placeholder="name">
                   <input id="p-mon-target" class="inp px-3 py-2 text-xs mono flex-1" placeholder="https://example.com/health or tcp://db:5432">
                   <label class="text-xs flex items-center gap-1"><input type="checkbox" id="p-mon-public"> on status page</label>${_btn('Add', _pa('addMonitor'), 'btn-primary')}</div>`,
                 'Anything reachable from here, checked on a schedule, with notifications.'));
@@ -411,23 +412,23 @@
                 out.push(_card('Edge', 'globe', `
                     <p class="text-xs">Caddy: ${e.caddy?.installed ? (e.caddy.running ? 'running' : 'installed, not running') : 'not installed (--with-caddy)'}</p>
                     <label class="text-xs flex items-center gap-2"><input type="checkbox" id="p-caddy-on" ${e.caddy?.enabled ? 'checked' : ''}> HTTPS for every routed hostname (Let's Encrypt, on demand)</label>
-                    <div class="flex gap-2"><input id="p-caddy-email" class="inp px-3 py-2 text-xs flex-1" placeholder="ACME email (optional)" value="${_H(e.caddy?.email || '')}">
+                    <div class="flex flex-wrap gap-2"><input id="p-caddy-email" class="inp px-3 py-2 text-xs flex-1" placeholder="ACME email (optional)" value="${_H(e.caddy?.email || '')}">
                     <input id="p-caddy-hosts" class="inp px-3 py-2 text-xs flex-1" placeholder="Venvy's own hostnames, comma separated" value="${_H((e.caddy?.venvy_hosts || []).join(', '))}">
                     ${_btn('Apply', _pa('saveCaddy'), 'btn-primary', 'admin')}</div>
                     <p class="text-xs">Tailscale: ${e.tailscale?.installed ? _H(e.tailscale.backend || '') + ' ' + _H(e.tailscale.dns_name || '') : 'not installed (--with-tailscale)'}</p>
                     <p class="text-xs">ngrok: ${e.ngrok?.installed ? 'installed' : 'not installed (--with-ngrok)'}${e.ngrok?.has_token ? ' · token set' : ''}</p>
-                    <div class="flex gap-2"><input id="p-ngrok" type="password" class="inp px-3 py-2 text-xs flex-1" placeholder="ngrok authtoken">${_btn('Save token', _pa('saveNgrok'), 'btn-ghost', 'admin')}</div>`,
+                    <div class="flex flex-wrap gap-2"><input id="p-ngrok" type="password" class="inp px-3 py-2 text-xs flex-1" placeholder="ngrok authtoken">${_btn('Save token', _pa('saveNgrok'), 'btn-ghost', 'admin')}</div>`,
                     'Ways in from the internet besides the Cloudflare tunnel.'));
                 out.push(_card('Log shipping', 'send', (logs.ok ? logs.data : []).map(t => `<div class="text-xs flex gap-2"><span class="font-semibold">${_H(t.kind)}</span>
                     <span class="mono flex-1" style="color:var(--text3)">${_H(t.url || (t.host ? t.host + ':' + t.port + '/' + t.protocol : '/dev/log'))}</span>
                     <span style="color:var(--text3)">${t.stats?.sent || 0} sent${t.stats?.last_error ? ' · ' + _H(t.stats.last_error) : ''}</span>${_btn('Remove', _pa('removeLogTarget', t.id), 'btn-ghost', 'admin')}</div>`).join('')
-                    + `<div class="flex gap-2 flex-wrap"><select id="p-lt-kind" class="inp px-3 py-2 text-xs"><option>loki</option><option>http</option><option>syslog</option><option>journald</option></select>
+                    + `<div class="flex flex-wrap gap-2"><select id="p-lt-kind" class="inp px-3 py-2 text-xs"><option>loki</option><option>http</option><option>syslog</option><option>journald</option></select>
                       <input id="p-lt-url" class="inp px-3 py-2 text-xs mono flex-1" placeholder="https://loki:3100  ·  or host:port for syslog">
                       <input id="p-lt-token" type="password" class="inp px-3 py-2 text-xs" placeholder="token (optional)">${_btn('Add', _pa('addLogTarget'), 'btn-primary', 'admin')}</div>`));
                 const t = tele.ok ? tele.data : {};
                 out.push(_card('Metrics and heartbeat', 'bar-chart-2', `
                     <p class="text-xs" style="color:var(--text3)">Prometheus: <span class="mono">GET /metrics</span> with an API token (scope read). Firewall: ${t.firewall?.active ? 'active' : _H(t.firewall?.reason || 'off')}.</p>
-                    <div class="flex gap-2"><input id="p-otlp" class="inp px-3 py-2 text-xs mono flex-1" placeholder="OTLP collector, e.g. http://otel:4318" value="${_H(t.otlp_url || '')}">
+                    <div class="flex flex-wrap gap-2"><input id="p-otlp" class="inp px-3 py-2 text-xs mono flex-1" placeholder="OTLP collector, e.g. http://otel:4318" value="${_H(t.otlp_url || '')}">
                     <input id="p-hb" class="inp px-3 py-2 text-xs mono flex-1" placeholder="${t.heartbeat_url ? 'heartbeat URL set — enter to replace' : 'heartbeat URL (healthchecks.io …)'}">
                     ${_btn('Save', _pa('saveTelemetry'), 'btn-primary', 'admin')}</div>
                     <p class="text-xs" style="color:var(--text3)">Heartbeat: ${_H(t.state?.heartbeat?.last_ok || 'never')}${t.state?.heartbeat?.last_error ? ' · ' + _H(t.state.heartbeat.last_error) : ''} · OTLP: ${_H(t.state?.otlp?.last_ok || 'never')}</p>`));
@@ -438,21 +439,21 @@
                     <div class="flex justify-end">${_btn('Save', _pa('saveStatusPage'), 'btn-primary', 'admin')}</div>`));
                 const rp = repl.ok ? repl.data : {};
                 out.push(_card('Database replication', 'copy', `<p class="text-xs" style="color:var(--text3)">${rp.remote ? 'To the off-site backup destination.' : 'Set an off-site destination under Backups first.'} Last: ${_H(rp.last_ok || 'never')}${rp.last_error ? ' · ' + _H(rp.last_error) : ''}</p>
-                    <div class="flex gap-2"><input id="p-repl" type="number" class="inp px-3 py-2 text-xs w-32" value="${rp.minutes || 0}" placeholder="minutes">${_btn('Save', _pa('saveReplication'), 'btn-primary', 'admin')}${_btn('Run now', _pa('runReplication'), 'btn-ghost', 'admin')}</div>`,
+                    <div class="flex flex-wrap gap-2"><input id="p-repl" type="number" class="inp px-3 py-2 text-xs w-32" value="${rp.minutes || 0}" placeholder="minutes">${_btn('Save', _pa('saveReplication'), 'btn-primary', 'admin')}${_btn('Run now', _pa('runReplication'), 'btn-ghost', 'admin')}</div>`,
                     'A standby copy of settings, users, routes and variables every few minutes (0 = off).'));
                 out.push(_card('Other servers', 'server', (servers.ok ? servers.data : []).map(sv => `<div class="text-xs flex gap-2"><span class="font-semibold">${_H(sv.name)}</span>
                     <span class="mono flex-1" style="color:var(--text3)">${_H(sv.url)}</span><span>${_H(sv.last_status)}</span>${_btn('Remove', _pa('removeServer', sv.id), 'btn-ghost', 'admin')}</div>`).join('')
-                    + `<div id="p-remote-apps" class="space-y-1"></div><div class="flex gap-2 flex-wrap"><input id="p-srv-name" class="inp px-3 py-2 text-xs" placeholder="name">
+                    + `<div id="p-remote-apps" class="space-y-1"></div><div class="flex flex-wrap gap-2"><input id="p-srv-name" class="inp px-3 py-2 text-xs" placeholder="name">
                       <input id="p-srv-url" class="inp px-3 py-2 text-xs mono flex-1" placeholder="https://venvy2.example.com">
                       <input id="p-srv-token" type="password" class="inp px-3 py-2 text-xs" placeholder="API token from that server">${_btn('Add', _pa('addServer'), 'btn-primary', 'admin')}${_btn('Show apps', _pa('remoteApps'), 'btn-ghost', 'admin')}</div>`,
                     'Watch and control the apps of other Venvy servers from here.'));
                 out.push(_card('Host jobs', 'clock', (hjobs.ok ? hjobs.data : []).map(j => `<div class="text-xs flex gap-2 items-center">${j.last_status ? statusPill(j.last_status) : ''}<span class="font-semibold">${_H(j.name)}</span>
                     <span class="mono" style="color:var(--text3)">${_H(j.schedule)}</span><span class="mono truncate flex-1">${_H(j.command)}</span>${_btn('Run', _pa('runHostJob', j.id), 'btn-ghost', 'admin')}${_btn('Delete', _pa('deleteHostJob', j.id), 'btn-ghost', 'admin')}</div>`).join('')
-                    + `<div class="flex gap-2 flex-wrap"><input id="p-hj-name" class="inp px-3 py-2 text-xs" placeholder="name"><input id="p-hj-sched" class="inp px-3 py-2 text-xs mono w-32" placeholder="0 4 * * *">
+                    + `<div class="flex flex-wrap gap-2"><input id="p-hj-name" class="inp px-3 py-2 text-xs" placeholder="name"><input id="p-hj-sched" class="inp px-3 py-2 text-xs mono w-32" placeholder="0 4 * * *">
                       <input id="p-hj-cmd" class="inp px-3 py-2 text-xs mono flex-1" placeholder="curl -fsS https://example.com/cron">${_btn('Add', _pa('addHostJob'), 'btn-primary', 'admin')}</div>`,
                     'Scheduled commands that belong to no app (run as the unprivileged user venvy-app-0).'));
                 const se = secr.ok ? secr.data : {};
-                out.push(_card('Secrets back-ends', 'key', `<div class="flex gap-2 flex-wrap"><input id="p-vault-addr" class="inp px-3 py-2 text-xs mono flex-1" placeholder="Vault address" value="${_H(se.vault_addr || '')}">
+                out.push(_card('Secrets back-ends', 'key', `<div class="flex flex-wrap gap-2"><input id="p-vault-addr" class="inp px-3 py-2 text-xs mono flex-1" placeholder="Vault address" value="${_H(se.vault_addr || '')}">
                     <input id="p-vault-token" type="password" class="inp px-3 py-2 text-xs" placeholder="${se.vault_token_set ? 'token set — enter to replace' : 'Vault token'}">
                     <input id="p-vault-ns" class="inp px-3 py-2 text-xs w-32" placeholder="namespace" value="${_H(se.vault_namespace || '')}"></div>
                     <input id="p-age" type="password" class="inp px-3 py-2 text-xs mono w-full" placeholder="${se.sops_age_key_set ? 'age key set — enter to replace' : 'AGE-SECRET-KEY-… for SOPS files'}">

@@ -184,6 +184,7 @@
                     [['5'], 'Deploy'],
                     [['6'], 'Jobs'],
                     [['7'], 'Settings'],
+                    [['8'], 'Hosting'],
                     [['['], 'Previous application'],
                     [[']'], 'Next application'],
                     [['←', '→'], 'Move between tabs (when a tab is focused)'],

@@ -48,8 +48,6 @@
                 btn.setAttribute('aria-selected', 'true');
                 btn.tabIndex = 0;
                 if (opts.focusTab) btn.focus();
-                // Keep the active tab visible in the horizontal scroller on mobile.
-                btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
             }
 
             if (logInterval) { clearInterval(logInterval); logInterval = null; _logsInflight = false; }
@@ -71,6 +69,9 @@
                 document.getElementById('settings-save-container').classList.add('hidden');
                 document.getElementById('settings-save-container').classList.remove('flex');
             }
+            // Keep the active tab visible in the horizontal scroller on mobile, after the
+            // Settings tab's Save button has (or hasn't) taken its share of the row.
+            if (btn) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
             if (!opts.silent) syncHash();
         }
 

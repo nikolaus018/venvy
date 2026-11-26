@@ -190,6 +190,7 @@
                     const res = await fetch(API + '/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p, setup_code: setupCode }) });
                     if (res.ok) {
                         setAuthKey((await res.json()).auth_key);
+                        dismissAllToasts();      // a failed attempt's error is no longer true
                         _clearAuthInputs();
                         delete document.getElementById('login-form').dataset.mode;
                         await checkAuth();
@@ -214,6 +215,7 @@
                     if (res.ok) {
                         _loginTotpPending = false;
                         setAuthKey((await res.json()).auth_key);
+                        dismissAllToasts();      // a failed attempt's error is no longer true
                         _clearAuthInputs();
                         await checkAuth();
                     }
@@ -233,6 +235,7 @@
                 const res = await fetch(API + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
                 if (res.ok) {
                     setAuthKey((await res.json()).auth_key);
+                    dismissAllToasts();      // a failed attempt's error is no longer true
                     _clearAuthInputs();
                     await checkAuth();
                 } else {

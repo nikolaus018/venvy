@@ -5,6 +5,19 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v5.0.4
+
+- Signing in after a failed attempt clears its "Invalid credentials" message; it used to stay on screen for the whole session.
+- On a phone, System → Platform fits the screen: its fields wrap onto a new line instead of pushing the Install, Create, Apply and Save buttons off the card, and long paths and URLs wrap.
+- On a phone, the environment-variable editor gives each name a line of its own instead of cutting it to a few letters, and its buttons wrap below the heading.
+- On a phone, the Deploy tab's Releases and Deploy headers wrap their buttons below the text instead of squeezing it into a column one word wide.
+- The selected tab scrolls fully into view, also on the Settings tab, where the Save button takes part of the row.
+- The Hosting tab's artifact file picker looks like the other buttons.
+- Manage Users and Backups are as tall as their content instead of a fixed height.
+- Keyboard shortcuts lists `8` for the Hosting tab; the System page's subtitle says what it holds; the toolchain picker names languages that can't be installed on the host instead of showing blank.
+- Every close button has an accessible name.
+- A checkout reports its version as 5.0.4 (it still said 5.0.0).
+
 ## v5.0.3
 
 - `--with-docker` makes sure `docker compose build` works: a buildx older than 0.17 (Debian 13 ships 0.13) is replaced with the official release, checksum-verified. Running the installer again fixes an existing server.
