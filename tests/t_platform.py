@@ -53,7 +53,7 @@ print("ECHO-UP", os.environ.get("PORT"), flush=True)
 ThreadingHTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
 '''
 
-with server(repo, 55021) as (base, data, srv):
+with server(repo, 55026) as (base, data, srv):  # its own port: t_ops (55021) runs in another lane
     cl = admin(base)
     tok = cl.req("POST", "/api/tokens", json={"name": "metrics", "scope": "read"}).json()["token"]
 
