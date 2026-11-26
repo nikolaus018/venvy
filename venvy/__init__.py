@@ -26,6 +26,7 @@ The package is laid out by concern, lowest layer first:
     secrets_ext secret files, SOPS, Vault
     logship     shipping app logs to syslog, journald, Loki, HTTP
     process     app lifecycle: start/stop, supervisor, logs, ports, metrics
+    ports       which ports are an app's (processes, docker, compose): one answer for every caller
     apps        app naming rules and the API representation of an app
     terminal    the in-browser PTY terminal
     uploads     upload limits and chunk temp files

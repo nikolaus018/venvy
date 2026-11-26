@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import select, Session
 
-from venvy import own_hosts
+from venvy import own_hosts, ports
 from venvy.audit import audit_log
 from venvy.auth import (
     check_admin,
@@ -34,7 +34,7 @@ from venvy.cloudflare import (
 from venvy.crypto import _decrypt_secret
 from venvy.db import engine, get_session
 from venvy.models import App, CfRoute, SystemSetting, User
-from venvy.process import _app_pid_alive, _container_host_ports_sync, _detect_ports_sync, _psutil_net_connections, _verify_port_free, get_server_ipv4
+from venvy.process import get_server_ipv4
 
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist), Depends(require_app_access)]
@@ -264,15 +264,8 @@ class CfPublishReq(BaseModel):
 
 
 def _app_ports(app_row: App, seen: bool = True) -> Set[int]:
-    """The ports that are this app's: its port, the ones set by hand and (with
-    *seen*) the ones it was seen listening on."""
-    ports = {app_row.port} if app_row.port else set()
-    for raw in (app_row.manual_ports, app_row.detected_ports if seen else None):
-        try:
-            ports |= {p for p in json.loads(raw or "[]") if isinstance(p, int)}
-        except ValueError:
-            pass
-    return ports
+    """The ports that are this app's (venvy.ports.claimed)."""
+    return ports.claimed(app_row, seen)
 
 
 def _venvy_port(request: Request) -> Optional[int]:
@@ -305,38 +298,8 @@ def _publish_refusal(rule: Optional[dict], hostname: str, published: Set[str], u
 
 
 def _any_host_listener_on_port(port: int) -> bool:
-    """True if anything on the host is listening on TCP *port* on any interface
-    (IPv4 or IPv6, loopback or LAN)."""
-    import socket
-    # 1. psutil covers all interfaces and address families when available.
-    for conn in _psutil_net_connections(kind="tcp"):
-        if getattr(conn, "status", None) == "LISTEN" and conn.laddr and conn.laddr.port == port:
-            return True
-    # 2. Linux /proc/net/tcp{,6} catches every LISTEN socket even without psutil.
-    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
-        try:
-            with open(table, "r") as f:
-                next(f, None)
-                for line in f:
-                    fields = line.split()
-                    if len(fields) >= 4 and fields[3] == "0A":
-                        if int(fields[1].split(":")[1], 16) == port:
-                            return True
-        except OSError:
-            continue
-    # 3. Fallback active probe on both loopback and the host's LAN IPv4 address.
-    if not _verify_port_free(port):
-        return True
-    lan_ip = get_server_ipv4()
-    if lan_ip and lan_ip != "127.0.0.1":
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(0.5)
-                if s.connect_ex((lan_ip, port)) == 0:
-                    return True
-        except OSError:
-            pass
-    return False
+    """True if anything on the host listens on TCP *port* (venvy.ports.in_use)."""
+    return ports.in_use(port)
 
 
 async def _check_publish_port(session: Session, app_row: App, port: int, request: Request) -> None:
@@ -350,21 +313,14 @@ async def _check_publish_port(session: Session, app_row: App, port: int, request
         raise HTTPException(400, "Local port must be between 1 and 65535.")
     if port == _venvy_port(request):
         raise HTTPException(400, "That is Venvy's own port; an app cannot publish it.")
-    if port not in _app_ports(app_row):
+    if port not in ports.claimed(app_row):
         raise HTTPException(400, f"Port {port} is not one of this app's ports. Set it as the app's port first.")
-    for other in session.exec(select(App).where(App.id != app_row.id)).all():
-        # What a stopped app was last seen listening on is history, not its port.
-        if port in _app_ports(other, seen=other.status == "running"):
-            raise HTTPException(409, f"Port {port} is also another app's port.")
-    if not await asyncio.to_thread(_any_host_listener_on_port, port):
-        return          # nothing listens there yet on any interface
-    # (Not the stored detected_ports: with ports set by hand, those are what it holds.)
-    alive = bool(app_row.pid) and await asyncio.to_thread(_app_pid_alive, app_row)
-    listening = await asyncio.to_thread(_detect_ports_sync, app_row.pid) if alive else []
-    if port not in listening and alive:
-        # A docker / compose app's ports are Docker's to listen on, not its CLI process's.
-        listening = await asyncio.to_thread(_container_host_ports_sync, app_row)
-    if port not in listening:
+    if port in ports.claimed_by_apps(session, skip_app_id=app_row.id):
+        raise HTTPException(409, f"Port {port} is also another app's port.")
+    # Whoever listens there now (not the stored detected_ports: with ports set by
+    # hand, those are what it holds). A docker / compose app's ports are Docker's
+    # to listen on, not its CLI process's: ports.holder knows.
+    if await asyncio.to_thread(ports.holder, port, app_row) == "other":
         raise HTTPException(409, f"Something other than this app is listening on port {port}.")
 
 

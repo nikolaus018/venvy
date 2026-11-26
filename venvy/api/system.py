@@ -360,9 +360,15 @@ async def system_ports(
             seen.add(entry["port"])
             result.append(entry)
 
+    from venvy import ports as _ports
     allowed = visible_app_ids(session, user)
-    app_port_map: Dict[int, str] = {a.port: a.name for a in app_rows
-                                    if a.port and (allowed is None or a.id in allowed)}
+    # Every port that is an app's (its port, the ones set by hand, what it or
+    # its containers were seen listening on), not just App.port.
+    app_port_map: Dict[int, str] = {}
+    for a in sorted(app_rows, key=lambda x: (x.parent_app_id is not None, x.id or 0)):
+        if allowed is None or a.id in allowed:
+            for p in _ports.claimed(a, seen=a.status == "running"):
+                app_port_map.setdefault(p, a.name)
     if allowed is not None:
         # Restricted operators only see listening ports belonging to their granted apps.
         result = [entry for entry in result if entry["port"] in app_port_map]

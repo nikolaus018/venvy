@@ -173,6 +173,19 @@ def _detect_ports_sync(app_pid: int) -> List[int]:
                     and conn.laddr.port > 0):
                 detected_ports.add(conn.laddr.port)
 
+    # ── Last: each process's own sockets (no system-wide table needed, which
+    # is root-only on some systems, macOS among them) ─────────────
+    if not detected_ports and psutil:
+        for check_pid in pids:
+            try:
+                proc = psutil.Process(check_pid)
+                conns = proc.net_connections(kind="tcp") if hasattr(proc, "net_connections") else proc.connections(kind="tcp")
+            except Exception:
+                continue
+            for conn in conns:
+                if getattr(conn, "status", None) == "LISTEN" and conn.laddr and conn.laddr.port > 0:
+                    detected_ports.add(conn.laddr.port)
+
     return sorted(list(detected_ports))
 
 
@@ -180,12 +193,11 @@ _COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 _DOCKER_CLI_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin"}
 
 
-def _container_host_ports_sync(app_row: "App") -> List[int]:
-    """The host ports a docker / compose app's own containers publish. Docker
-    listens on those itself (docker-proxy, or only iptables rules), so they
-    are not in the app's process tree, but they are the app's: its project
-    (compose) or its container (docker), and compose_guard keeps any other
-    app from taking that project's label or that container's name."""
+def _own_containers_sync(app_row: "App") -> List[dict]:
+    """A docker / compose app's own running containers (docker inspect
+    objects): its project (compose) or its container (docker). compose_guard
+    keeps any other app from taking that project's label or that container's
+    name. [] without docker, for other runtimes, or on any error."""
     if getattr(app_row, "runtime", "") not in ("docker", "compose") or not shutil.which("docker"):
         return []
     name = runtimes.docker_name(app_row.id)
@@ -200,7 +212,7 @@ def _container_host_ports_sync(app_row: "App") -> List[int]:
         containers = json.loads(out.stdout) if out.returncode == 0 else []
     except (OSError, subprocess.SubprocessError, ValueError):
         return []
-    ports: Set[int] = set()
+    own = []
     for c in containers if isinstance(containers, list) else []:
         if not isinstance(c, dict):
             continue
@@ -209,6 +221,16 @@ def _container_host_ports_sync(app_row: "App") -> List[int]:
             continue
         if app_row.runtime == "docker" and (_COMPOSE_PROJECT_LABEL in labels or c.get("Name") != f"/{name}"):
             continue
+        own.append(c)
+    return own
+
+
+def _container_host_ports_sync(app_row: "App") -> List[int]:
+    """The host ports a docker / compose app's own containers publish. Docker
+    listens on those itself (docker-proxy, or only iptables rules), so they
+    are not in the app's process tree, but they are the app's."""
+    ports: Set[int] = set()
+    for c in _own_containers_sync(app_row):
         for bindings in ((c.get("NetworkSettings") or {}).get("Ports") or {}).values():
             for b in bindings or []:
                 with contextlib.suppress(TypeError, ValueError, AttributeError):
@@ -1006,10 +1028,16 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             if not port_free:
                 new_port = await asyncio.to_thread(find_free_port)
                 if new_port:
+                    from venvy import ports as _ports
+                    with Session(engine) as _s:
+                        other_id = _ports.claimed_by_apps(_s, skip_app_id=db_app.id).get(effective_port)
+                        other = _s.get(App, other_id) if other_id else None
+                    by = f"by the app '{other.name}'" if other else "by something other than an app"
                     logging.warning(
-                        f"Port {effective_port} for '{db_app.name}' was taken at launch time; "
+                        f"Port {effective_port} for '{db_app.name}' was taken at launch time ({by}); "
                         f"reassigning to {new_port}."
                     )
+                    _venvy_log(log_file, f"Port {effective_port} is taken {by}; this start uses port {new_port}.")
                     db_app.port = new_port
                     try:
                         m_ports = json.loads(db_app.manual_ports or "[]")
@@ -1698,11 +1726,14 @@ async def supervisor_task() -> None:
                         _restart_backoff.pop(app_row.id, None)
                     # Scan every tick during the first 15s after start so newly bound
                     # ports appear promptly, then throttle to every 5s.
+                    # (A container app's scan asks Docker: every 3 s at most.)
                     last_scan = _last_port_scan.get(app_row.id, 0.0)
-                    if age_s <= 15.0 or (now_mono - last_scan >= 5.0):
+                    from venvy import ports as _ports
+                    early = age_s <= 15.0 and (not _ports.is_container(app_row) or now_mono - last_scan >= 3.0)
+                    if early or (now_mono - last_scan >= 5.0):
                         _last_port_scan[app_row.id] = now_mono
                         try:
-                            detected_ports = await asyncio.to_thread(_detect_ports_sync, app_row.pid)
+                            detected_ports = await asyncio.to_thread(_ports.listening, app_row)
                             manual_list = []
                             try:
                                 manual_list = json.loads(app_row.manual_ports or "[]")

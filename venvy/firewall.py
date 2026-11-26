@@ -16,7 +16,6 @@ is why docker apps are published on 127.0.0.1 unless they are public.
 """
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import shutil
@@ -55,13 +54,8 @@ def status() -> dict:
 
 
 def _ports(a: App) -> List[int]:
-    out = set()
-    if a.port:
-        out.add(int(a.port))
-    with contextlib.suppress(ValueError, TypeError):
-        for p in json.loads(a.manual_ports or "[]") + json.loads(a.detected_ports or "[]"):
-            out.add(int(p))
-    return sorted(p for p in out if 1 <= p <= 65535)
+    from venvy import ports
+    return sorted(ports.claimed(a))
 
 
 def ruleset() -> str:
