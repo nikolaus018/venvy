@@ -362,6 +362,28 @@ for r_, i_ in (("docker", 9301), ("compose", 9302), ("python", 9303)):
     (appspec.data_dir(probe)).chmod(0o700)            # an existing folder from before: put right on the next start
     appspec.ensure_state_dirs(probe, None)
     modes[r_ + " again"] = _stat.S_IMODE(appspec.data_dir(probe).stat().st_mode)
+
+# Apps that run as their own systemd service are measured too (CPU/memory).
+me, me_start = os.getpid(), process._proc_start_id(os.getpid())
+with Session(engine) as s:
+    rows = [App(user_id=1, name=n, slug=n, app_dir=str(WORK / n), venv_path="", entrypoint="", port=p, status=st,
+                pid=me, pid_start=ps, systemd_scope=sc)
+            for n, p, st, ps, sc in (("svc", 9401, "running", me_start, "venvy-app-1.service"),
+                                     ("scoped", 9402, "running", me_start, "venvy-app-2"),        # a child: tracked elsewhere
+                                     ("reused", 9403, "running", "not-it", "venvy-app-3.service"),  # PID now someone else's
+                                     ("down", 9404, "stopped", me_start, "venvy-app-4.service"))]
+    for r_ in rows:
+        s.add(r_)
+    s.commit()
+    svc_ids = [r_.id for r_ in rows]
+sp = process._service_pids()
+check("service apps' PIDs are picked up for metrics", sp == {svc_ids[0]: me}, str(sp))
+_, snap = process._collect_metrics_tick(sp, {})
+check("... and measured", snap.get(svc_ids[0], {}).get("memory", 0) > 0, str(snap))
+with Session(engine) as s:                       # leave the other checks' database as it was
+    for i_ in svc_ids:
+        s.delete(s.get(App, i_))
+    s.commit()
 check("container data folder 0711, others 0700",
       modes == {"docker": 0o711, "docker again": 0o711, "compose": 0o711, "compose again": 0o711,
                 "python": 0o700, "python again": 0o700}, str({k: oct(v) for k, v in modes.items()}))

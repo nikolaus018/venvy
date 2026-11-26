@@ -1777,6 +1777,18 @@ def _collect_metrics_tick(active_pids: Dict[int, int], proc_cache: Dict[int, "ps
     return host_cpu, snapshot
 
 
+def _service_pids() -> Dict[int, int]:
+    """Apps running as their own systemd service: not Venvy's children, so
+    not in _active_app_pids (whose entries the liveness check leaves to the
+    child reaper). Their recorded PID, while it is still the same process."""
+    out: Dict[int, int] = {}
+    with Session(engine) as s:
+        for row in s.exec(select(App).where(App.status == "running")).all():
+            if row.pid and (row.systemd_scope or "").endswith(".service") and _app_pid_alive(row):
+                out[row.id] = row.pid
+    return out
+
+
 async def metrics_collector_task():
     """Background task to collect CPU/RAM usage for all active app processes."""
     if psutil is None:
@@ -1787,7 +1799,7 @@ async def metrics_collector_task():
     while True:
         try:
             global _host_cpu_percent
-            active_snapshot = dict(_active_app_pids)
+            active_snapshot = {**await asyncio.to_thread(_service_pids), **_active_app_pids}
             _host_cpu_percent, new_metrics = await asyncio.to_thread(
                 _collect_metrics_tick, active_snapshot, proc_cache
             )
