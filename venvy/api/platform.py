@@ -26,7 +26,7 @@ from venvy import (appbackup, appspec, deploy, edge, federation, firewall, forwa
 from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
 from venvy.auth import (check_admin, check_ip_allowlist, get_current_user, get_download_user, has_app_access,
-                        rate_limit_mutations, require_app_access, require_operator)
+                        rate_limit_mutations, require_app_access, require_operator, visible_app_ids)
 from venvy.config import APPS_BASE_DIR, DATA_DIR, one_line, utc_now
 from venvy.crypto import _encrypt_secret
 from venvy.db import engine, get_session
@@ -449,9 +449,11 @@ class VolumeReq(BaseModel):
 @router.get("/volumes")
 def list_volumes(session: Session = Depends(get_session), user: User = Depends(get_current_user)):
     out = []
+    visible = visible_app_ids(session, user)
     for v in session.exec(select(Volume)).all():
         apps = [{"app_id": av.app_id, "read_only": av.read_only}
-                for av in session.exec(select(AppVolume).where(AppVolume.volume_id == v.id)).all()]
+                for av in session.exec(select(AppVolume).where(AppVolume.volume_id == v.id)).all()
+                if visible is None or av.app_id in visible]
         out.append({"id": v.id, "name": v.name, "path": str(volumes.path_of(v.name)), "env": volumes.env_name(v.name),
                     "apps": apps})
     return out
@@ -820,6 +822,14 @@ def _clean_mon(req: MonitorReq, user: User) -> dict:
                 expect_status=req.expect_status, enabled=req.enabled, public=req.public)
 
 
+def _check_monitor_editor(user: User) -> None:
+    """Monitors belong to no app: an operator who may use only some apps
+    adds monitors of their own, but doesn't change everyone's (the ones on
+    the public status page among them)."""
+    if user.role != "admin" and not user.all_apps:
+        raise HTTPException(403, "Only an admin, or an operator with access to every app, can change monitors.")
+
+
 @router.get("/monitors")
 def list_monitors(session: Session = Depends(get_session), user: User = Depends(get_current_user)):
     return [_mon_json(m) for m in session.exec(select(UrlMonitor)).all()]
@@ -844,6 +854,7 @@ def put_monitor(mid: int, req: MonitorReq, session: Session = Depends(get_sessio
     m = session.get(UrlMonitor, mid)
     if not m:
         raise HTTPException(404)
+    _check_monitor_editor(user)
     for k, v in _clean_mon(req, user).items():
         setattr(m, k, v)
     session.add(m)
@@ -857,6 +868,7 @@ def del_monitor(mid: int, session: Session = Depends(get_session), user: User = 
     m = session.get(UrlMonitor, mid)
     if not m:
         raise HTTPException(404)
+    _check_monitor_editor(user)
     session.delete(m)
     session.commit()
     audit_log(user.username, "monitor_delete", m.name)
