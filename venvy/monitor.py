@@ -109,6 +109,50 @@ async def probe(port: int, path: str) -> dict:
         return {"ok": False, "code": None, "error": str(exc)[:200] or exc.__class__.__name__}
 
 
+_NOT_UP_YET = (502, 503, 504)
+
+
+async def probe_up(port: int) -> dict:
+    """Whether a web app that has no health check of its own answers on *port*
+    the way a started one does (what a deploy waits for before it counts):
+
+    - a connection refused, or closed before anything is said (docker-proxy
+      in front of a container that isn't up yet), is not up;
+    - an HTTP answer is up, unless it is 502, 503 or 504: a proxy in front of
+      an app that isn't up yet (a compose project's nginx, say);
+    - something that isn't HTTP but accepts the connection and waits for its
+      own protocol, or answers in it (a database, a TCP service), is up."""
+    t0 = time.monotonic()
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), _PROBE_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        return {"ok": False, "code": None, "error": f"no connection within {int(_PROBE_TIMEOUT_SEC)} s"}
+    except OSError as exc:
+        return {"ok": False, "code": None, "error": exc.strerror or str(exc)}
+    try:
+        try:
+            first = await asyncio.wait_for(reader.read(1), 1.0)
+            if not first:
+                return {"ok": False, "code": None, "error": "the connection was closed at once"}
+        except asyncio.TimeoutError:
+            pass                 # holds the connection open, waiting for the client: fine so far
+        except OSError as exc:
+            return {"ok": False, "code": None, "error": exc.strerror or str(exc)}
+    finally:
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+    try:
+        http = _get_probe_session()
+        async with http.get(f"http://127.0.0.1:{port}/", allow_redirects=False) as resp:
+            ok = resp.status not in _NOT_UP_YET
+            return {"ok": ok, "code": resp.status, "error": None if ok else f"HTTP {resp.status}",
+                    "ms": (time.monotonic() - t0) * 1000}
+    except Exception:
+        # Accepted, but no HTTP: a service with a protocol of its own.
+        return {"ok": True, "code": None, "error": None, "ms": (time.monotonic() - t0) * 1000}
+
+
 def _stop_for_disk(app_id: int) -> None:
     """Stop an app (and its processes) that went over its disk limit with action "stop"."""
     async def go() -> None:

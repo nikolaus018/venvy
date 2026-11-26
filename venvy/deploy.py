@@ -762,33 +762,53 @@ async def _restart(app_id: int, log: _Log, start_if_stopped: bool) -> None:
 
 
 async def _wait_healthy(app_id: int, log: _Log) -> bool:
-    """True once the restarted app looks alive: its health check passes, or — with
-    no health check — it is still running a few seconds after the start."""
+    """True once the restarted app answers: its health check passes; or, with no
+    health check, the port it listens on (its process tree's, or what its
+    containers publish) answers like a started web app does (monitor.probe_up).
+    A process that listens on nothing a few seconds after the start (a worker,
+    a bot) only has to keep running; a container app is waited for until its
+    containers are up, and counts as a worker only if they publish nothing."""
+    from venvy import ports
     app = _app(app_id)
     if not app:
         return False
-    deadline = time.monotonic() + max(HEALTH_WAIT_SEC, int(app.health_start_period or 0) + 30)
+    started = time.monotonic()
+    deadline = started + max(HEALTH_WAIT_SEC, int(app.health_start_period or 0) + 30)
+    settle = started + 6
     await asyncio.sleep(3)
     app = _app(app_id)
     if not app:
         return False
-    checking = monitor.has_check(app)
-    if checking:
+    if monitor.has_check(app):
         log(f"Waiting for {monitor.describe_check(app)} to answer…")
-    else:
-        await asyncio.sleep(3)
+    said, last = None, None
     while time.monotonic() < deadline:
         app = _app(app_id)
-        if not app or app.status == "error":
+        if not app or app.status in ("error", "stopped"):
             return False
         if app.status == "running":
-            if not monitor.has_check(app):
-                return True
-            if await monitor.check_once(app):
-                return True
-        elif app.status == "stopped":
-            return False
+            if monitor.has_check(app):
+                if await monitor.check_once(app):
+                    return True
+            else:
+                held = await asyncio.to_thread(ports.listening, app)
+                port = app.port if app.port in held else (held[0] if held else None)
+                if port:
+                    if said != port:
+                        log(f"No health check is set: waiting for port {port} to answer…")
+                        said = port
+                    res = await monitor.probe_up(port)
+                    if res["ok"]:
+                        return True
+                    last = res.get("error")
+                elif time.monotonic() >= settle:
+                    if not ports.is_container(app):
+                        return True          # listens nowhere: a worker
+                    if await asyncio.to_thread(ports.containers, app):
+                        return True          # its containers are up and publish nothing
         await asyncio.sleep(2)
+    if last:
+        log(f"Last answer: {last}")
     return False
 
 
