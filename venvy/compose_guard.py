@@ -71,8 +71,9 @@ def _inside(path: str, roots: Iterable[Path]) -> bool:
     return any(real == r or r in real.parents for r in roots)
 
 
-def check(project: dict, roots: List[Path]) -> None:
-    """Raise ComposeRefused if the rendered *project* reaches outside the app."""
+def check(project: dict, roots: List[Path], project_name: Optional[str] = None) -> None:
+    """Raise ComposeRefused if the rendered *project* reaches outside the app.
+    *project_name* is the app's: a container_name must start with it."""
     def no(what: str) -> None:
         raise ComposeRefused(f"The compose file is not allowed here: {what}.")
 
@@ -121,6 +122,11 @@ def check(project: dict, roots: List[Path]) -> None:
             if str(label).strip().startswith("com.docker.compose."):
                 # Which project a container belongs to is how Venvy tells an app's ports apart.
                 no(f"service '{name}' sets compose's own label {label!r}")
+        cname = svc.get("container_name")
+        if cname and project_name and not (str(cname) == project_name or str(cname).startswith(project_name + "-")):
+            # Container names are how Venvy finds a docker app's container, and
+            # how containers' usage is counted: venvy-app-5 is app 5's.
+            no(f"service '{name}' sets container_name {cname!r}; it must start with '{project_name}-'")
         if svc.get("external_links"):
             no(f"service '{name}' links to containers outside the project")
         for vf in svc.get("volumes_from") or []:
@@ -157,6 +163,42 @@ def check(project: dict, roots: List[Path]) -> None:
             for cname, cpath in (b.get("additional_contexts") or {}).items():
                 if not str(cpath).startswith(_REMOTE_CONTEXT):
                     host_path(cpath, f"service '{name}' build context '{cname}'")
+
+
+def apply_limits(project: dict, app) -> None:
+    """The app's memory, CPU and process limits on every service of the rendered
+    *project*, unless a service sets a lower one itself. Its containers run
+    under the Docker daemon, not in the app's systemd unit, so the unit's
+    limits never reach them. Per container, as for a Docker app."""
+    mem = (getattr(app, "memory_limit_mb", None) or 0) * 1024 * 1024
+    cpus = (getattr(app, "cpu_limit_percent", None) or 0) / 100
+    pids = getattr(app, "pids_limit", None) or 0
+
+    def lower(svc: dict, key: str, cap) -> None:
+        if not cap:
+            return
+        have = svc.get(key)
+        try:
+            have = float(have) if have not in (None, "", 0, "0") else None
+        except (TypeError, ValueError):
+            have = None          # a unit string compose didn't normalise: the app's limit is known
+        if have is None or have <= 0 or have > cap:
+            svc[key] = cap
+
+    for svc in (project.get("services") or {}).values():
+        if not isinstance(svc, dict):
+            continue
+        # Compose refuses distinct values in both places: a service that uses
+        # deploy.resources.limits gets them there.
+        limits = ((svc.get("deploy") or {}).get("resources") or {}).get("limits")
+        if isinstance(limits, dict):
+            lower(limits, "memory", int(mem))
+            lower(limits, "cpus", round(cpus, 2))
+            lower(limits, "pids", int(pids))
+        else:
+            lower(svc, "mem_limit", int(mem))
+            lower(svc, "cpus", round(cpus, 2))
+            lower(svc, "pids_limit", int(pids))
 
 
 def _render(app, compose_file: str, project_dir: str, project: str, env: Optional[Dict[str, str]]) -> dict:
@@ -207,7 +249,8 @@ def pinned_argv(app, argv: List[str], env: Optional[Dict[str, str]] = None) -> L
         except Exception as exc:
             logging.debug("compose render without the app's variables: %s", exc)
     data = _render(app, f, wd, project, env)
-    check(data, _roots(app))
+    check(data, _roots(app), project)
+    apply_limits(data, app)
     RENDER_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(RENDER_DIR, 0o700)
     out = RENDER_DIR / f"{project}.json"

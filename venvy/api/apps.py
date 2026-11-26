@@ -268,6 +268,12 @@ def apply_spec_fields(row: App, fields: Dict[str, object], admin: bool = False) 
         elif key == "egress_policy":
             if value not in ("allow", "deny", "allowlist"):
                 raise ValueError("egress_policy must be allow, deny or allowlist.")
+            # A container's network is Docker's, not the app's systemd unit's:
+            # only "no network at all" can be had, and only without a published port.
+            if value != "allow" and (row.runtime == "compose" or (row.runtime == "docker" and (value == "allowlist" or row.port))):
+                raise ValueError("This egress policy can't be enforced for a container app"
+                                 + (" with a published port" if row.runtime == "docker" and value == "deny" else "")
+                                 + ": its network is Docker's. Restrict it in the image or compose file instead.")
             put(key, value)
         elif key == "egress_allow":
             items = [c.strip() for c in str(value).split(",") if c.strip()]

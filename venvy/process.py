@@ -851,6 +851,33 @@ async def _docker_cleanup(app) -> None:
         await asyncio.wait_for(proc.wait(), timeout=120)
 
 
+async def _container_argv(spec, app_id: int, cmd: List[str], denv: Dict[str, str]) -> List[str]:
+    """The command a docker / compose app is started with, once the app's old
+    containers are gone. For compose, the daemon gets a checked copy of the
+    file (compose_guard), never the app's own. The old containers go first:
+    they can write to the app's folder (it is mounted into them), so while
+    they run, a folder the check just resolved could be swapped for a symlink
+    before `up` mounts it. Raises compose_guard.ComposeRefused."""
+    app = types.SimpleNamespace(**{**vars_of(spec), "id": app_id})
+    await _docker_cleanup(app)
+    if spec.runtime != "compose":
+        return cmd
+    from venvy import compose_guard
+    return await asyncio.to_thread(compose_guard.pinned_argv, app, cmd, denv)
+
+
+def _unenforced_container_settings(spec) -> List[str]:
+    """Settings of a container app that Docker can't apply, said in words (an
+    app saved before they were refused)."""
+    out = []
+    egress = getattr(spec, "egress_policy", "allow") or "allow"
+    if egress != "allow" and (spec.runtime == "compose" or (spec.runtime == "docker" and egress == "allowlist")
+                              or (spec.runtime == "docker" and getattr(spec, "port", None))):
+        out.append(f"The egress policy '{egress}' is not enforced for this app: its containers' network is Docker's. "
+                   "Set it to allow, or restrict the network in the image or compose file.")
+    return out
+
+
 async def _launch_port_free(spec, app_id: int, port: int) -> bool:
     """Whether *port* is free for the app about to start. A docker / compose
     app's own containers from before may hold it: Docker restarts them by
@@ -1073,6 +1100,8 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             _mark_start_error(session, db_app, str(exc), log_file)
         if container:
             denv = {k: v for k, v in env.items() if k not in _DOCKER_SKIP_ENV}
+            for problem in _unenforced_container_settings(spec):
+                _venvy_log(log_file, problem)
             if spec.runtime == "docker":
                 env_file = await asyncio.to_thread(_docker_env_file, db_app.id, denv)
                 start_args = appspec.command_argv(spec.start_command, env) if spec.start_command else []
@@ -1085,16 +1114,11 @@ async def _start_app_process(app_id: int, session: Session) -> App:
                     else:
                         out.append(w)
                 cmd = out
-            else:
-                # Its variables are put into the file when it is rendered; the
-                # daemon gets that checked copy, never the app's own file.
-                from venvy import compose_guard
-                try:
-                    cmd = await asyncio.to_thread(compose_guard.pinned_argv,
-                                                  types.SimpleNamespace(**{**vars_of(spec), "id": db_app.id}), cmd, denv)
-                except compose_guard.ComposeRefused as exc:
-                    _mark_start_error(session, db_app, str(exc), log_file)
-            await _docker_cleanup(types.SimpleNamespace(**{**vars_of(spec), "id": db_app.id}))
+            from venvy import compose_guard
+            try:
+                cmd = await _container_argv(spec, db_app.id, cmd, denv)
+            except compose_guard.ComposeRefused as exc:
+                _mark_start_error(session, db_app, str(exc), log_file)
         elif spec.runtime == "command" and not spec.start_command and spec.entrypoint:
             exe = wd / spec.entrypoint
             if exe.is_file() and not os.access(exe, os.X_OK):
