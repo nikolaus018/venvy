@@ -832,11 +832,12 @@ async def update_app(
             # takes its requests too — unless it is a path route of an app the
             # same user manages (example.com -> this app, example.com/api -> that one).
             from venvy.models import CfRoute, Route
-            for r in session.exec(select(Route).where(Route.hostname == new_domain, Route.app_id != app_id)).all():
-                if not has_app_access(session, user, r.app_id) or r.path_prefix in ("", "/"):
-                    raise HTTPException(409, f"{new_domain} is already routed to another app (Hosting → Routes).")
-            if session.exec(select(CfRoute).where(CfRoute.hostname == new_domain, CfRoute.app_id != app_id)).first():
-                raise HTTPException(409, f"{new_domain} is published for another app through the tunnel.")
+            if new_domain != app_row.domain:
+                for r in session.exec(select(Route).where(Route.hostname == new_domain, Route.app_id != app_id)).all():
+                    if not has_app_access(session, user, r.app_id) or r.path_prefix in ("", "/"):
+                        raise HTTPException(409, f"{new_domain} is already routed to another app (Hosting → Routes).")
+                if session.exec(select(CfRoute).where(CfRoute.hostname == new_domain, CfRoute.app_id != app_id)).first():
+                    raise HTTPException(409, f"{new_domain} is published for another app through the tunnel.")
         if new_domain != app_row.domain:
             audit_log(user.username, "app_domain_change", f"app '{app_row.name}' (id={app_id}): {new_domain or 'removed'}")
         app_row.domain = new_domain
