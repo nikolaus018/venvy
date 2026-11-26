@@ -62,6 +62,8 @@
         }
 
         function renderAppList(apps) {
+            // Workers and replicas are shown in their app's Hosting tab, not as apps of their own.
+            apps = apps.filter(a => !a.parent_app_id);
             const needle = _appFilter.trim().toLowerCase();
             const shown = needle ? apps.filter(a => (a.name || '').toLowerCase().includes(needle)) : apps;
 

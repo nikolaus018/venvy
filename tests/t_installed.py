@@ -150,7 +150,7 @@ if not EXISTING:
     logs = cl.req("GET", f"/api/apps/{app_id}/logs").json()["content"]
     expect_user = f"venvy-app-{app_id}" if APP_USERS else "venvy"
     check("app runs as the expected user", f"WHOAMI={expect_user}" in logs, logs[-300:])
-    check("app does not inherit Venvy's PORT", "PORT_SEEN=unset" in logs, logs[-300:])
+    check("app does not inherit Venvy's PORT", "PORT_SEEN=54783" not in logs and "PORT_SEEN=" in logs, logs[-300:])
     check("an app can't pose as other clients over loopback", "SPOOF_LOCKED_AT=5" in logs, logs[-400:])
     proc_user = psutil.Process(st["pid"]).username() if st.get("pid") else None
     app_dir = st["app_dir"]
@@ -161,10 +161,15 @@ if not EXISTING:
     if APP_USERS:
         check("app cannot read Venvy's database", "DB_READABLE=no" in logs, logs[-300:])
         check("process owner (psutil)", proc_user == expect_user, str(proc_user))
-        scope = subprocess.run(["systemctl", "is-active", f"venvy-app-{app_id}.scope"], capture_output=True, text=True).stdout.strip()
-        check("app runs in its systemd scope", scope == "active", scope)
-        mem = subprocess.run(["systemctl", "show", "-p", "MemoryMax", "--value", f"venvy-app-{app_id}.scope"], capture_output=True, text=True).stdout.strip()
-        check("memory limit applied to the scope", mem == str(512 * 1024 * 1024), mem)
+        unit = subprocess.run(["systemctl", "is-active", f"venvy-app-{app_id}.service"], capture_output=True, text=True).stdout.strip()
+        check("app runs as its own systemd service", unit == "active" and st.get("runs_as_service") is True, f"{unit} {st.get('runs_as_service')}")
+        mem = subprocess.run(["systemctl", "show", "-p", "MemoryMax", "--value", f"venvy-app-{app_id}.service"], capture_output=True, text=True).stdout.strip()
+        check("memory limit applied to the service", mem == str(512 * 1024 * 1024), mem)
+        props = dict(l.split("=", 1) for l in subprocess.run(
+            ["systemctl", "show", f"venvy-app-{app_id}.service", "-p", "ProtectSystem,PrivateTmp,NoNewPrivileges,User,ProtectHome,TasksMax,SystemCallFilter"],
+            capture_output=True, text=True).stdout.splitlines() if "=" in l)
+        check("service is sandboxed", props.get("ProtectSystem") == "strict" and props.get("PrivateTmp") == "yes"
+              and props.get("NoNewPrivileges") == "yes" and props.get("User") == expect_user and props.get("SystemCallFilter"), str(props))
         check("app dir is private to its user", (os.stat(app_dir).st_mode & 0o777) == 0o700 and pwd.getpwuid(os.stat(app_dir).st_uid).pw_name == expect_user)
         # root must not follow an app-planted symlink out of the app directory
         os.symlink("/etc", os.path.join(app_dir, "escape"))
@@ -195,8 +200,8 @@ if not EXISTING:
     check("app stops", cl.wait_status(app_id, "stopped", 30))
     if APP_USERS:
         time.sleep(1)
-        scope = subprocess.run(["systemctl", "is-active", f"venvy-app-{app_id}.scope"], capture_output=True, text=True).stdout.strip()
-        check("scope is gone after stop", scope != "active", scope)
+        unit = subprocess.run(["systemctl", "is-active", f"venvy-app-{app_id}.service"], capture_output=True, text=True).stdout.strip()
+        check("service is gone after stop", unit != "active", unit)
         # A deploy key made before per-app users were switched on belongs to the old
         # service user; a deploy must hand it to the app's user, who runs ssh.
         key = cl.req("POST", f"/api/apps/{app_id}/git/key")
@@ -211,9 +216,21 @@ if not EXISTING:
             time.sleep(0.5)
         owner = pwd.getpwuid(os.stat(f"{key_dir}/id_ed25519").st_uid).pw_name
         check("a deploy gives an old deploy key to the app's user", owner == expect_user, owner)
+    if APP_USERS:
+        import host_anything
+        host_anything.run(cl, check)
 else:
     apps = cl.req("GET", "/api/apps").json()
-    check("app list survived the update", len(apps) == 1 and apps[0]["name"] == "Installed App", str([a["name"] for a in apps]))
+    names = sorted(a["name"] for a in apps if not a.get("parent_app_id"))
+    check("app list survived the update", "Installed App" in names and set(names) <= {"Installed App", "Survivor"}, str(names))
+    surv = next((a for a in apps if a["name"] == "Survivor"), None)
+    if APP_USERS and surv and os.path.exists("/var/lib/venvy/.survivor-pid"):
+        # Only right after the first update: later steps switch modes, which stops app services on purpose.
+        import json as _j
+        before = _j.load(open("/var/lib/venvy/.survivor-pid"))
+        os.remove("/var/lib/venvy/.survivor-pid")
+        check("an app service kept running through the update (same process)", surv["status"] == "running"
+              and surv["pid"] == before, f"{surv['status']} {surv['pid']} vs {before}")
 
 print("FAILED" if fails else "ALL OK", fails)
 sys.exit(1 if fails else 0)

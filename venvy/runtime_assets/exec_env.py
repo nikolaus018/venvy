@@ -6,6 +6,9 @@ untrusted app environment variables never enter root-privileged wrappers such as
 `systemd-run` or `setpriv`. With `--ctty`, also makes stdin the controlling
 terminal (used by the browser PTY terminal so `subprocess.Popen` never needs
 Python code between `fork()` and `exec()`).
+
+`--file PATH` reads the environment from a file instead of a descriptor (an
+app started as a systemd service inherits none) and deletes it once read.
 """
 import fcntl
 import json
@@ -23,11 +26,23 @@ def main() -> None:
         args = args[1:]
     if len(args) < 2:
         sys.exit(2)
-    env_fd = int(args[0])
-    argv = args[1:]
-
-    with os.fdopen(env_fd, "rb") as fh:
-        raw = fh.read()
+    if args[0] == "--file":
+        if len(args) < 3:
+            sys.exit(2)
+        path = args[1]
+        argv = args[2:]
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            raw = fh.read()
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    else:
+        env_fd = int(args[0])
+        argv = args[1:]
+        with os.fdopen(env_fd, "rb") as fh:
+            raw = fh.read()
     env = {str(k): str(v) for k, v in json.loads(raw.decode("utf-8")).items()}
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)

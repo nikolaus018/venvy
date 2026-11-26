@@ -17,7 +17,7 @@ def free_port():
 
 # ── 1. the table itself (no server) ─────────────────────────────────────────
 from venvy import runtimes as rt
-EXPECT = ["python", "node", "bun", "deno", "rust", "go", "php", "ruby", "java", "static"]
+EXPECT = ["python", "node", "bun", "deno", "rust", "go", "php", "ruby", "java", "static", "command", "docker", "compose"]
 check("all runtimes present", list(rt.RUNTIMES) == EXPECT, str(list(rt.RUNTIMES)))
 A = Path("/srv/app")
 cmd = lambda k, e="", port=8123: rt.start_command(k, A, e, port, "/srv/app/venv")
@@ -25,7 +25,9 @@ check("python cmd", cmd("python", "main.py") == ["/srv/app/venv/bin/python", "ma
 check("node cmd / npm start", cmd("node", "s.js") == ["node", "s.js"] and cmd("node")[:2] == ["npm", "start"])
 check("bun cmd", cmd("bun", "i.ts") == ["bun", "run", "./i.ts"] and cmd("bun") == ["bun", "run", "start"])
 check("deno cmd", cmd("deno", "m.ts") == ["deno", "run", "--allow-all", "m.ts"] and cmd("deno") == ["deno", "task", "start"])
-check("go/rust/java cmd", cmd("go") == ["go", "run", "."] and cmd("rust") == ["cargo", "run"] and cmd("java", "a.jar") == ["java", "-jar", "a.jar"])
+check("go/rust/java cmd: built binaries, not go run / cargo run", cmd("go") == ["/srv/app/.venvy/bin/app"]
+      and cmd("rust", "api") == ["/srv/app/target/release/api"] and cmd("java", "a.jar") == ["java", "-jar", "/srv/app/a.jar"])
+check("command runtime runs the named executable", cmd("command", "bin/server") == ["/srv/app/bin/server"])
 check("ruby cmd", cmd("ruby", "app.rb") == ["ruby", "app.rb"]
       and cmd("ruby", "config.ru")[-5:] == ["--host", "0.0.0.0", "--port", "8123", "config.ru"][-5:]
       and "rackup" in cmd("ruby", "config.ru"))
@@ -36,12 +38,14 @@ check("static cmd names port and folder", st[0] == "python3" and "--port" in st 
 check("helper scripts ship", Path(repo, "venvy/runtime_assets/static_server.py").is_file() and Path(repo, "venvy/runtime_assets/router.php").is_file())
 check("needs_port", rt.needs_port("static", "") and rt.needs_port("php", "") and rt.needs_port("ruby", "config.ru")
       and not rt.needs_port("ruby", "app.rb") and not rt.needs_port("node", ""))
-for key, bad in [("python", "../x.py"), ("node", "a/b.js"), ("static", "x y"), ("go", None)]:
+for key, bad in [("python", "../x.py"), ("node", "../a.js"), ("static", "x y"), ("rust", "a/b"), ("docker", "-v /:/x"), ("command", "/bin/sh"), ("go", None)]:
     if bad is None: continue
     try: rt.clean_entrypoint(key, bad); ok = False
     except ValueError: ok = True
     check(f"{key} entrypoint {bad!r} refused", ok)
-check("fixed entrypoints", rt.clean_entrypoint("rust", "whatever") == "main.rs" and rt.clean_entrypoint("go", "x") == "main.go")
+check("path entrypoints", rt.clean_entrypoint("python", "./src/app.py") == "src/app.py" and rt.clean_entrypoint("go", "./cmd/api") == "cmd/api"
+      and rt.clean_entrypoint("go", ".") == "" and rt.clean_entrypoint("rust", "api") == "api"
+      and rt.clean_entrypoint("docker", "ghcr.io/org/app:1.2") == "ghcr.io/org/app:1.2")
 check("blank entrypoint ok", rt.clean_entrypoint("node", " ") == "" and rt.clean_entrypoint("python", "") == "")
 def refused(fn, *a):
     try: fn(*a); return False
@@ -186,11 +190,11 @@ with server(repo, 55011) as (base, d, srv):
     # runtime switching
     rid = make("static", name="Switcher")
     cl.req("PUT", f"/api/apps/{rid}", json={"runtime": "rust"})
-    check("fixed entrypoint set on switch", cl.status(rid)["entrypoint"] == "main.rs")
-    cl.req("PUT", f"/api/apps/{rid}", json={"runtime": "go"})
-    check("fixed -> fixed", cl.status(rid)["entrypoint"] == "main.go")
-    cl.req("PUT", f"/api/apps/{rid}", json={"runtime": "node"})
-    check("fixed -> free clears the old value", cl.status(rid)["entrypoint"] == "")
+    check("rust: entrypoint is the (optional) binary", cl.status(rid)["entrypoint"] == "")
+    cl.req("PUT", f"/api/apps/{rid}", json={"runtime": "go", "entrypoint": "cmd/x"})
+    check("go: entrypoint is the package", cl.status(rid)["entrypoint"] == "cmd/x")
+    cl.req("PUT", f"/api/apps/{rid}", json={"runtime": "node", "entrypoint": ""})
+    check("switching keeps a usable value", cl.status(rid)["entrypoint"] == "")
     check("runtime+entrypoint together", cl.req("PUT", f"/api/apps/{rid}", json={"runtime": "ruby", "entrypoint": "x.rb"}).json()["entrypoint"] == "x.rb")
     check("switch to unknown refused", cl.req("PUT", f"/api/apps/{rid}", json={"runtime": "cobol"}).status_code == 400)
 

@@ -1,6 +1,6 @@
 # Venvy API Documentation
 
-**Version:** v4.9.5
+**Version:** v5.0.0
 **Base URL:** `http://<host>:<port>/api` (default `http://127.0.0.1:54783`)
 **Protocol:** REST over HTTP/1.1, JSON request/response bodies unless noted
 **Auth:** Session cookie (server-issued), CSRF double-submit token
@@ -681,6 +681,66 @@ Search runs over the app's current and rotated log files, oldest first, in a sep
 
 #### `POST /api/system/update`
 Needs a browser session, not an API token. Starts an update to the latest release and answers at once (`400` if this Venvy was not set up by the installer of 4.5.0 or later, `409` while one is under way). Venvy itself only creates the empty file `.update-request` in its data directory; the installer's `venvy-update.path` unit sees it and runs `/opt/venvy/update.sh` as root, which downloads the release, checks its checksum and its signature (against the key the server was installed with) and runs the installer that came with it — the same switch-over and automatic rollback as running the install command by hand. Nothing Venvy writes is passed to that script, so through this a compromised Venvy can at most ask for the official latest release. Venvy restarts during the update: follow it with `GET /api/health`, then this endpoint. Its status and log are in `/opt/venvy/update/`, which only root can write.
+
+### 5.17 Hosting anything — run, build, processes, routes, edge, data, observability
+
+#### App settings (all through `PUT /api/apps/{id}`; blank or `0` clears)
+| Field | Meaning |
+|---|---|
+| `start_command` | argv (shell-style quoting, no shell); `$PORT`, `${X:-default}`, `$$` for `$`; a first word like `./bin/x` is taken from the app folder. Replaces the runtime default. |
+| `install_command`, `release_command` | `sh -c` as the app. Install replaces the manifest install; release runs after the build, before the restart, and fails the deploy on a non-zero exit. |
+| `root_dir` | the app's folder inside the app directory (monorepos). |
+| `runtime_version` | `"20"`, `"1.82"`, `"3.13"` … installed under `/api/toolchains` on first use (also read from `.nvmrc`, `package.json` engines, `rust-toolchain(.toml)`, `.python-version`, `.go-version`, `.bun-version`, `.dvmrc`). |
+| `container_port` | docker apps: the port inside the container (default 8080). |
+| `stop_signal`, `stop_timeout` | `SIGTERM` (default), `SIGINT`, `SIGQUIT`, `SIGHUP`, `SIGUSR1/2`, `SIGWINCH`; seconds before SIGKILL. |
+| `health_type`, `health_command`, `health_start_period` | `http` (with `healthcheck_path`), `tcp`, `command` (exit 0), `none`; seconds after a start in which failures don't count. |
+| `instances`, `zero_downtime` | replicas behind the proxy (1-32); zero-downtime restarts for a single instance. |
+| `deploy_strategy` | `in_place` or `atomic` (build in a copy, switch with `renameat2`, switch back if unhealthy). |
+| `spec_from_repo`, `commit_status`, `previews_enabled`, `preview_domain`, `preview_env` (object), `environment` | see `venvy.toml`, commit statuses, previews below. |
+| `bind_public` | `false`: only reachable through Venvy (nftables drops other traffic to its ports; `HOST`/`BIND_HOST=127.0.0.1`). |
+| `egress_policy`, `egress_allow` | `allow`, `deny` (localhost only), `allowlist` (+ comma-separated IPs/CIDRs). Service mode only. |
+| `sandbox`, `pids_limit`, `io_weight`, `nofile_limit`, `disk_limit_action` (`alert`/`stop`), `access_log` | |
+| `secret_files` (object name → content), `sops_file`, `vault_path` | written to `$SECRETS_DIR`; decrypted / read at every start into the environment. Never returned (`has_secret_files`). |
+
+Runtimes added: `command` (any executable or start command), `docker` (entrypoint = image, blank = build the Dockerfile), `compose`. `POST /api/apps/upload` also takes `runtime=auto`, `start_command`, `root_dir`, `runtime_version`.
+
+Every process gets `APP_DATA_DIR` (persistent, outside the app folder), `SECRETS_DIR`, `VENVY_APP_ID`, `VENVY_APP_NAME`, `VENVY_ENVIRONMENT`, `VENVY_PROCESS` (workers), `VOLUME_<NAME>` for attached volumes, and the connection variables of the services it uses.
+
+#### `venvy.toml` (and `Procfile`)
+Keys: `runtime`, `version`, `root`, `entrypoint`, `start`, `install`, `build`, `release`, `stop_signal`, `stop_timeout`, `instances`, `zero_downtime`, `port` (container port), `[health]` (`path`, `type`, `command`, `interval`, `failures`, `start_period`), `[processes]` (name → command: workers), `[env]` (defaults the app doesn't set itself), `keep` (files an artifact deploy carries over). Applied on every deploy when `spec_from_repo` is on; a Procfile's `web:` becomes the start command and its other lines workers.
+
+#### Processes
+`GET /api/apps/{id}/processes` (workers, replicas) · `POST /api/apps/{id}/processes` `{name, command}` (operator) · a process is removed with `DELETE /api/apps/{process id}`. Start/stop/restart of the app apply to all of its processes; a restart rolls through replicas, draining each first.
+
+#### Deploys
+`POST /api/apps/{id}/deploy` always deploys (a rebuild when there is no repository) and answers `{"queued": true}` when one is running. `POST /api/apps/{id}/deploy/artifact` (multipart `file`, `?start=true`): a `.tar.gz` of the app's files, swapped in atomically; up to `VENVY_ARTIFACT_MAX_MB` (2048). `GET /api/apps/{id}/previews`. The push webhook creates/deploys/deletes previews for other branches when previews are on.
+
+#### Routes, traffic
+`GET|POST /api/apps/{id}/routes`, `PUT|DELETE /api/apps/{id}/routes/{rid}` — `{hostname (may be *.example.com), path_prefix, strip_prefix, kind: proxy|redirect, redirect_to, redirect_code, basic_auth: {user: password} (null keeps, {} clears), ip_allow, rate_limit (per minute per IP), max_body_mb, headers {}, gzip, cache_seconds, tls}`. `GET /api/apps/{id}/access-log?lines=`, `GET /api/apps/{id}/traffic`.
+
+#### Port forwards (admin)
+`GET|POST /api/apps/{id}/forwards` `{protocol: tcp|udp, listen_port, target_port, listen_host}`, `DELETE /api/apps/{id}/forwards/{fid}`.
+
+#### Volumes and services
+`GET /api/volumes`, `POST /api/volumes {name}` (admin), `DELETE /api/volumes/{vid}?purge=`, `POST|DELETE /api/apps/{id}/volumes/{vid}` `{read_only}` (admin). `GET /api/services/templates`, `POST /api/services {template, name}` (operator; needs Docker), `GET|POST /api/apps/{id}/services {service_app_id, prefix}`, `DELETE /api/apps/{id}/services/{bid}`.
+
+#### Toolchains
+`GET /api/toolchains`, `POST /api/toolchains {kind: node|go|bun|deno|rust|python, version}` (admin, job), `DELETE /api/toolchains/{kind}/{version}`.
+
+#### One-off commands, host jobs, app backups
+`POST /api/apps/{id}/run {command, timeout}` (operator, job: `{status, exit_code, duration, output}`). `GET|POST /api/system/jobs`, `PUT|DELETE /api/system/jobs/{id}`, `POST /api/system/jobs/{id}/run` (admin; run as `venvy-app-0`). `GET|POST /api/apps/{id}/backups`, `POST /api/apps/{id}/backups/{name}/restore {settings}`, `DELETE …/{name}`, `GET …/{name}/download`.
+
+#### Edge (admin)
+`GET /api/system/edge`, `PUT /api/system/edge/caddy {enabled, email, venvy_hosts}` (writes `/etc/caddy/Caddyfile`, validates, reloads; Caddy asks `GET /_venvy/edge-ask?domain=` from loopback before getting a certificate), `PUT /api/system/edge/ngrok {token}`, `POST /api/apps/{id}/publish {provider: tailscale|ngrok, mode: serve|funnel, https_port, domain}`, `DELETE /api/apps/{id}/publish/{provider}`.
+
+#### Secrets back-ends, logs, telemetry, status (admin)
+`GET|PUT /api/system/secrets {vault_addr, vault_token, vault_namespace, sops_age_key}`. `GET|PUT /api/system/log-targets` (list of `{kind: syslog|journald|loki|http, host, port, protocol, url, token, username, password, apps}`; send `{id}` to keep an existing one). `GET|PUT /api/system/telemetry {otlp_url, otlp_headers, heartbeat_url}`. `GET /api/system/firewall`. `GET|PUT /api/system/status-page {enabled, title, apps}`. `GET|POST /api/monitors`, `PUT|DELETE /api/monitors/{id}` (operator) `{name, target: http(s)://… | tcp://host:port, interval, timeout, expect_status, enabled, public}`. `GET /api/apps/{id}/uptime`. `GET|PUT /api/system/replication {minutes}`, `POST /api/system/replication/run`.
+
+#### Other servers (admin)
+`GET|POST /api/servers {name, url, token}`, `DELETE /api/servers/{id}`, `GET /api/servers/apps`, `POST /api/servers/{id}/apps/{remote app id}/{start|stop|restart|deploy}`.
+
+#### Public
+`GET /metrics` (Prometheus; API token or session), `GET /status`, `GET /status.json` (when the status page is on).
 
 ## 6. Data Model Reference
 

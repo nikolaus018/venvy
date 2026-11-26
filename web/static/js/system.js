@@ -20,7 +20,7 @@
             document.getElementById('sys-cf-card').classList.toggle('hidden', !isAdmin);
             ['sys-history-card', 'sys-ops-cards', 'sys-update-card'].forEach(id => document.getElementById(id).classList.toggle('hidden', !isAdmin));
             if (isAdmin) { loadHostHistory(); loadOpsSummaries(); loadUpdateCard(); }
-            loadSystemView(); loadBackups();
+            loadSystemView(); loadBackups(); loadPlatformView();
             if (isAdmin) loadCfCredsStatus();
         }
         function closeSystemView() {

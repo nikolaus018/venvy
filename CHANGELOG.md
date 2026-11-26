@@ -5,6 +5,30 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v5.0.0
+
+Venvy now hosts anything that runs on Linux, not only the ten runtimes' default way of starting.
+
+- **Any command or binary.** A start command (with `$PORT`, `$APP_DATA_DIR` and the app's variables expanded, no shell) replaces the runtime's default for any app, and the new **Any command / binary** runtime runs a program you upload or build. Entrypoints may be paths (`src/app.py`, `bin/server`), and a **root folder** setting serves one project out of a monorepo.
+- **Release builds.** Rust apps are built with `cargo build --release` (name the binary for workspaces or several `[[bin]]`) and run from `target/release/`; Go with `go build` (any package, e.g. `./cmd/api`); Java with Maven/Gradle (wrappers preferred) and the built JAR found by itself; Node, Bun and static sites run their `build` script. A build that is missing is made on the first start.
+- **Docker and Compose.** Docker apps run an image or build the app's Dockerfile, with the container port published on the app's port, `$APP_DATA_DIR` at `/data`, limits and `no-new-privileges`; Compose apps run `docker compose up` as one project (`$PORT` usable in the file).
+- **Managed services:** PostgreSQL, MariaDB, Redis, Valkey, MongoDB, Meilisearch, MinIO and RabbitMQ in one click, with generated credentials, private to the host; an app that uses one gets `DATABASE_URL`, `REDIS_URL`, … at start. Running services dump themselves before every backup.
+- **Toolchains:** Node, Go, Bun, Deno, Rust (rustup) and Python (uv) versions installed side by side on first use, checksum-verified, chosen per app or from the repository (`.nvmrc`, `engines`, `rust-toolchain.toml`, `.python-version` …).
+- **Package managers:** `npm ci` with a lockfile, pnpm and Yarn (through corepack), uv, Poetry, Pipenv and `pyproject.toml` dependencies. Build caches live outside the app folder (not served, snapshotted or counted twice).
+- **Processes:** workers from a Procfile, `venvy.toml` `[processes]` or the Hosting tab; `instances` runs replicas behind the proxy with round-robin load balancing; restarts roll through them one at a time, draining each first, and `zero_downtime` starts a new copy before restarting a single instance.
+- **Apps as systemd services** (per-app-users installs): each app is `venvy-app-<id>.service` — it keeps running through Venvy restarts and updates, its output waits in the journal and nothing is lost, and systemd enforces the stop signal and timeout, memory/CPU/tasks/I/O/open-file limits, a sandbox (read-only system, private `/tmp`, other apps and Venvy's data invisible, a system-call filter) and an optional egress policy.
+- **Deploys:** atomic deploys build next to the live folder and switch in one step (and back if the app isn't healthy); a release command runs migrations after the build; artifact deploys take a `.tar.gz` from CI (or `ship.py deploy`) and replace the folder as a whole; deploys asked for during a deploy are queued; commit statuses go to GitHub, GitLab and Gitea; preview apps per pushed branch on `<branch>.<preview domain>`; a repository can describe itself in `venvy.toml`.
+- **Routing:** more hostnames per app, wildcards, path routes (with prefix stripping), redirects, and per route an IP allow-list, basic auth, rate limit, body limit, response headers, gzip and a cache; access logs and request metrics per app.
+- **Edge:** HTTPS on your own domains through Caddy (certificates on demand for every routed name), Tailscale serve/Funnel, ngrok; raw TCP and UDP port forwards.
+- **Network:** private apps (reachable only through Venvy, enforced with nftables) and app-to-app isolation on the host.
+- **Health checks** by HTTP, TCP or command, with a start period.
+- **Secrets:** secret files in `$SECRETS_DIR`, SOPS files from the repository, HashiCorp Vault.
+- **Data:** `$APP_DATA_DIR` that survives deploys, shared volumes between apps (ACLs), per-app backup and restore, consistent copies of SQLite databases in every backup (WAL included), full backups now include app data and volumes, and a database standby copied off-site every few minutes.
+- **Observability:** log shipping to syslog, journald, Loki or any HTTP endpoint; Prometheus `/metrics` and OTLP push; URL/TCP monitors; uptime history; a public status page; a heartbeat to an external dead-man's switch.
+- **Operations:** one-off commands as an app, host-level scheduled jobs, managing other Venvy servers from one, runtime detection on create (`runtime=auto`).
+- Installer: `--with-docker`, `--with-caddy`, `--with-uv`, `--with-pnpm`, `--with-maven`, `--with-sops`, `--with-tailscale`, `--with-ngrok`, `--with-everything`; `nftables` and `acl` are always installed.
+- Changed: deploying an app without a repository or build command now rebuilds it as it is instead of being refused; every web process gets a `$PORT` (followed to the port it really listens on if it ignores it); the Rust entrypoint is the binary name (was the fixed `main.rs`), Go's is the package (was `main.go`).
+
 ## v4.9.5
 
 - Setting an app's custom domain now checks port ownership the same way Cloudflare tunnel routes do, so an app cannot proxy requests to Venvy's own port or another service listening on localhost.

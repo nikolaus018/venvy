@@ -57,6 +57,7 @@
         'toggleReduceMotion', 'toggleResourceLimits', 'toggleSecretVis',
         'toggleSidebar', 'triggerPwaInstall', 'unpublishCfRoute',
         'updateCfHostnamePreview', 'uploadBackupFile', 'uploadFile',
+        'hostingAction', 'platformAction',
     ]);
     const parsed = new Map();
 

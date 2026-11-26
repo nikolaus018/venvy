@@ -2,7 +2,7 @@
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
         // ── Tab Switching ─────────────────────────────────────────────────────────
-        const TABS = ['terminal', 'files', 'logs', 'packages', 'deploy', 'jobs', 'settings'];
+        const TABS = ['terminal', 'files', 'logs', 'packages', 'deploy', 'jobs', 'settings', 'hosting'];
         let currentTab = 'terminal';
 
         // A shell and the file manager need an operator; a viewer's app view
@@ -59,6 +59,7 @@
             if (tab === 'packages') loadPackages();
             if (tab === 'deploy') loadDeploy();
             if (tab === 'jobs') loadJobs();
+            if (tab === 'hosting') loadHosting();
             if (tab === 'terminal' && window.term && window.fitAddon) setTimeout(_termFit, 100);
             if (tab === 'settings') {
                 loadCfRouteStatus();

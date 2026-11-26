@@ -107,8 +107,61 @@ class App(SQLModel, table=True):
 
     # Own hostname: requests to Venvy with this Host header go to the app
     domain: Optional[str] = Field(default=None, index=True)
-    runtime_version: Optional[str] = Field(default=None)    # e.g. "3.12" for Python
-    disk_limit_mb: Optional[int] = Field(default=None)      # soft: alerts when exceeded
+    runtime_version: Optional[str] = Field(default=None)    # "3.12" (Python), "20" (Node), "1.82" (Rust) ...
+    disk_limit_mb: Optional[int] = Field(default=None)
+    disk_limit_action: str = Field(default="alert")         # alert | stop
+
+    # How the app is run (see appspec.py). All optional: blank means the
+    # runtime's own default.
+    start_command: Optional[str] = Field(default=None)      # argv, shell-style quoting, $VARS expanded
+    install_command: Optional[str] = Field(default=None)    # replaces the manifest install
+    release_command: Optional[str] = Field(default=None)    # after the build, before the restart (migrations)
+    root_dir: str = Field(default="")                       # the app's folder inside app_dir (monorepos)
+    stop_signal: str = Field(default="SIGTERM")
+    stop_timeout: Optional[int] = Field(default=None)       # seconds; None = the server default
+    container_port: Optional[int] = Field(default=None)     # docker: the port inside the container
+
+    # Health check: http (healthcheck_path), tcp (the port accepts), command (exit 0)
+    health_type: str = Field(default="http")
+    health_command: Optional[str] = Field(default=None)
+    health_start_period: int = Field(default=0)             # seconds after a start in which failures don't count
+
+    # Processes: an app may have workers, replicas and companions that share
+    # its folder, user and settings. They are App rows of their own with
+    # parent_app_id set; process_kind says which.
+    parent_app_id: Optional[int] = Field(default=None, index=True)
+    process_kind: str = Field(default="app")                # app | worker | replica | tunnel
+    process_name: Optional[str] = Field(default=None)       # "worker", "scheduler" ... (Procfile names)
+    instances: int = Field(default=1)                       # web processes behind the proxy
+    zero_downtime: bool = Field(default=False)              # restart by starting the new one first
+
+    # Deploys
+    deploy_strategy: str = Field(default="in_place")        # in_place | atomic
+    spec_from_repo: bool = Field(default=True)              # apply venvy.toml / Procfile on deploy
+    commit_status: bool = Field(default=False)              # report deploys to GitHub / GitLab / Gitea
+    previews_enabled: bool = Field(default=False)           # a preview app per pushed branch
+    preview_domain: Optional[str] = Field(default=None)     # previews get <branch>.<preview_domain>
+    preview_env: str = Field(default="")                    # encrypted JSON, overrides for previews
+    preview_of: Optional[int] = Field(default=None, index=True)
+    environment: str = Field(default="production")          # a label: production, staging, preview ...
+
+    # Network and sandbox
+    bind_public: bool = Field(default=True)                 # False: only reachable through Venvy (firewalled)
+    egress_policy: str = Field(default="allow")             # allow | deny | allowlist
+    egress_allow: str = Field(default="")                   # comma separated IPs / CIDRs for allowlist
+    sandbox: bool = Field(default=True)                     # filesystem sandbox when run as a systemd service
+    pids_limit: Optional[int] = Field(default=None)
+    io_weight: Optional[int] = Field(default=None)          # 1-10000, systemd IOWeight
+    nofile_limit: Optional[int] = Field(default=None)
+    access_log: bool = Field(default=True)                  # log requests that reach it through the proxy
+
+    # Secrets beyond environment variables
+    secret_files: str = Field(default="")                   # encrypted JSON {name: content}
+    sops_file: Optional[str] = Field(default=None)          # repo file decrypted with SOPS at start
+    vault_path: Optional[str] = Field(default=None)         # Vault KV v2 path merged into the environment
+
+    # A managed service (postgres, redis ...) is an app made from a template.
+    service_template: Optional[str] = Field(default=None)
 
 
 class SystemSetting(SQLModel, table=True):
@@ -224,3 +277,93 @@ class EnvHistory(SQLModel, table=True):
     added: str = Field(default="")                  # comma separated names
     removed: str = Field(default="")
     changed: str = Field(default="")
+
+
+class Route(SQLModel, table=True):
+    """A hostname (and path) Venvy's proxy serves for an app, or redirects."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    app_id: int = Field(index=True)
+    hostname: str = Field(index=True)               # app.example.com or *.example.com
+    path_prefix: str = Field(default="/")
+    strip_prefix: bool = Field(default=False)
+    kind: str = Field(default="proxy")              # proxy | redirect
+    redirect_to: Optional[str] = Field(default=None)    # host or URL a redirect goes to
+    redirect_code: int = Field(default=301)
+    basic_auth: str = Field(default="")             # encrypted JSON {user: scrypt hash}
+    ip_allow: str = Field(default="")               # comma separated IPs / CIDRs; blank = everyone
+    rate_limit: int = Field(default=0)              # requests per minute per client IP; 0 = none
+    max_body_mb: int = Field(default=0)             # 0 = no limit
+    headers: str = Field(default="{}")              # JSON {name: value} added to responses
+    gzip: bool = Field(default=False)
+    cache_seconds: int = Field(default=0)           # cache public GET responses up to this long
+    tls: bool = Field(default=True)                 # ask the TLS front (Caddy) for a certificate
+    created_at: datetime.datetime = Field(default_factory=utc_now)
+
+
+class PortForward(SQLModel, table=True):
+    """A raw TCP or UDP port on the host that is passed to an app's port."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    app_id: int = Field(index=True)
+    protocol: str = Field(default="tcp")            # tcp | udp
+    listen_host: str = Field(default="0.0.0.0")
+    listen_port: int = Field(unique=True)
+    target_port: int
+    enabled: bool = Field(default=True)
+
+
+class Volume(SQLModel, table=True):
+    """A folder several apps can share."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(unique=True)
+    created_at: datetime.datetime = Field(default_factory=utc_now)
+
+
+class AppVolume(SQLModel, table=True):
+    app_id: int = Field(primary_key=True)
+    volume_id: int = Field(primary_key=True)
+    read_only: bool = Field(default=False)
+
+
+class ServiceBinding(SQLModel, table=True):
+    """An app that uses a managed service: its connection variables are
+    added to the app's environment at start."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    app_id: int = Field(index=True)
+    service_app_id: int = Field(index=True)
+    prefix: str = Field(default="")                 # "" -> DATABASE_URL; "CACHE" -> CACHE_URL
+
+
+class UrlMonitor(SQLModel, table=True):
+    """A URL or TCP endpoint Venvy checks on a schedule (anything, not only its apps)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    target: str                                     # https://... or tcp://host:port
+    interval: int = Field(default=60)
+    timeout: int = Field(default=10)
+    expect_status: int = Field(default=0)           # 0 = any answer below 400
+    enabled: bool = Field(default=True)
+    public: bool = Field(default=False)             # shown on the status page
+    last_ok: Optional[bool] = Field(default=None)
+    last_checked: Optional[datetime.datetime] = Field(default=None)
+    last_error: str = Field(default="")
+    last_ms: Optional[float] = Field(default=None)
+
+
+class UptimeSample(SQLModel, table=True):
+    """One check result: an app's health ("app:<id>") or a monitor ("mon:<id>")."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    target: str = Field(index=True)
+    ts: datetime.datetime = Field(default_factory=utc_now, index=True)
+    ok: bool = Field(default=True)
+    ms: Optional[float] = Field(default=None)
+
+
+class RemoteServer(SQLModel, table=True):
+    """Another Venvy this one manages, through an API token on it."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(unique=True)
+    url: str
+    token: str                                      # encrypted
+    created_at: datetime.datetime = Field(default_factory=utc_now)
+    last_status: str = Field(default="")
+    last_seen: Optional[datetime.datetime] = Field(default=None)

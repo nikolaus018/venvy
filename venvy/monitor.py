@@ -4,6 +4,7 @@ The supervisor calls `health_tick()` every second; the metrics collector calls
 `record_tick()` every few seconds and, once a minute, this module writes one
 sample per app (and one for the host) and evaluates the alert rules."""
 import asyncio
+import contextlib
 import datetime
 import logging
 import os
@@ -108,6 +109,142 @@ async def probe(port: int, path: str) -> dict:
         return {"ok": False, "code": None, "error": str(exc)[:200] or exc.__class__.__name__}
 
 
+def _stop_for_disk(app_id: int) -> None:
+    """Stop an app (and its processes) that went over its disk limit with action "stop"."""
+    async def go() -> None:
+        from venvy import groups, process
+        try:
+            await groups.stop_children(app_id)
+            with Session(engine) as s:
+                await process.stop_app_process_logic(app_id, s, manual=True)
+            logging.warning(f"App {app_id} stopped: over its disk limit.")
+        except Exception as exc:
+            logging.error(f"Could not stop app {app_id} over its disk limit: {exc}")
+    from venvy.jobs import _running_tasks
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        t = loop.create_task(go())
+        _running_tasks.add(t)
+        t.add_done_callback(_running_tasks.discard)
+    else:
+        from venvy import notify as _n
+        if _n._loop and not _n._loop.is_closed():
+            def _start() -> None:
+                t = asyncio.ensure_future(go())
+                _running_tasks.add(t)
+                t.add_done_callback(_running_tasks.discard)
+            _n._loop.call_soon_threadsafe(_start)
+
+
+def has_check(app) -> bool:
+    """Whether the app has a health check that can run."""
+    kind = getattr(app, "health_type", "http") or "http"
+    if kind == "http":
+        return bool(app.healthcheck_path and app.port)
+    if kind == "tcp":
+        return bool(app.port)
+    if kind == "command":
+        return bool(getattr(app, "health_command", None))
+    return False
+
+
+def describe_check(app) -> str:
+    kind = getattr(app, "health_type", "http") or "http"
+    if kind == "tcp":
+        return f"TCP port {app.port}"
+    if kind == "command":
+        return "health command"
+    return app.healthcheck_path or "/"
+
+
+async def probe_tcp(port: int) -> dict:
+    t0 = time.monotonic()
+    try:
+        _r, w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), _PROBE_TIMEOUT_SEC)
+        w.close()
+        with contextlib.suppress(Exception):
+            await w.wait_closed()
+        return {"ok": True, "code": None, "error": None, "ms": (time.monotonic() - t0) * 1000}
+    except asyncio.TimeoutError:
+        return {"ok": False, "code": None, "error": f"no connection within {int(_PROBE_TIMEOUT_SEC)} s"}
+    except OSError as exc:
+        return {"ok": False, "code": None, "error": exc.strerror or str(exc)}
+
+
+async def probe_command(app) -> dict:
+    """Run the app's health command as its user, in its folder; exit 0 is healthy."""
+    from venvy import appspec, groups
+    from venvy.isolation import _as_app_user, _clean_root_env, _exec_env_argv, _isolation_active, _prepare_exec_env
+    from venvy.process import _build_app_env
+    spec = groups.effective(app)
+    env = await asyncio.to_thread(_build_app_env, app, spec)
+    argv = appspec.shell_argv(spec.health_command or app.health_command)
+    tf = None
+    try:
+        if _isolation_active():
+            tf, fd = _prepare_exec_env(env)
+            argv, spawn_env, fds = _as_app_user(spec, _exec_env_argv(fd, argv)), _clean_root_env(), (fd,)
+        else:
+            spawn_env, fds = env, ()
+        t0 = time.monotonic()
+        proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL,
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                                                    cwd=str(appspec.work_dir(spec)), env=spawn_env, pass_fds=fds,
+                                                    start_new_session=True)
+    finally:
+        if tf is not None:
+            tf.close()
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=max(_PROBE_TIMEOUT_SEC, 30))
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, 9)
+        await proc.wait()
+        return {"ok": False, "code": None, "error": "the health command timed out"}
+    ok = proc.returncode == 0
+    tail = out.decode(errors="replace").strip()[-200:]
+    return {"ok": ok, "code": proc.returncode, "error": None if ok else (f"exit {proc.returncode}" + (f": {tail}" if tail else "")),
+            "ms": (time.monotonic() - t0) * 1000}
+
+
+async def run_check(app) -> dict:
+    kind = getattr(app, "health_type", "http") or "http"
+    if kind == "tcp":
+        return await probe_tcp(app.port)
+    if kind == "command":
+        return await probe_command(app)
+    t0 = time.monotonic()
+    res = await probe(app.port, app.healthcheck_path)
+    res["ms"] = (time.monotonic() - t0) * 1000
+    return res
+
+
+async def check_once(app) -> Optional[bool]:
+    """One check now: True/False, or None when the app has no check."""
+    if not has_check(app):
+        return None
+    try:
+        return bool((await run_check(app))["ok"])
+    except Exception:
+        return False
+
+
+_samples: List[tuple] = []
+
+
+def _record_sample(app_id: int, ok: bool, ms: Optional[float]) -> None:
+    _samples.append((f"app:{app_id}", ok, ms, utc_now()))
+
+
+def take_samples() -> List[tuple]:
+    global _samples
+    out, _samples = _samples, []
+    return out
+
+
 async def _check_app(app_id: int, restart) -> None:
     h = _health[app_id]
     try:
@@ -115,14 +252,15 @@ async def _check_app(app_id: int, restart) -> None:
             with Session(engine) as s:
                 return s.get(App, app_id)
         app = await asyncio.to_thread(_load)
-        if not app or app.status != "running" or not app.healthcheck_path or not app.port:
+        if not app or app.status != "running" or not has_check(app):
             return
-        res = await probe(app.port, app.healthcheck_path)
+        res = await run_check(app)
         now = utc_now().isoformat()
         # The app may have been restarted while we waited.
         if _health.get(app_id) is not h or h.get("_pid") != app.pid:
             return
-        h.update(checked_at=now, code=res["code"], error=res["error"])
+        _record_sample(app_id, bool(res["ok"]), res.get("ms"))
+        h.update(checked_at=now, code=res["code"], error=res["error"], ms=res.get("ms"))
         if res["ok"]:
             was_bad = h["status"] == "unhealthy"
             h.update(status="healthy", failures=0)
@@ -140,12 +278,12 @@ async def _check_app(app_id: int, restart) -> None:
             h.update(status="unhealthy", since=now)
             _reported_unhealthy.add(app.id)
             notify.emit("app_unhealthy", f"{app.name} is failing its health check",
-                        f"{app.healthcheck_path}: {res['error']} ({h['failures']} checks in a row)",
+                        f"{describe_check(app)}: {res['error']} ({h['failures']} checks in a row)",
                         app.id, app.name, "error")
             logging.warning(f"App '{app.name}' is unhealthy: {res['error']}")
         if app.health_restart:
             from venvy import deploy as _deploy
-            if _deploy.is_running(app.id):
+            if _deploy.is_running(app.id) or _deploy.is_running(app.parent_app_id or -1):
                 return
             mono = time.monotonic()
             count, not_before = _health_restart_backoff.get(app.id, (0, 0.0))
@@ -176,7 +314,7 @@ async def health_tick(restart) -> None:
         _health.pop(app_id, None)
     mono = time.monotonic()
     for app in apps:
-        if not app.healthcheck_path or not app.port:
+        if not has_check(app):
             _health.pop(app.id, None)
             continue
         h = _health.get(app.id)
@@ -184,7 +322,7 @@ async def health_tick(restart) -> None:
             # New process: start over, after a grace period to let it boot.
             h = _health[app.id] = {"status": "unknown", "failures": 0, "checked_at": None, "code": None,
                                    "error": None, "since": None, "_probing": False, "_pid": app.pid,
-                                   "_next": mono + _START_GRACE_SEC}
+                                   "_next": mono + max(_START_GRACE_SEC, float(app.health_start_period or 0))}
         if h["_probing"] or mono < h["_next"]:
             continue
         h["_probing"] = True
@@ -463,8 +601,12 @@ def evaluate_alerts(avg: Dict[int, tuple], host_disk: float, apps: Dict[int, App
         key = ("disk", app.id)
         if over and key not in _alert_since:
             _alert_since[key] = time.monotonic()
+            stopping = getattr(app, "disk_limit_action", "alert") == "stop" and app.status == "running"
             notify.emit("alert_fired", f"{app.name} is over its disk limit",
-                        f"{d / 1048576:.0f} MB used of {app.disk_limit_mb} MB.", app.id, app.name, "error")
+                        f"{d / 1048576:.0f} MB used of {app.disk_limit_mb} MB."
+                        + (" It is being stopped (disk limit action: stop)." if stopping else ""), app.id, app.name, "error")
+            if stopping:
+                _stop_for_disk(app.id)
         elif not over and key in _alert_since:
             _alert_since.pop(key)
             notify.emit("alert_cleared", f"{app.name} is back under its disk limit", "", app.id, app.name)

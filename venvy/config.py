@@ -131,3 +131,11 @@ def _make_tz_aware(dt: datetime.datetime) -> datetime.datetime:
 
 # Tracks exactly when this Venvy instance started up.
 _VENVY_BOOT_TIME = utc_now()
+
+
+def venvy_port() -> int:
+    """The port Venvy itself listens on."""
+    try:
+        return int(os.getenv("VENVY_LISTEN_PORT") or os.getenv("PORT") or 54783)
+    except ValueError:
+        return 54783

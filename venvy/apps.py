@@ -59,7 +59,10 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
     d["git_configured"] = bool(d.get("git_url"))
     d["git_has_token"] = bool(d.pop("git_auth", None))
     d.pop("webhook_secret", None)
-    d["health"] = monitor.health_info(app_row.id) if app_row.healthcheck_path else None
+    d["health"] = monitor.health_info(app_row.id) if monitor.has_check(app_row) else None
+    d.pop("secret_files", None)
+    d.pop("preview_env", None)
+    d["has_secret_files"] = bool(app_row.secret_files)
     d["disk_bytes"] = monitor.cached_disk(app_row.id)
     if reveal_secrets:
         env_ok, env_plain = _try_decrypt_secret(app_row.env_json)
@@ -80,7 +83,9 @@ def _app_safe(app_row: App, reveal_secrets: bool = True) -> dict:
     # would not tell anyone that it crashed.
     d["crashed"] = app_row.status == "stopped" and app_row.last_exit_code not in (None, 0, -15)
     d["metrics"]   = _app_metrics.get(app_row.id, {"cpu": 0.0, "memory": 0})
-    d["resource_limits_enforced"] = _systemd_run_available()
+    from venvy import launcher
+    d["runs_as_service"] = bool(app_row.systemd_scope and app_row.systemd_scope.endswith(".service"))
+    d["resource_limits_enforced"] = launcher.available() or _systemd_run_available()
     # Whether the app, its terminal and its tools run as its own Unix user.
     d["isolated"] = _isolation_active()
     pref = app_row.url_source_pref

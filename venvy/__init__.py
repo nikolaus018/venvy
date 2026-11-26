@@ -8,7 +8,10 @@ The package is laid out by concern, lowest layer first:
     db          engine, sessions, schema migrations
     audit       the audit trail (database + log)
     own_hosts   the hostnames Venvy itself is reached under
-    runtimes    what each runtime runs, its entrypoint rules and package managers
+    kv          Venvy's own settings, plain or encrypted
+    appspec     an app's working folder, state folders, caches, commands, venvy.toml / Procfile, runtime detection
+    toolchains  language versions installed side by side (Node, Go, Bun, Deno, Rust, Python)
+    runtimes    what each runtime runs and builds, its entrypoint rules and package managers
     shared_env  environment variables every app gets
     notify      notification channels (webhook, Slack, Discord, ntfy, Telegram, email)
     monitor     health checks, resource history, disk usage, alerts
@@ -16,6 +19,12 @@ The package is laid out by concern, lowest layer first:
     safefs      path checks and symlink-safe file access inside app directories
     isolation   per-app Unix users
     jobs        background jobs and the task registry
+    launcher    apps as systemd services of their own (sandbox, limits, journal logs)
+    groups      an app's workers and replicas; rolling and zero-downtime restarts
+    services    managed databases / caches as containers, and bindings to apps
+    volumes     folders shared between apps (ACLs)
+    secrets_ext secret files, SOPS, Vault
+    logship     shipping app logs to syslog, journald, Loki, HTTP
     process     app lifecycle: start/stop, supervisor, logs, ports, metrics
     apps        app naming rules and the API representation of an app
     terminal    the in-browser PTY terminal
@@ -26,18 +35,27 @@ The package is laid out by concern, lowest layer first:
     scheduler   per-app jobs and scheduled backups
     updates     updating Venvy itself from the UI (through the installer's root unit)
     deploy      git deploys, build step, releases and rollback, push webhooks
-    proxy       serving an app on its own domain (HTTP and WebSocket)
+    routing     the proxy's routes: hostnames, paths, wildcards, redirects, controls, load balancing
+    proxy       serving apps on their hostnames (HTTP and WebSocket)
+    firewall    nftables rules: private ports, app-to-app isolation
+    forwards    raw TCP / UDP port forwards
+    edge        Caddy (HTTPS on demand), Tailscale, ngrok
+    telemetry   Prometheus / OTLP metrics, URL monitors, uptime, heartbeat, status page
+    previews    a preview app per pushed branch
+    appbackup   backing up and restoring one app
+    replication a standby copy of the database off-site
+    federation  managing other Venvy servers
     cloudflare  Cloudflare API helpers for tunnel routes
     settings    storage rules for system settings (secret / reserved / encrypted)
     startup     host tool checks run at boot
     webui       assembles the HTML document from web/index.html + web/partials/
     api/        HTTP route handlers, one router per resource:
                 auth, users, apps, files, system, cloudflare, terminal,
-                deploy, cron, ops, tokens, logs, updates
+                deploy, cron, ops, tokens, logs, updates, platform
     app         the FastAPI application: lifespan, middleware, static routes
 
 A module only imports from modules above it. `main.py` at the repository
 root is the entry point (`python main.py`).
 """
 
-__version__ = "4.9.5"
+__version__ = "5.0.0"

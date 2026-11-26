@@ -4,6 +4,13 @@
   ship.py login  [--url URL]
   ship.py apps   [--url URL]
   ship.py sync   APP [--url URL] [--prune] [--dry-run] [--keep GLOB ...] [--restart]
+  ship.py deploy APP [--url URL] [--dir DIR] [--start] [--wait]
+
+`deploy` packs every file git tracks into one .tar.gz and deploys it as an
+artifact: the server swaps the app's folder for it as a whole (removed files
+are gone, nothing is half-uploaded), runs the install and build, restarts and
+checks the app, and switches back by itself if it does not come up. Built
+folders (venv, node_modules, target) and data files (.env, *.db) carry over.
 
 `sync` uploads every file git tracks (or has staged/untracked-but-not-ignored)
 into the app, chunked, skipping files the server already has unchanged (same
@@ -261,6 +268,48 @@ def cmd_sync(c: Client, args) -> None:
         print("Restart queued.")
 
 
+def cmd_deploy(c: Client, args) -> None:
+    import io
+    import tarfile
+    import time
+    app = find_app(c, args.app)
+    root = Path(args.dir).resolve()
+    files = tracked_files(root)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for rel in files:
+            tar.add(str(root / rel), arcname=rel, recursive=False)
+    data = buf.getvalue()
+    print(f"Deploying {len(files)} files ({len(data) // 1024} KB) to {app['name']}…")
+    boundary = uuid.uuid4().hex
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"artifact.tar.gz\"\r\n"
+            "Content-Type: application/gzip\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    csrf = next((ck.value for ck in c.jar if ck.name == "csrf_token"), None)
+    if csrf is None:
+        c.opener.open(c.base + "/api/health").read()
+        csrf = next((ck.value for ck in c.jar if ck.name == "csrf_token"), "")
+    q = "?start=true" if args.start else ""
+    req = urllib.request.Request(f"{c.base}/api/apps/{app['id']}/deploy/artifact{q}", data=body, method="POST",
+                                 headers={"X-Venvy-Key": c.auth_key, "X-CSRF-Token": csrf,
+                                          "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with c.opener.open(req) as r:
+        res = json.loads(r.read() or b"{}")
+    print("Queued behind the running deploy." if res.get("queued") else "Deploy started.")
+    if not args.wait:
+        return
+    time.sleep(1)
+    while True:
+        st = c.request("GET", f"/api/apps/{app['id']}/deploy")
+        state = st.get("state") or {}
+        if not state.get("running"):
+            print("\n".join(state.get("log", [])[-15:]))
+            print(f"Result: {state.get('status')}")
+            if state.get("status") != "ok":
+                sys.exit(1)
+            return
+        time.sleep(2)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", default=os.getenv("VENVY_URL"), help="Venvy base URL (default $VENVY_URL)")
@@ -276,6 +325,11 @@ def main() -> None:
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--keep", action="append", default=[], metavar="GLOB", help="never prune matching paths (repeatable)")
     s.add_argument("--restart", action="store_true")
+    dp = sub.add_parser("deploy", parents=[sub_common])
+    dp.add_argument("app")
+    dp.add_argument("--dir", default=".", help="git checkout to ship (default .)")
+    dp.add_argument("--start", action="store_true", help="start the app afterwards even if it was stopped")
+    dp.add_argument("--wait", action="store_true", help="wait for the deploy and print its result")
     args = p.parse_args()
     if not args.url:
         sys.exit("Give --url or set VENVY_URL.")
@@ -288,6 +342,8 @@ def main() -> None:
         if args.cmd == "apps":
             for a in c.request("GET", "/api/apps"):
                 print(f"{a['id']:>4}  {a['name']:<24} {a.get('status', '')}")
+        elif args.cmd == "deploy":
+            cmd_deploy(c, args)
         else:
             cmd_sync(c, args)
     except urllib.error.HTTPError as e:
