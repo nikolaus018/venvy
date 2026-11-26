@@ -269,12 +269,21 @@ def find_free_port(start: int = 8001, end: int = 9000) -> Optional[int]:
     """Return the first TCP port in [start, end) that nothing listens on,
     serialized across concurrent launches so two apps don't claim the same port.
     A listener on any interface is found by the scan; the loopback bind also
-    catches one on the wildcard address (and anything the scan can't see)."""
+    catches one on the wildcard address (and anything the scan can't see).
+    A port another app has is not free either, listening or not: a stopped app,
+    a worker or an app still starting would otherwise share it with the next."""
+    from venvy import ports as _ports
+    try:
+        with Session(engine) as s:
+            taken = set(_ports.claimed_by_apps(s))
+    except Exception as exc:
+        logging.warning(f"Could not read the apps' ports: {exc}")
+        taken = set()
     now = time.monotonic()
     with _port_alloc_lock:
         for p in [k for k, ts in _recent_allocated_ports.items() if now - ts > 10.0]:
             _recent_allocated_ports.pop(p, None)
-        busy = _listening_ports()
+        busy = _listening_ports() | taken
         for port in range(start, end):
             if port in _recent_allocated_ports or port in busy:
                 continue
