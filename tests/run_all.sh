@@ -26,6 +26,8 @@ run login_timing "$PYB" t_timing.py "$R"
     run restore_running_app "$PYB" t_restore.py "$R"
     run restore_integrity "$PYB" t_restore2.py "$R"
     run monitor "$PYB" t_monitor.py "$R"
+    run platform_unit "$PYB" t_platform_unit.py "$R"
+    run platform "$PYB" t_platform.py "$R"
 ) &
 (
     run small "$PYB" t_small.py "$R"
@@ -43,6 +45,7 @@ run login_timing "$PYB" t_timing.py "$R"
     run proxy_trust "$PYB" t_proxy.py "$R"
     run env_unreadable "$PYB" t_env.py "$R"
     run deploy "$PYB" t_deploy.py "$R"
+    run platform_deploys "$PYB" t_platform2.py "$R"
 ) &
 (
     for c in stuck_status totp_nonascii settings_secret key_perms crashed_app_listing; do run "misc_$c" "$PYB" t_misc.py "$R" "$c"; done

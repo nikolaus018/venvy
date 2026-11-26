@@ -74,7 +74,7 @@ with server(repo, 55023, env={"VENVY_ALLOW_LOCAL_GIT": "1", "VENVY_HEALTH_WAIT_S
           put(git_url="https://evil.example/o/r.git").json()["has_token"] is False)
     r = put(git_url=str(bare), git_branch="main", build_command="echo built-$(cat version.txt) > built.txt")
     check("local repo allowed here, build command saved", r.status_code == 200 and r.json()["build_command"].startswith("echo built-"), r.text)
-    check("deploy refused with nothing configured", cl.req("POST", f"/api/apps/{make_app(cl, name='Bare')}/deploy").status_code == 400)
+    check("deploy with nothing configured rebuilds the app as it is", cl.req("POST", f"/api/apps/{make_app(cl, name='Bare')}/deploy").status_code == 200)
 
     def deploy(start=True, timeout=90):
         r = cl.req("POST", f"/api/apps/{app}/deploy", json={"start": start}); assert r.status_code == 200, r.text

@@ -252,8 +252,38 @@ def _add_tree_to_tar(tar: tarfile.TarFile, path: str, arcname: str, track: Calla
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 
 
+# Set while a full backup runs: archive path -> (consistent SQLite copy, uid
+# that must own it). The copies are made by the app's own user (see
+# _sqlite_copies); the live file and its -wal/-shm are left out.
+_overrides: Dict[str, tuple] = {}
+_SKIP_ARC = re.compile(r"app-state/\d+/(cache|staging|restore|secrets|\.backup-sqlite)(/.*)?")
+
+
+def _add_override(tar: tarfile.TarFile, arcname: str, track: Callable) -> int:
+    path, uid = _overrides[arcname]
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _O_CLOEXEC)
+    except OSError:
+        return 1
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or (uid is not None and st.st_uid != uid):
+            return 1
+        info = tar.gettarinfo(arcname=arcname, fileobj=f)
+        info = track(info)
+        tar.addfile(info, _ExactSizeReader(f, info.size))
+    return 0
+
+
 def _add_entry_to_tar(tar: tarfile.TarFile, dir_fd: int, name: str, arcname: str, track: Callable) -> int:
     """`_add_tree_to_tar` for the entry *name* of the open folder *dir_fd*."""
+    if _SKIP_ARC.fullmatch(arcname):
+        return 0
+    if arcname in _overrides:
+        return _add_override(tar, arcname, track)
+    for sfx in ("-wal", "-shm", "-journal"):
+        if arcname.endswith(sfx) and arcname[: -len(sfx)] in _overrides:
+            return 0
     try:
         st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
     except OSError:
@@ -415,22 +445,34 @@ def _create_full_backup_archive(
         finally:
             conn.close()
 
+        report("archive", "Consistent copies of app databases", 0 if apps_bytes else None)
+        _overrides.clear()
+        _overrides.update(_sqlite_copies())
         report("archive", "", 0 if apps_bytes else None)
+        from venvy.appspec import STATE_DIR
+        from venvy.volumes import VOLUMES_DIR
         with tarfile.open(tmp_archive, "w:gz") as tar:
             tar.add(tmp_db, arcname="data.db")
             if _VENVY_KEY_FILE.exists():
                 tar.add(_VENVY_KEY_FILE, arcname=_VENVY_KEY_FILE.name)
+            skipped = 0
             if APPS_BASE_DIR.exists():
-                skipped = _add_tree_to_tar(tar, str(APPS_BASE_DIR), "apps", _track)
-                if skipped:
-                    logging.warning(f"Backup: {skipped} file(s) disappeared or could not be read while "
-                                    "the apps were being archived and are not in this backup.")
+                skipped += _add_tree_to_tar(tar, str(APPS_BASE_DIR), "apps", _track)
+            if STATE_DIR.exists():
+                skipped += _add_tree_to_tar(tar, str(STATE_DIR), "app-state", _track)
+            if VOLUMES_DIR.exists():
+                skipped += _add_tree_to_tar(tar, str(VOLUMES_DIR), "volumes", _track)
+            if skipped:
+                logging.warning(f"Backup: {skipped} file(s) disappeared or could not be read while "
+                                "the apps were being archived and are not in this backup.")
     except Exception as e:
         logging.error(f"Full backup failed: {e}")
         tmp_archive.unlink(missing_ok=True)
         raise HTTPException(500, f"Backup failed: {e}")
     finally:
         tmp_db.unlink(missing_ok=True)
+        _overrides.clear()
+        _drop_sqlite_copies()
 
     report("finish")
     dest_final = None
@@ -471,6 +513,53 @@ def _create_full_backup_archive(
 
 
 _BACKUP_KEEP = max(1, int(os.getenv("VENVY_BACKUP_KEEP", "10")))
+
+
+def _sqlite_copies() -> Dict[str, tuple]:
+    """For every app: consistent copies of the SQLite databases in its folder and
+    data folder, made by the app's user. Returns archive path -> (copy, uid)."""
+    import json as _json
+    import subprocess
+    from venvy import appspec
+    from venvy.isolation import _app_ids, _as_app_user, _app_tool_env, _isolation_active, _resolve_system_bin
+    out: Dict[str, tuple] = {}
+    py = _resolve_system_bin("python3") if _isolation_active() else sys.executable
+    helper = Path(__file__).parent / "runtime_assets" / "app_archive.py"
+    with Session(engine) as session:
+        apps = [a for a in session.exec(select(App)).all() if not a.parent_app_id]
+    for a in apps:
+        ids = _app_ids(a)
+        snap = appspec.state_root(a) / ".backup-sqlite"
+        for src, arc_root in ((Path(a.app_dir), None), (appspec.data_dir(a), "data")):
+            if not src.is_dir():
+                continue
+            try:
+                arc_base = ("apps/" + src.resolve().relative_to(APPS_BASE_DIR.resolve()).as_posix()) if arc_root is None \
+                    else f"app-state/{appspec.owner_id(a)}/data"
+            except ValueError:
+                continue
+            dest = snap / ("files" if arc_root is None else "data")
+            try:
+                if not snap.exists():
+                    snap.mkdir(mode=0o700)
+                    if ids:
+                        os.chown(snap, ids[0], ids[1])
+                r = subprocess.run(_as_app_user(a, [py, "-I", str(helper), "sqlite", str(src), str(dest)]),
+                                   capture_output=True, timeout=1800, env=_app_tool_env(a), cwd="/")
+                if r.returncode != 0:
+                    continue
+                for rel in _json.loads(r.stdout.decode() or "[]"):
+                    out[f"{arc_base}/{rel}"] = (str(dest / rel), ids[0] if ids else None)
+            except Exception as exc:
+                logging.info(f"Backup: no consistent database copies for '{a.name}': {exc}")
+    return out
+
+
+def _drop_sqlite_copies() -> None:
+    from venvy.appspec import STATE_DIR
+    if STATE_DIR.is_dir():
+        for d in STATE_DIR.glob("*/.backup-sqlite"):
+            shutil.rmtree(d, ignore_errors=True)
 
 
 # System setting holding the files the backup schedule made (a JSON list).
@@ -622,6 +711,9 @@ async def _backup_job(admin: User, scheduled: bool = False) -> dict:
     """The body of POST /system/backup, after _begin_operation("backup").
     *scheduled*: made by the backup schedule, which prunes its own."""
     try:
+        from venvy import services
+        _op_step("measure", "Services are writing their dumps")
+        await services.dump_all()
         dest = await asyncio.to_thread(_create_full_backup_archive, None, _op_step, scheduled)
         size = dest.stat().st_size
     except BaseException as e:
@@ -703,11 +795,11 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
                 # SQLite sidecars (data.db-wal, data.db-shm, data.db-journal)
                 # that sqlite3.connect() would open/follow as root.
                 top = norm.split("/", 1)[0]
-                if top not in ("data.db", _VENVY_KEY_FILE.name, "apps"):
+                if top not in ("data.db", _VENVY_KEY_FILE.name, "apps", "app-state", "volumes"):
                     raise ValueError(f"Backup archive contains an unexpected top-level entry: {member.name}")
                 if norm in ("data.db", _VENVY_KEY_FILE.name) and not member.isreg():
                     raise ValueError(f"Backup archive entry must be a regular file: {member.name}")
-                if member.issym() and not norm.startswith("apps/"):
+                if member.issym() and not norm.startswith(("apps/", "app-state/", "volumes/")):
                     raise ValueError(f"Backup archive contains a symlink outside apps/: {member.name}")
                 # Reject duplicate paths (e.g. symlink apps/x followed by regular file apps/x).
                 if norm in seen_paths:
@@ -774,6 +866,21 @@ async def _run_restore(admin: User, archive_path: Path) -> dict:
                     tar.extract(member, staging)
 
     def _swap():
+        from venvy.appspec import STATE_DIR
+        from venvy.volumes import VOLUMES_DIR
+        _op_step("replace", "Putting the backup's app data in place")
+        for sub, live in (("app-state", STATE_DIR), ("volumes", VOLUMES_DIR)):
+            if (staging / sub).is_symlink():
+                raise ValueError(f"Backup archive contains a symlink at {sub}/.")
+            if (staging / sub).is_dir():
+                old = DATA_DIR / f".replaced-{sub}-{secrets.token_hex(4)}"
+                if live.exists():
+                    os.rename(live, old)
+                try:
+                    os.rename(staging / sub, live)
+                except OSError:
+                    shutil.move(str(staging / sub), str(live))
+                shutil.rmtree(old, ignore_errors=True)
         _op_step("replace", "Putting the backup's app files in place")
         # apps/ is moved aside, not deleted, until the database and the key
         # are in as well: if one of those steps fails, the server would

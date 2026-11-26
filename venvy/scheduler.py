@@ -130,25 +130,23 @@ def _mask_env_secrets(text: str, app: App, extra_secrets: Optional[List[str]] = 
     return text
 
 
-async def _run_job(job_id: int, by: str) -> dict:
+def host_app() -> App:
+    """The stand-in app host-level jobs run as: user venvy-app-0 (under per-app
+    users), folder DATA_DIR/host-jobs, no variables but the shared ones."""
+    from venvy.config import DATA_DIR
+    d = DATA_DIR / "host-jobs"
+    d.mkdir(mode=0o750, exist_ok=True)
+    return App(id=0, user_id=0, name="host", slug="host", runtime="command", app_dir=str(d),
+               venv_path=str(d / "venv"), entrypoint="", env_json="{}")
+
+
+async def run_shell(app, command: str, timeout: int) -> dict:
+    """Run *command* with sh as the app's user, in its working folder, with its
+    environment; {"status": ok|failed|timeout, "exit_code", "duration", "output"}
+    (output masked for secrets, the last OUTPUT_KEEP characters)."""
+    from venvy import appspec
     from venvy.deploy import _app_env_for_commands, _MASK_MIN_LEN
     from venvy.isolation import _clean_root_env, _exec_env_argv, _isolation_active, _prepare_exec_env
-
-    def _start_record():
-        with Session(engine, expire_on_commit=False) as s:
-            job = s.get(ScheduledJob, job_id)
-            app = s.get(App, job.app_id) if job else None
-            if not job or not app:
-                return None, None, None
-            job.last_status, job.last_run_at = "running", utc_now()
-            s.add(job)
-            s.commit()
-            return job, app, (job.command, job.timeout, job.name)
-
-    job, app, meta = await asyncio.to_thread(_start_record)
-    if not job or not app or not meta:
-        return {"status": "failed", "output": "The job or its app no longer exists."}
-    command, timeout, name = meta
     started = time.monotonic()
     out_tail, status, code = "", "failed", None
     captured_secrets: List[str] = []
@@ -168,10 +166,11 @@ async def _run_job(job_id: int, by: str) -> dict:
                 spawn_argv = ["sh", "-c", command]
                 spawn_env = job_env
                 pass_fds = ()
+            wd = appspec.work_dir(app)
             proc = await asyncio.create_subprocess_exec(
                 *spawn_argv,
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                env=spawn_env, cwd=app.app_dir, start_new_session=True, pass_fds=pass_fds)
+                env=spawn_env, cwd=str(wd if wd.is_dir() else app.app_dir), start_new_session=True, pass_fds=pass_fds)
         finally:
             if env_tf is not None:
                 env_tf.close()
@@ -210,35 +209,58 @@ async def _run_job(job_id: int, by: str) -> dict:
                 os.killpg(proc.pid, signal.SIGKILL)
             with contextlib.suppress(Exception):
                 await proc.wait()
-        duration = time.monotonic() - started
+        raise
+    except Exception as exc:
+        out_tail = _mask_env_secrets(f"[venvy] could not run the command: {exc}", app, captured_secrets)
+        status = "failed"
+    return {"status": status, "exit_code": code, "duration": round(time.monotonic() - started, 2), "output": out_tail}
+
+
+async def _run_job(job_id: int, by: str) -> dict:
+    def _start_record():
+        with Session(engine, expire_on_commit=False) as s:
+            job = s.get(ScheduledJob, job_id)
+            if not job:
+                return None, None, None
+            app = s.get(App, job.app_id) if job.app_id else host_app()
+            if not app:
+                return None, None, None
+            job.last_status, job.last_run_at = "running", utc_now()
+            s.add(job)
+            s.commit()
+            return job, app, (job.command, job.timeout, job.name)
+
+    job, app, meta = await asyncio.to_thread(_start_record)
+    if not job or not app or not meta:
+        return {"status": "failed", "output": "The job or its app no longer exists."}
+    command, timeout, name = meta
+    try:
+        res = await run_shell(app, command, timeout)
+    except asyncio.CancelledError:
         with contextlib.suppress(Exception):
             with Session(engine) as s:
                 row = s.get(ScheduledJob, job_id)
                 if row and row.last_status == "running":
                     row.last_status = "failed"
-                    row.last_duration = round(duration, 2)
                     row.last_output = "[venvy] job cancelled during shutdown"
                     s.add(row)
                     s.commit()
         raise
-    except Exception as exc:
-        out_tail = _mask_env_secrets(f"[venvy] could not run the job: {exc}", app, captured_secrets)
-        status = "failed"
-    duration = time.monotonic() - started
+    status, code, duration, out_tail = res["status"], res["exit_code"], res["duration"], res["output"]
 
     def _finish_record() -> None:
         with Session(engine) as s:
             row = s.get(ScheduledJob, job_id)
             if row:
-                row.last_status, row.last_exit_code, row.last_duration, row.last_output = status, code, round(duration, 2), out_tail
+                row.last_status, row.last_exit_code, row.last_duration, row.last_output = status, code, duration, out_tail
                 s.add(row)
                 s.commit()
 
     await asyncio.to_thread(_finish_record)
     if status != "ok":
         notify.emit("job_failed", f"{app.name}: job '{name}' {'timed out' if status == 'timeout' else 'failed'}",
-                    out_tail[-600:], app.id, app.name, "error")
-    return {"status": status, "exit_code": code, "duration": round(duration, 2), "output": out_tail}
+                    out_tail[-600:], app.id or None, app.name, "error")
+    return res
 
 
 # ---------------------------------------------------------------------------

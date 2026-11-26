@@ -176,6 +176,8 @@ if __name__ == "__main__":
             "Venvy is listening on %s over plain HTTP: passwords and session cookies "
             "cross the network unencrypted. Prefer binding to 127.0.0.1 and reaching it "
             "through the Cloudflare tunnel (HTTPS), then set SESSION_COOKIE_SECURE=1.", args.host)
+    # For the parts that point things at Venvy itself (Caddy, ngrok, tunnels).
+    os.environ["VENVY_LISTEN_PORT"] = str(args.port)
     uvicorn.run(
         app,
         host=args.host,

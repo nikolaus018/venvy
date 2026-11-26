@@ -17,7 +17,7 @@ with server(repo, 55004) as (base, d, srv):
 with server(repo, 55004, env={"VENVY_PROXY_SECRET": "s3kr1t", "IP_ALLOWLIST": "127.0.0.1,203.0.113.7", "PORT": "55004", "HOST": "127.0.0.1"}) as (base, d, srv):
     cl = admin(base)
     # app env must not contain the secret
-    app_id = make_app(cl, code="import os\nleaked = [k for k in ('VENVY_PROXY_SECRET', 'IP_ALLOWLIST', 'HOST', 'PORT') if k in os.environ]\nprint('HAS_SECRET=' + str(bool(leaked)) + ' ' + ','.join(leaked), flush=True)\nimport time; time.sleep(30)\n")
+    app_id = make_app(cl, code="import os\nleaked = [k for k in ('VENVY_PROXY_SECRET', 'IP_ALLOWLIST', 'HOST') if k in os.environ] + (['PORT'] if os.environ.get('PORT') == '55004' else [])\nprint('HAS_SECRET=' + str(bool(leaked)) + ' ' + ','.join(leaked), flush=True)\nimport time; time.sleep(30)\n")
     cl.req("POST", f"/api/apps/{app_id}/control?action=start"); cl.wait_status(app_id, "running")
     import time; time.sleep(1.5)
     logs = cl.req("GET", f"/api/apps/{app_id}/logs").json()["content"]

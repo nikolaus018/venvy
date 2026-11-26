@@ -19,6 +19,15 @@
 #   --with-ruby       also install Ruby and Bundler
 #   --with-java       also install a headless Java runtime
 #   --with-all        all of the runtimes above, and Rust
+#   --with-docker     Docker Engine and the compose plugin (Docker / Compose apps, managed services)
+#   --with-caddy      Caddy, for HTTPS on your own domains (certificates on demand)
+#   --with-uv         uv (Python versions on demand, uv.lock projects)
+#   --with-pnpm       pnpm and Yarn through corepack (needs --with-node)
+#   --with-maven      a JDK and Maven for Java builds (Gradle projects use their gradlew)
+#   --with-sops       sops, for secrets kept encrypted in the repository
+#   --with-tailscale  Tailscale (publish apps in your tailnet or with Funnel)
+#   --with-ngrok      the ngrok agent
+#   --with-everything all of the above
 #   --shared-user     run every app as the one 'venvy' user, without per-app
 #                     users (the default for a new install is one user per app)
 #   --allow-downgrade allow installing a release older than the current one
@@ -69,6 +78,7 @@ MCowBQYDK2VwAyEAajX9BBDJMsBY6qPPyBa9/svuCnIenVQIx7WhO2tGpUM=
 -----END PUBLIC KEY-----'
 
 VERSION="latest"; HOST=""; PORT=""; WITH_RUST=0; WITH_NODE=0; WITH_GO=0; WITH_BUN=0; WITH_DENO=0; WITH_PHP=0; WITH_RUBY=0; WITH_JAVA=0; APP_USERS=""; UNINSTALL=0; ALLOW_DOWNGRADE=0
+WITH_DOCKER=0; WITH_CADDY=0; WITH_UV=0; WITH_PNPM=0; WITH_MAVEN=0; WITH_SOPS=0; WITH_TAILSCALE=0; WITH_NGROK=0
 HOST_ARG=0; PORT_ARG=0; APP_USERS_ARG=0
 TMP=""; WORK=""
 trap 'rm -rf "${TMP:-}" "${WORK:-}"' EXIT
@@ -95,6 +105,15 @@ Options go after `bash -s --`:
   --with-ruby       also install Ruby and Bundler
   --with-java       also install a headless Java runtime
   --with-all        all of the runtimes above, and Rust
+  --with-docker     Docker Engine + compose plugin (Docker/Compose apps, managed services)
+  --with-caddy      Caddy for HTTPS on your own domains
+  --with-uv         uv (Python versions on demand, uv.lock projects)
+  --with-pnpm       pnpm and Yarn through corepack
+  --with-maven      a JDK and Maven for Java builds (Gradle: gradlew)
+  --with-sops       sops for encrypted secrets in repositories
+  --with-tailscale  Tailscale
+  --with-ngrok      the ngrok agent
+  --with-everything all of the above
   --shared-user     run every app as the one 'venvy' user, without per-app
                     users (a new install gets one Unix user per app)
   --allow-downgrade allow installing a release older than the current one
@@ -123,6 +142,16 @@ while [ $# -gt 0 ]; do
     --with-ruby) WITH_RUBY=1; shift ;;
     --with-java) WITH_JAVA=1; shift ;;
     --with-all)  WITH_RUST=1; WITH_NODE=1; WITH_GO=1; WITH_BUN=1; WITH_DENO=1; WITH_PHP=1; WITH_RUBY=1; WITH_JAVA=1; shift ;;
+    --with-docker) WITH_DOCKER=1; shift ;;
+    --with-caddy) WITH_CADDY=1; shift ;;
+    --with-uv)   WITH_UV=1; shift ;;
+    --with-pnpm) WITH_PNPM=1; WITH_NODE=1; shift ;;
+    --with-maven) WITH_MAVEN=1; WITH_JAVA=1; shift ;;
+    --with-sops) WITH_SOPS=1; shift ;;
+    --with-tailscale) WITH_TAILSCALE=1; shift ;;
+    --with-ngrok) WITH_NGROK=1; shift ;;
+    --with-everything) WITH_RUST=1; WITH_NODE=1; WITH_GO=1; WITH_BUN=1; WITH_DENO=1; WITH_PHP=1; WITH_RUBY=1; WITH_JAVA=1
+                 WITH_DOCKER=1; WITH_CADDY=1; WITH_UV=1; WITH_PNPM=1; WITH_MAVEN=1; WITH_SOPS=1; WITH_TAILSCALE=1; WITH_NGROK=1; shift ;;
     --app-users) APP_USERS=1; APP_USERS_ARG=1; shift ;;     # the default for a new install; kept for scripts
     --shared-user) APP_USERS=0; APP_USERS_ARG=1; shift ;;
     --allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
@@ -142,6 +171,11 @@ if [ "$UNINSTALL" -eq 1 ]; then
   DATA_DIR="$(systemctl show -p WorkingDirectory --value venvy.service 2>/dev/null || true)"
   say "Stopping and removing the Venvy service..."
   systemctl disable --now venvy.service venvy-update.path >/dev/null 2>&1 || true
+  # Apps that ran as services of their own, and Venvy's firewall table.
+  for u in $(systemctl list-units --plain --no-legend 'venvy-app-*.service' 2>/dev/null | awk '{print $1}'); do
+    systemctl stop "$u" >/dev/null 2>&1 || true
+  done
+  command -v nft >/dev/null 2>&1 && nft delete table inet venvy >/dev/null 2>&1 || true
   systemctl stop venvy-update.service >/dev/null 2>&1 || true
   rm -f "$UNIT_FILE" "$UPDATE_UNIT" "$UPDATE_PATH_UNIT" "$UPDATE_SCRIPT" "$RELEASE_KEY_FILE"
   rm -rf "$UPDATE_DIR"
@@ -220,12 +254,17 @@ fi
 say "Installing Venvy ($VERSION) — data in $DATA_DIR, service user $RUN_USER, http://$HOST:$PORT"
 
 # ── 1. System packages (apt only runs if something is missing) ───────────────
-PKGS="python3 python3-venv curl ca-certificates openssl git tar openssh-client"
+PKGS="python3 python3-venv curl ca-certificates openssl git tar openssh-client nftables acl util-linux"
 [ "$WITH_RUST" -eq 1 ] && PKGS="$PKGS cargo rustc build-essential"
 [ "$WITH_NODE" -eq 1 ] && PKGS="$PKGS nodejs npm"
 [ "$WITH_PHP" -eq 1 ]  && PKGS="$PKGS php-cli composer unzip"
 [ "$WITH_RUBY" -eq 1 ] && PKGS="$PKGS ruby ruby-bundler build-essential"
 [ "$WITH_JAVA" -eq 1 ] && PKGS="$PKGS default-jre-headless"
+[ "$WITH_MAVEN" -eq 1 ] && PKGS="$PKGS default-jdk-headless maven"   # Gradle: the project's gradlew
+[ "$WITH_DOCKER" -eq 1 ] && PKGS="$PKGS docker.io"
+[ "$WITH_CADDY" -eq 1 ] && PKGS="$PKGS caddy"
+[ "$WITH_PNPM" -eq 1 ] && PKGS="$PKGS gnupg"
+[ "$WITH_TAILSCALE" -eq 1 ] || [ "$WITH_NGROK" -eq 1 ] && PKGS="$PKGS gnupg"
 # Bun and Deno come as zip files; Go needs nothing beyond curl and tar.
 [ "$WITH_BUN" -eq 1 ] || [ "$WITH_DENO" -eq 1 ] && PKGS="$PKGS unzip"
 MISSING=""
@@ -311,9 +350,90 @@ install_deno() {
   rm -rf "$WORK"
 }
 
+install_compose() {
+  docker compose version >/dev/null 2>&1 && return 0
+  # Ubuntu ships the plugin as docker-compose-v2; elsewhere: the release binary, checksum-verified.
+  if apt-cache show docker-compose-v2 >/dev/null 2>&1; then
+    apt-get install -y -q --no-install-recommends docker-compose-v2 && return 0
+  fi
+  case "$(uname -m)" in x86_64|amd64) a=x86_64 ;; aarch64|arm64) a=aarch64 ;; *) die "compose: unsupported CPU $(uname -m)" ;; esac
+  say "Installing the docker compose plugin..."
+  WORK="$(mktemp -d)"
+  base="https://github.com/docker/compose/releases/latest/download"; f="docker-compose-linux-$a"
+  fetch_to "$base/$f" "$WORK/$f"
+  fetch_to "$base/$f.sha256" "$WORK/$f.sha256"
+  verify_sha256 "$WORK/$f" "$(awk '{print $1; exit}' "$WORK/$f.sha256")" "$f"
+  install -d /usr/local/lib/docker/cli-plugins
+  install -m 0755 "$WORK/$f" /usr/local/lib/docker/cli-plugins/docker-compose
+  rm -rf "$WORK"; WORK=""
+}
+
+install_uv() {
+  command -v uv >/dev/null 2>&1 && return 0
+  case "$(uname -m)" in x86_64|amd64) t=x86_64-unknown-linux-gnu ;; aarch64|arm64) t=aarch64-unknown-linux-gnu ;; *) die "uv: unsupported CPU $(uname -m)" ;; esac
+  say "Installing uv..."
+  WORK="$(mktemp -d)"
+  base="https://github.com/astral-sh/uv/releases/latest/download"; f="uv-$t.tar.gz"
+  fetch_to "$base/$f" "$WORK/$f"
+  fetch_to "$base/$f.sha256" "$WORK/$f.sha256"
+  verify_sha256 "$WORK/$f" "$(awk '{print $1; exit}' "$WORK/$f.sha256")" "$f"
+  tar -C "$WORK" -xzf "$WORK/$f"
+  install -m 0755 "$WORK/uv-$t/uv" /usr/local/bin/uv
+  install -m 0755 "$WORK/uv-$t/uvx" /usr/local/bin/uvx
+  rm -rf "$WORK"; WORK=""
+}
+
+install_sops() {
+  command -v sops >/dev/null 2>&1 && return 0
+  case "$(uname -m)" in x86_64|amd64) a=amd64 ;; aarch64|arm64) a=arm64 ;; *) die "sops: unsupported CPU $(uname -m)" ;; esac
+  say "Installing sops..."
+  WORK="$(mktemp -d)"
+  tag="$(curl -fsSL https://api.github.com/repos/getsops/sops/releases/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')" \
+    || die "Could not find the current sops release."
+  case "$tag" in v[0-9]*) ;; *) die "Unexpected sops release tag." ;; esac
+  base="https://github.com/getsops/sops/releases/download/$tag"; f="sops-$tag.linux.$a"
+  fetch_to "$base/$f" "$WORK/$f"
+  fetch_to "$base/sops-$tag.checksums.txt" "$WORK/sums"
+  verify_sha256 "$WORK/$f" "$(awk -v f="$f" '$2 == f {print $1}' "$WORK/sums")" "$f"
+  install -m 0755 "$WORK/$f" /usr/local/bin/sops
+  rm -rf "$WORK"; WORK=""
+}
+
+add_apt_repo() {  # NAME KEY_URL "deb line"
+  install -d -m 0755 /etc/apt/keyrings
+  case "$2" in
+    *.noarmor.gpg) curl -fsSL --retry 3 -o "/etc/apt/keyrings/$1.gpg" "$2" ;;
+    *)             curl -fsSL --retry 3 "$2" | gpg --dearmor --yes -o "/etc/apt/keyrings/$1.gpg" ;;
+  esac
+  echo "$3" > "/etc/apt/sources.list.d/$1.list"
+  apt-get update -y -q
+}
+
+# Not sourced: /etc/os-release sets VERSION, which is the release to install here.
+OS_ID="$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"')"
+OS_CODENAME="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"')"
 [ "$WITH_GO" -eq 1 ]   && install_go
 [ "$WITH_BUN" -eq 1 ]  && install_bun
 [ "$WITH_DENO" -eq 1 ] && install_deno
+if [ "$WITH_DOCKER" -eq 1 ]; then install_compose; systemctl enable --now docker >/dev/null 2>&1 || true; fi
+[ "$WITH_UV" -eq 1 ]   && install_uv
+[ "$WITH_SOPS" -eq 1 ] && install_sops
+if [ "$WITH_PNPM" -eq 1 ] && command -v corepack >/dev/null 2>&1; then corepack enable >/dev/null 2>&1 || true; fi
+if [ "$WITH_PNPM" -eq 1 ] && ! command -v corepack >/dev/null 2>&1; then npm install -g --no-fund --no-audit corepack >/dev/null && corepack enable || warn "corepack could not be installed"; fi
+if [ "$WITH_TAILSCALE" -eq 1 ] && ! command -v tailscale >/dev/null 2>&1; then
+  say "Installing Tailscale..."
+  add_apt_repo tailscale "https://pkgs.tailscale.com/stable/$OS_ID/$OS_CODENAME.noarmor.gpg" \
+    "deb [signed-by=/etc/apt/keyrings/tailscale.gpg] https://pkgs.tailscale.com/stable/$OS_ID $OS_CODENAME main"
+  apt-get install -y -q tailscale
+  say "Run 'sudo tailscale up' once to join this host to your tailnet."
+fi
+if [ "$WITH_NGROK" -eq 1 ] && ! command -v ngrok >/dev/null 2>&1; then
+  say "Installing ngrok..."
+  add_apt_repo ngrok "https://ngrok-agent.s3.amazonaws.com/ngrok.asc" \
+    "deb [signed-by=/etc/apt/keyrings/ngrok.gpg] https://ngrok-agent.s3.amazonaws.com buster main"
+  apt-get install -y -q ngrok
+fi
+if [ "$WITH_CADDY" -eq 1 ]; then systemctl enable --now caddy >/dev/null 2>&1 || true; fi
 
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
   || die "Python 3.11 or newer is required (found $(python3 -V 2>&1)). Debian 12 / Ubuntu 24.04 or later have it."
@@ -486,6 +606,10 @@ if [ "$HAND_OVER" -eq 1 ]; then
   say "Switching to one shared user: handing $DATA_DIR over to 'venvy'..."
   # Whatever the apps' own users still run (a daemon started from a terminal)
   # would keep writing into the folders that are changing hands.
+  # Apps that ran as systemd services of their own outlive Venvy: stop them first.
+  for u in $(systemctl list-units --plain --no-legend 'venvy-app-*.service' 2>/dev/null | awk '{print $1}'); do
+    systemctl stop "$u" >/dev/null 2>&1 || true
+  done
   getent passwd | awk -F: '/^venvy-app-/ {print $1}' | while read -r u; do pkill -KILL -u "$u" 2>/dev/null || true; done
   # -h -R: links are changed themselves and never followed. The apps' folders
   # held whatever their users put there, a link to /etc/shadow included.

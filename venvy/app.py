@@ -56,6 +56,7 @@ from venvy.api import deploy as api_deploy
 from venvy.api import logs as api_logs
 from venvy.api import ops as api_ops
 from venvy.api import tokens as api_tokens
+from venvy.api import platform as api_platform
 from venvy.api import updates as api_updates
 from venvy.api import auth as api_auth
 from venvy.api import cloudflare as api_cloudflare
@@ -114,6 +115,7 @@ async def lifespan(app: FastAPI):
     # line they print is an EPIPE — and nothing is collecting their logs or
     # metrics. They are restarted below, so that what runs is supervised.
     orphaned = []
+    adopted = []
     with Session(engine) as session:
         _boot_reset_time = utc_now()
         for app_row in session.exec(select(App)).all():
@@ -137,7 +139,11 @@ async def lifespan(app: FastAPI):
                 modified = True
 
             if app_row.status == "running" and app_row.pid:
-                if _app_pid_alive(app_row):
+                if _app_pid_alive(app_row) and (app_row.systemd_scope or "").endswith(".service"):
+                    # Its own systemd service: it kept running while Venvy was
+                    # away, and its output waited in the journal. Adopt it.
+                    adopted.append((app_row.id, app_row.name))
+                elif _app_pid_alive(app_row):
                     orphaned.append((app_row.id, app_row.name))
                 else:
                     logging.info(f"Clearing stale status for '{app_row.name}'")
@@ -155,6 +161,19 @@ async def lifespan(app: FastAPI):
             session.add(job)
         session.commit()
 
+    from venvy import launcher as _launcher
+    from venvy.isolation import _app_log_file
+    from venvy.process import _write_log_lines
+    for app_id, name in adopted:
+        with Session(engine) as session:
+            row = session.get(App, app_id)
+        if row is None:
+            continue
+        lf = _app_log_file(row)
+        lf.parent.mkdir(parents=True, exist_ok=True)
+        _launcher.follow(app_id, lf, lambda lines, when, _lf=lf: _write_log_lines(_lf, lines, when))
+        logging.info(f"'{name}' kept running while Venvy was away — adopted ({row.systemd_scope}).")
+
     for app_id, name in orphaned:
         logging.warning(f"'{name}' was left running by a previous Venvy process — restarting it under supervision.")
         try:
@@ -171,14 +190,24 @@ async def lifespan(app: FastAPI):
                 except Exception as exc:
                     logging.error(f"Boot-start failed for '{app_row.name}': {exc}")
 
+    from venvy import edge, firewall, forwards, logship, replication, routing, telemetry
     supervisor_task_handle = asyncio.create_task(supervisor_task())
     metrics_task_handle = asyncio.create_task(metrics_collector_task())
     scheduler_task_handle = asyncio.create_task(scheduler_task())
+    extra_tasks = [asyncio.create_task(t()) for t in (
+        logship.shipper_task, routing.access_log_task, firewall.firewall_task, forwards.forwards_task,
+        telemetry.telemetry_task, replication.replication_task, edge.ngrok_task)]
     yield
     supervisor_task_handle.cancel()
     metrics_task_handle.cancel()
     scheduler_task_handle.cancel()
-    await asyncio.gather(supervisor_task_handle, metrics_task_handle, scheduler_task_handle, return_exceptions=True)
+    for t in extra_tasks:
+        t.cancel()
+    await asyncio.gather(supervisor_task_handle, metrics_task_handle, scheduler_task_handle, *extra_tasks,
+                         return_exceptions=True)
+    await forwards.close_all()
+    with contextlib.suppress(Exception):
+        await asyncio.to_thread(routing._flush_logs)
     await proxy.close()
     from venvy import monitor as _monitor
     await _monitor.close_probe_session()
@@ -190,10 +219,17 @@ async def lifespan(app: FastAPI):
     # scope if it has one, then its process group, SIGTERM first and SIGKILL
     # after the grace period, with its last output drained into the log. All
     # at once, and bounded: the service manager allows 30 s for all of this.
+    # Apps that are systemd services of their own keep running through a
+    # restart or update of Venvy (VENVY_STOP_APPS_ON_SHUTDOWN=1 stops them too).
+    keep_services = os.getenv("VENVY_STOP_APPS_ON_SHUTDOWN", "0") != "1"
     with Session(engine) as session:
-        to_stop = {a.id for a in session.exec(select(App)).all()
-                   if a.pid or a.status in ("running", "starting", "stopping")}
+        rows = session.exec(select(App)).all()
+        services_kept = {a.id for a in rows if keep_services and (a.systemd_scope or "").endswith(".service")}
+        to_stop = {a.id for a in rows
+                   if (a.pid or a.status in ("running", "starting", "stopping")) and a.id not in services_kept}
     to_stop |= set(_active_app_pids)
+    for _aid in services_kept:
+        await _launcher.unfollow(_aid, drain=False)
 
     async def _stop(app_id: int) -> None:
         try:
@@ -223,6 +259,8 @@ async def lifespan(app: FastAPI):
 
     with Session(engine) as session:
         for app_row in session.exec(select(App).where(App.status.in_(("running", "starting", "stopping")))).all():
+            if app_row.id in services_kept:
+                continue
             app_row.status = "stopped"
             app_row.pid = None
             app_row.pid_start = None
@@ -356,7 +394,13 @@ _BODY_LIMIT_SINGLE_UPLOAD = 8 * _SINGLE_REQUEST_UPLOAD_MAX
 _SINGLE_UPLOAD_PATH_RE = re.compile(r"\A/api/apps/(?:upload|\d+/files/upload)/?\Z")
 
 
+_ARTIFACT_PATH_RE = re.compile(r"\A/api/apps/\d+/deploy/artifact/?\Z")
+
+
 def _body_limit(path: str) -> int:
+    if _ARTIFACT_PATH_RE.match(path):
+        from venvy.api.platform import _ARTIFACT_MAX
+        return _ARTIFACT_MAX + 1024 * 1024
     if path.rstrip("/").endswith("/upload/chunk"):
         return _BODY_LIMIT_CHUNK
     if _SINGLE_UPLOAD_PATH_RE.match(path):
@@ -453,6 +497,8 @@ app.include_router(api_cron.router)
 app.include_router(api_tokens.router)
 app.include_router(api_logs.router)
 app.include_router(api_updates.router)
+app.include_router(api_platform.router)
+app.include_router(api_platform.public)
 
 
 @app.get("/api/health")

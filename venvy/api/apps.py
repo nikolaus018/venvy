@@ -106,6 +106,39 @@ class AppUpdateReq(BaseModel):
     health_restart: Optional[bool] = None
     domain: Optional[str] = None                # "" removes it
     disk_limit_mb: Optional[int] = None         # 0 removes it
+    # Run, build, deploy, network and sandbox settings (see apply_spec_fields)
+    start_command: Optional[str] = None         # "" clears
+    install_command: Optional[str] = None
+    release_command: Optional[str] = None
+    root_dir: Optional[str] = None
+    stop_signal: Optional[str] = None
+    stop_timeout: Optional[int] = None          # 0 = server default
+    container_port: Optional[int] = None
+    health_type: Optional[str] = None
+    health_command: Optional[str] = None
+    health_start_period: Optional[int] = None
+    instances: Optional[int] = None
+    zero_downtime: Optional[bool] = None
+    deploy_strategy: Optional[str] = None
+    spec_from_repo: Optional[bool] = None
+    commit_status: Optional[bool] = None
+    previews_enabled: Optional[bool] = None
+    preview_domain: Optional[str] = None
+    preview_env: Optional[Dict[str, str]] = None
+    environment: Optional[str] = None
+    bind_public: Optional[bool] = None
+    egress_policy: Optional[str] = None
+    egress_allow: Optional[str] = None
+    sandbox: Optional[bool] = None
+    pids_limit: Optional[int] = None
+    io_weight: Optional[int] = None
+    nofile_limit: Optional[int] = None
+    access_log: Optional[bool] = None
+    sops_file: Optional[str] = None
+    vault_path: Optional[str] = None
+    disk_limit_action: Optional[str] = None
+    runtime_version: Optional[str] = None       # "" = the host's own tool
+    secret_files: Optional[Dict[str, str]] = None
 
 
 _HOST_RE = re.compile(r"(?=.{1,253}\Z)([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z")
@@ -122,6 +155,160 @@ def _clean_domain(value: str) -> Optional[str]:
 
 class PackageReq(BaseModel):
     name: str
+
+
+_SIGNAL_NAMES = ("SIGTERM", "SIGINT", "SIGQUIT", "SIGHUP", "SIGUSR1", "SIGUSR2", "SIGWINCH")
+_CIDR_RE = re.compile(r"[0-9A-Fa-f:.]+(/\d{1,3})?")
+
+
+def _int_in(name: str, v, lo: int, hi: int, zero_none: bool = False):
+    if isinstance(v, bool) or not isinstance(v, int):
+        try:
+            v = int(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a number.")
+    if zero_none and v == 0:
+        return None
+    if not lo <= v <= hi:
+        raise ValueError(f"{name} must be between {lo} and {hi}" + (" (or 0 for none)." if zero_none else "."))
+    return v
+
+
+def _bool(name: str, v) -> bool:
+    if isinstance(v, bool):
+        return v
+    raise ValueError(f"{name} must be true or false.")
+
+
+def apply_spec_fields(row: App, fields: Dict[str, object], admin: bool = False) -> List[str]:
+    """Validate and set app settings by field name — from the API (PUT
+    /apps/{id}) and from a repository's venvy.toml. Raises ValueError with a
+    message for the user. Returns the names of the fields that changed.
+    *admin*: the change comes from an admin (only one may pick a runtime that
+    runs as root, see runtimes.ROOT_RUNTIMES); a venvy.toml never is."""
+    from venvy import appspec, secrets_ext
+    changed: List[str] = []
+
+    def put(name: str, value) -> None:
+        if getattr(row, name) != value:
+            setattr(row, name, value)
+            changed.append(name)
+
+    if "runtime" in fields:
+        rt = fields["runtime"]
+        if rt not in runtimes.RUNTIMES:
+            raise ValueError(runtimes.RUNTIME_ERROR)
+        if rt != row.runtime:
+            if rt in runtimes.ROOT_RUNTIMES and not admin:
+                raise ValueError(runtimes.ROOT_RUNTIME_ERROR)
+            old = runtimes.RUNTIMES.get(row.runtime)
+            if old is not None and old.entry == runtimes.FIXED:
+                row.entrypoint = ""
+            put("runtime", rt)
+            if row.runtime in ("rust", "go") and row.entrypoint in ("main.rs", "main.go"):
+                row.entrypoint = ""
+        if runtimes.RUNTIMES[row.runtime].entry == runtimes.FIXED:
+            row.entrypoint = runtimes.RUNTIMES[row.runtime].entry_default
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if key == "runtime":
+            continue
+        if key == "entrypoint":
+            put("entrypoint", runtimes.clean_entrypoint(row.runtime, str(value)))
+        elif key == "runtime_version":
+            put("runtime_version", runtimes.clean_runtime_version(row.runtime, str(value)))
+        elif key == "root_dir":
+            put("root_dir", appspec.clean_rel_path(str(value), "root folder"))
+        elif key in ("start_command", "install_command", "release_command", "build_command", "health_command"):
+            what = key.replace("_", " ")
+            if key == "build_command":
+                cleaned = deploy.clean_build_command(str(value))
+            else:
+                cleaned = appspec.clean_command(str(value), what)
+            put(key, cleaned)
+        elif key == "stop_signal":
+            sig = str(value).upper()
+            sig = sig if sig.startswith("SIG") else "SIG" + sig
+            if sig not in _SIGNAL_NAMES:
+                raise ValueError("stop_signal must be one of " + ", ".join(_SIGNAL_NAMES))
+            put("stop_signal", sig)
+        elif key == "stop_timeout":
+            put("stop_timeout", _int_in("stop_timeout", value, 1, 3600, zero_none=True))
+        elif key == "container_port":
+            put("container_port", _int_in("container_port", value, 1, 65535, zero_none=True))
+        elif key == "health_type":
+            if value not in ("http", "tcp", "command", "none"):
+                raise ValueError("health_type must be http, tcp, command or none.")
+            put("health_type", value)
+        elif key == "healthcheck_path":
+            put("healthcheck_path", monitor.normalize_path(str(value)))
+        elif key == "health_interval":
+            put("health_interval", _int_in("health_interval", value, 5, 3600))
+        elif key == "health_failures":
+            put("health_failures", _int_in("health_failures", value, 1, 20))
+        elif key == "health_start_period":
+            put("health_start_period", _int_in("health_start_period", value, 0, 3600))
+        elif key == "instances":
+            put("instances", _int_in("instances", value, 1, 32))
+        elif key in ("zero_downtime", "spec_from_repo", "commit_status", "previews_enabled", "bind_public",
+                     "sandbox", "access_log"):
+            put(key, _bool(key, value))
+        elif key == "deploy_strategy":
+            if value not in ("in_place", "atomic"):
+                raise ValueError("deploy_strategy must be in_place or atomic.")
+            put(key, value)
+        elif key == "preview_domain":
+            put(key, _clean_domain(str(value)) if value else None)
+        elif key == "environment":
+            v = str(value).strip().lower()
+            if not re.fullmatch(r"[a-z][a-z0-9\-]{0,30}", v):
+                raise ValueError("environment must be a short name like production or staging.")
+            put(key, v)
+        elif key == "egress_policy":
+            if value not in ("allow", "deny", "allowlist"):
+                raise ValueError("egress_policy must be allow, deny or allowlist.")
+            put(key, value)
+        elif key == "egress_allow":
+            items = [c.strip() for c in str(value).split(",") if c.strip()]
+            for c in items:
+                if not _CIDR_RE.fullmatch(c):
+                    raise ValueError(f"'{c}' is not an IP address or CIDR range.")
+                import ipaddress
+                try:
+                    ipaddress.ip_network(c, strict=False)
+                except ValueError:
+                    raise ValueError(f"'{c}' is not an IP address or CIDR range.")
+            put(key, ",".join(items))
+        elif key == "pids_limit":
+            put(key, _int_in(key, value, 16, 1_000_000, zero_none=True))
+        elif key == "io_weight":
+            put(key, _int_in(key, value, 1, 10000, zero_none=True))
+        elif key == "nofile_limit":
+            put(key, _int_in(key, value, 64, 1_048_576, zero_none=True))
+        elif key == "disk_limit_action":
+            if value not in ("alert", "stop"):
+                raise ValueError("disk_limit_action must be alert or stop.")
+            put(key, value)
+        elif key == "sops_file":
+            put(key, appspec.clean_rel_path(str(value), "SOPS file") or None)
+        elif key == "vault_path":
+            put(key, secrets_ext.clean_vault_path(str(value)))
+        else:
+            raise ValueError(f"'{key}' can't be set.")
+    return changed
+
+
+# Settings the API takes by name and hands to apply_spec_fields().
+SPEC_FIELDS = (
+    "start_command", "install_command", "release_command", "root_dir", "stop_signal", "stop_timeout",
+    "container_port", "health_type", "health_command", "health_start_period", "instances", "zero_downtime",
+    "deploy_strategy", "spec_from_repo", "commit_status", "previews_enabled", "preview_domain", "environment",
+    "bind_public", "egress_policy", "egress_allow", "sandbox", "pids_limit", "io_weight", "nofile_limit",
+    "access_log", "sops_file", "vault_path", "disk_limit_action", "runtime_version",
+)
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -192,39 +379,26 @@ async def _make_venv(row: App, version: Optional[str]) -> None:
 
 
 async def _install_requirements(row: App) -> None:
-    """pip install -r requirements.txt, if the app has one."""
-    req_path = Path(row.app_dir) / "requirements.txt"
-    pip_bin = Path(row.venv_path) / "bin" / "pip"
-    if not await asyncio.to_thread(req_path.is_file):
-        return
-    if not await asyncio.to_thread(pip_bin.exists):
-        raise HTTPException(500, "pip not found in the virtual environment.")
-    proc = await asyncio.create_subprocess_exec(
-        *_as_app_user(row, [str(pip_bin), "install", "--no-input", "-r", str(req_path)]),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=_app_tool_env(row),
-        cwd=_TOOL_CWD, start_new_session=True,
-    )
-    try:
-        _, pip_err = await asyncio.wait_for(proc.communicate(), timeout=600)
-    except asyncio.TimeoutError:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        with contextlib.suppress(Exception):
-            await proc.wait()
-        raise HTTPException(500, "pip install timed out after 10 minutes.")
-    if proc.returncode != 0:
-        raise HTTPException(500, f"pip install failed: {pip_err.decode(errors='replace')}")
+    """Install a Python app's dependencies — requirements.txt, uv.lock,
+    poetry.lock, Pipfile.lock or pyproject.toml, whichever it has."""
+    from venvy import appspec
+    wd = appspec.work_dir(row)
+    if not await asyncio.to_thread((Path(row.venv_path) / "bin" / "python").exists):
+        raise HTTPException(500, "The virtual environment is missing its python.")
+    steps = await asyncio.to_thread(runtimes.python_steps, wd, row.venv_path)
+    await _run_steps(row, steps)
 
 
 async def _create_environment(row: App, version: Optional[str] = None) -> None:
     """What an app needs to run, from the files it has: a virtualenv and its requirements (Python),
-    or the dependencies its manifest lists (the others)."""
+    or the dependencies its manifest lists and its build (the others)."""
+    from venvy import appspec
     if row.runtime == "python":
         await _make_venv(row, version)
         await _install_requirements(row)
         return
-    for step in await asyncio.to_thread(runtimes.setup_steps, row.runtime, Path(row.app_dir)):
-        await _run_app_tool(row, step.argv, step.timeout, step.what, cwd=str(row.app_dir) if step.in_app_dir else None)
+    wd = appspec.work_dir(row)
+    await _run_steps(row, await asyncio.to_thread(runtimes.setup_steps, row.runtime, wd, row.entrypoint, row))
 
 
 @router.post("/apps/upload")
@@ -237,23 +411,46 @@ async def upload_app(
     restart_policy: str = Form("never"),
     files: Optional[List[UploadFile]] = File(None),
     requirements: Optional[UploadFile] = File(None),
+    start_command: str = Form(""),
+    root_dir: str = Form(""),
+    runtime_version: str = Form(""),
     session: Session = Depends(get_session),
     user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
 ):
-    if runtime not in runtimes.RUNTIMES:
-        raise HTTPException(400, runtimes.RUNTIME_ERROR)
+    """Create an app. runtime "auto" picks one from the uploaded files (venvy.toml,
+    Cargo.toml, go.mod, package.json, a Dockerfile …)."""
+    from venvy import appspec, toolchains
+    auto = runtime == "auto"
+    if not auto and runtime not in runtimes.RUNTIMES:
+        raise HTTPException(400, runtimes.RUNTIME_ERROR + " (or auto)")
     if restart_policy not in ("never", "on-failure", "always"):
         raise HTTPException(400, "restart_policy must be one of: never, on-failure, always")
     name = _clean_app_name(name)
-    missing = runtimes.tools_error(runtime)
-    if missing:
-        raise HTTPException(400, missing)
     try:
-        entrypoint_clean = runtimes.clean_entrypoint(runtime, entrypoint)
-        python_version = runtimes.clean_python_version(python_version) if runtime == "python" else None
+        root_clean = appspec.clean_rel_path(root_dir, "root folder")
+        start_clean = appspec.clean_command(start_command, "start command")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    def _check_runtime(rt: str, ep: str, ver: str):
+        version = None
+        if rt in runtimes.ROOT_RUNTIMES and user.role != "admin":
+            raise HTTPException(403, runtimes.ROOT_RUNTIME_ERROR)
+        try:
+            ep_clean = runtimes.clean_entrypoint(rt, ep)
+            if rt == "python":
+                version = runtimes.clean_python_version(ver, allow_install=True)
+            else:
+                version = runtimes.clean_runtime_version(rt, ver) if ver and rt in toolchains.RUNTIME_KIND else None
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if not (version and rt != "python") and not (start_clean and rt not in ("docker", "compose")):
+            missing = runtimes.tools_error(rt)
+            if missing:
+                raise HTTPException(400, missing)
+        return ep_clean, version
+    if not auto:
+        entrypoint_clean, python_version = _check_runtime(runtime, entrypoint, python_version or runtime_version)
 
     slug = sanitize_slug(name)
     user_apps_dir = APPS_BASE_DIR / str(user.id)
@@ -298,6 +495,19 @@ async def upload_app(
         await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
         raise
 
+    if auto:
+        detected, det_entry, why = await asyncio.to_thread(appspec.detect_runtime, app_dir / root_clean if root_clean else app_dir)
+        if detected is None or detected not in runtimes.RUNTIMES:
+            await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
+            raise HTTPException(400, "Could not tell what kind of app this is from its files — pick a runtime.")
+        runtime = detected
+        try:
+            entrypoint_clean, python_version = _check_runtime(runtime, entrypoint or det_entry, python_version or runtime_version)
+        except HTTPException:
+            await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
+            raise
+        logging.info("New app: runtime %s (%s)", runtime, why)
+
     venv_path = app_dir / "venv"
     new_app = App(
         user_id=user.id,
@@ -312,6 +522,8 @@ async def upload_app(
         restart_policy=restart_policy,
         port=None,
         status="installing",
+        start_command=start_clean,
+        root_dir=root_clean,
     )
     session.add(new_app)
     session.commit()
@@ -331,18 +543,23 @@ async def upload_app(
                 raise HTTPException(404, "App no longer exists.")
             await asyncio.to_thread(_ensure_app_user, row)
             if runtime == "python":
+                if python_version and python_version not in runtimes.python_versions():
+                    from venvy import toolchains as _tc
+                    await _tc.install("python", python_version)
                 await _make_venv(row, python_version)
 
             if req_bytes is not None and runtime == "python":
                 await asyncio.to_thread(_fs_save, app_dir, ("requirements.txt",), req_bytes, _app_ids(row))
+            if runtime == "python":
                 await _install_requirements(row)
 
             if runtime != "python":
-                # Whatever the files uploaded with the app list, if any. Files
-                # that arrive afterwards are installed on the first start.
-                for step in await asyncio.to_thread(runtimes.setup_steps, runtime, app_dir):
-                    await _run_app_tool(row, step.argv, step.timeout, step.what,
-                                        cwd=str(app_dir) if step.in_app_dir else None)
+                # Whatever the files uploaded with the app list, if any — and
+                # the build (cargo build --release, go build …). Files that
+                # arrive afterwards are installed and built on the first start.
+                from venvy import appspec as _aspec
+                wd = _aspec.work_dir(row)
+                await _run_steps(row, await asyncio.to_thread(runtimes.setup_steps, runtime, wd, row.entrypoint, row))
 
             with Session(engine) as s2:
                 row = s2.get(App, app_id)
@@ -390,17 +607,24 @@ async def control_app(
     if restore_in_progress() and action != "stop":
         raise HTTPException(409, "A restore is in progress — apps can be started again once Venvy has restarted.")
     audit_log(user.username, f"app_{action}", f"app '{app_row.name}' (id={app_id})")
+    app_row_parent = app_row.parent_app_id
+
+    from venvy import groups
 
     async def _do_start():
         try:
             with Session(engine) as s:
                 await start_app_process_logic(app_id, s)
+            if not app_row_parent:
+                await groups.start_children(app_id)
             _trigger_supervisor()
         except Exception as exc:
             logging.error(f"Background start failed for app {app_id}: {exc}")
             with Session(engine) as s:
                 a = s.get(App, app_id)
-                if a:
+                # A failed start has marked itself; an app that is running (one
+                # of its processes failed) must not be taken out of the proxy.
+                if a and not (a.pid and a.status == "running"):
                     a.status = "error"
                     s.add(a)
                     s.commit()
@@ -409,6 +633,8 @@ async def control_app(
 
     async def _do_stop():
         try:
+            if not app_row_parent:
+                await groups.stop_children(app_id)
             with Session(engine) as s:
                 await stop_app_process_logic(app_id, s, manual=True)
             _trigger_supervisor()
@@ -425,13 +651,16 @@ async def control_app(
 
     async def _do_restart():
         try:
-            await restart_app_process_logic(app_id)
+            if app_row_parent:
+                await restart_app_process_logic(app_id)
+            else:
+                await groups.restart_group(app_id)
             _trigger_supervisor()
         except Exception as exc:
             logging.error(f"Background restart failed for app {app_id}: {exc}")
             with Session(engine) as s:
                 a = s.get(App, app_id)
-                if a:
+                if a and not (a.pid and a.status == "running"):
                     a.status = "error"
                     s.add(a)
                     s.commit()
@@ -454,9 +683,12 @@ async def control_app(
         t = asyncio.create_task(_do_stop())
         _running_tasks.add(t)
     elif action == "restart":
-        app_row.status = "stopping"
-        session.add(app_row)
-        session.commit()
+        rolling = not app_row_parent and (app_row.instances > 1 or app_row.zero_downtime)
+        if not rolling:
+            # (A rolling restart takes each process out of rotation itself, when its turn comes.)
+            app_row.status = "stopping"
+            session.add(app_row)
+            session.commit()
         t = asyncio.create_task(_do_restart())
         _running_tasks.add(t)
 
@@ -544,6 +776,8 @@ async def update_app(
         if req.runtime not in runtimes.RUNTIMES:
             raise HTTPException(400, runtimes.RUNTIME_ERROR)
         if req.runtime != app_row.runtime:
+            if req.runtime in runtimes.ROOT_RUNTIMES and user.role != "admin":
+                raise HTTPException(403, runtimes.ROOT_RUNTIME_ERROR)
             if runtimes.RUNTIMES[app_row.runtime if app_row.runtime in runtimes.RUNTIMES else "python"].entry == runtimes.FIXED:
                 app_row.entrypoint = ""     # the old runtime's main.rs means nothing to the new one
             app_row.runtime = req.runtime
@@ -594,6 +828,16 @@ async def update_app(
                 if has_app_access(session, user, other.id):
                     raise HTTPException(409, f"{new_domain} already belongs to '{other.name}'.")
                 raise HTTPException(409, f"{new_domain} is already in use by another app.")
+            # Another app's route on this hostname: taking the hostname as a domain
+            # takes its requests too — unless it is a path route of an app the
+            # same user manages (example.com -> this app, example.com/api -> that one).
+            from venvy.models import CfRoute, Route
+            if new_domain != app_row.domain:
+                for r in session.exec(select(Route).where(Route.hostname == new_domain, Route.app_id != app_id)).all():
+                    if not has_app_access(session, user, r.app_id) or r.path_prefix in ("", "/"):
+                        raise HTTPException(409, f"{new_domain} is already routed to another app (Hosting → Routes).")
+                if session.exec(select(CfRoute).where(CfRoute.hostname == new_domain, CfRoute.app_id != app_id)).first():
+                    raise HTTPException(409, f"{new_domain} is published for another app through the tunnel.")
         if new_domain != app_row.domain:
             audit_log(user.username, "app_domain_change", f"app '{app_row.name}' (id={app_id}): {new_domain or 'removed'}")
         app_row.domain = new_domain
@@ -608,9 +852,37 @@ async def update_app(
             raise HTTPException(400, "disk_limit_mb must be a positive number of MB (or 0 for no limit).")
         app_row.disk_limit_mb = None if req.disk_limit_mb == 0 else req.disk_limit_mb
 
+    from venvy import groups, secrets_ext
+    spec_fields = {k: getattr(req, k) for k in SPEC_FIELDS if getattr(req, k) is not None}
+    if app_row.parent_app_id and set(spec_fields) - {"start_command"}:
+        raise HTTPException(400, "A worker or replica runs with the settings of its app — change them there.")
+    try:
+        changed = apply_spec_fields(app_row, spec_fields, admin=user.role == "admin")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if req.preview_env is not None:
+        for k, v in req.preview_env.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k) or is_dangerous_env_var(k) or "\x00" in v:
+                raise HTTPException(400, f"Invalid preview variable: {k!r}")
+        app_row.preview_env = _encrypt_secret(json.dumps(req.preview_env)) if req.preview_env else ""
+    if req.secret_files is not None:
+        try:
+            app_row.secret_files = secrets_ext.clean_files(req.secret_files)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        audit_log(user.username, "app_secret_files_change", f"app '{app_row.name}' (id={app_id}): {len(req.secret_files)} file(s)")
+    if changed:
+        audit_log(user.username, "app_settings_change", f"app '{app_row.name}' (id={app_id}): {', '.join(changed)}")
+
     app_row.updated_at = utc_now()
     session.add(app_row)
     session.commit()
+    removed: List[int] = []
+    if not app_row.parent_app_id and (req.instances is not None or req.healthcheck_path is not None
+                                      or req.health_type is not None or req.restart_policy is not None):
+        removed = groups.sync_replicas(session, app_row)
+    if removed:
+        await groups.delete_children(removed)
     proxy.invalidate()
     refreshed = session.get(App, app_id)
     return _app_safe(refreshed)
@@ -680,10 +952,21 @@ async def app_disk(
 @router.delete("/apps/{app_id}")
 async def delete_app(
     app_id: int,
-    session: Session = Depends(get_session),
     user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
 ):
+    return await remove_app_completely(app_id, user.username)
+
+
+async def remove_app_completely(app_id: int, username: str) -> dict:
+    """Delete an app with everything that belongs to it (its processes, user,
+    files, state, routes, published hostnames, history). Raises HTTPException."""
+    with Session(engine) as session:
+        return await _remove_app(session, app_id, username)
+
+
+async def _remove_app(session: Session, app_id: int, username: str) -> dict:
+    from venvy import appbackup, firewall, routing
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
@@ -693,6 +976,32 @@ async def delete_app(
         raise HTTPException(409, "A deploy is running for this app — wait for it to finish.")
     app_name = app_row.name
     warnings: List[str] = []
+    from venvy import appspec, groups, launcher
+    from venvy.models import AppVolume, PortForward, Route, ServiceBinding
+    if app_row.parent_app_id:
+        # A worker or replica: its folder and user are its app's.
+        async with _app_lock(app_id):
+            await _stop_app_process(app_id, session)
+            row = session.get(App, app_id, populate_existing=True)
+            if row is not None:
+                await asyncio.to_thread(shutil.rmtree, APP_LOGS_DIR / str(app_id), True)
+                with contextlib.suppress(OSError):
+                    _app_log_file(row).unlink()
+                for model in (MetricSample,):
+                    session.exec(sql_delete(model).where(model.app_id == app_id))
+                session.delete(row)
+                session.commit()
+        forget_app_runtime(app_id)
+        monitor.forget_app(app_id)
+        launcher.forget(app_id)
+        proxy.invalidate()
+        audit_log(username, "app_delete", f"deleted process '{app_name}' (id={app_id})")
+        return {"ok": True, "warnings": warnings}
+    users_of = session.exec(select(ServiceBinding).where(ServiceBinding.service_app_id == app_id)).all()
+    if users_of:
+        names = [a.name for a in (session.get(App, b.app_id) for b in users_of) if a]
+        raise HTTPException(409, "This service is used by " + ", ".join(names) + " — detach it from them first.")
+    await groups.delete_children([c.id for c in groups.children(session, app_id)])
     # The app's lock is held from the stop until its row is gone. Released in
     # between (as it used to be, across the Cloudflare calls below), a start
     # that was already queued — a click, or the supervisor applying a restart
@@ -751,8 +1060,17 @@ async def delete_app(
         forget_app_runtime(app_id)
         _package_locks.pop(app_id, None)
         _packages_cache.pop(app_id, None)
-        for model in (ScheduledJob, Release, EnvHistory, MetricSample, AppAccess):
+        for model in (ScheduledJob, Release, EnvHistory, MetricSample, AppAccess, Route, PortForward,
+                      ServiceBinding, AppVolume):
             session.exec(sql_delete(model).where(model.app_id == app_id))
+        await asyncio.to_thread(appspec.remove_state, app_id)
+        launcher.forget(app_id)
+        if app_row.runtime == "docker" and not app_row.entrypoint:
+            with contextlib.suppress(Exception):
+                proc = await asyncio.create_subprocess_exec(
+                    "docker", "image", "rm", "-f", runtimes.docker_image(app_id),
+                    stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                await asyncio.wait_for(proc.wait(), 60)
         session.exec(sql_delete(AlertRule).where(AlertRule.app_id == app_id))
         await asyncio.to_thread(deploy.forget_keys, app_id)
         monitor.forget_app(app_id)
@@ -760,7 +1078,22 @@ async def delete_app(
         session.commit()
         proxy.invalidate()
     _app_locks.pop(app_id, None)
-    audit_log(user.username, "app_delete", f"deleted app '{app_name}' (id={app_id})")
+    routing.forget_app(app_id)
+    appbackup.forget(app_id)
+    from venvy import edge
+    with contextlib.suppress(Exception):
+        await edge.tailscale_unpublish(app_id)
+    with contextlib.suppress(Exception):
+        from venvy import kv
+        ng = kv.get_json(edge.NGROK_APPS_KEY, {}) or {}
+        if ng.pop(str(app_id), None) is not None:
+            kv.put_json(edge.NGROK_APPS_KEY, ng)
+    for preview in session.exec(select(App).where(App.preview_of == app_id)).all():
+        with contextlib.suppress(Exception):
+            await _remove_app(session, preview.id, username)
+    with contextlib.suppress(Exception):
+        await firewall.apply()
+    audit_log(username, "app_delete", f"deleted app '{app_name}' (id={app_id})")
     return {"ok": True, "warnings": warnings}
 
 
@@ -790,8 +1123,9 @@ def app_stats(
 def _read_manifest(app_row: App, name: str) -> Optional[str]:
     """Text of a manifest in the app's directory (None if absent or unreadable),
     opened the symlink-safe way, 1 MB at most."""
+    root = tuple(p for p in (app_row.root_dir or "").split("/") if p)
     try:
-        f, _ = _fs_open_file(Path(app_row.app_dir), (name,))
+        f, _ = _fs_open_file(Path(app_row.app_dir), root + (name,))
     except AppPathError:
         return None
     try:
@@ -825,7 +1159,7 @@ async def list_packages(
     if app_row.runtime == "rust":
         def _load_cargo():
             try:
-                manifest, _ = _fs_open_file(Path(app_row.app_dir), ("Cargo.toml",))
+                manifest, _ = _fs_open_file(Path(app_row.app_dir), tuple(p for p in (app_row.root_dir or "").split("/") if p) + ("Cargo.toml",))
             except AppPathError:
                 return []
             if not _toml:
@@ -898,19 +1232,39 @@ _package_locks: Dict[int, asyncio.Lock] = {}
 
 
 async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str,
-                        cwd: Optional[str] = None) -> None:
+                        cwd: Optional[str] = None, env_extra: Optional[Dict[str, str]] = None,
+                        as_venvy: bool = False) -> None:
     """Run a package-manager command for an app (as the app's user); raise
     HTTPException with its stderr on failure or timeout. *cwd* is for tools
-    that work on the directory they are started in."""
+    that work on the directory they are started in. *as_venvy*: as Venvy,
+    with a clean environment (docker build)."""
+    from venvy import toolchains
+    from venvy.isolation import _clean_root_env
     async with _package_locks.setdefault(app_row.id, asyncio.Lock()):
         await asyncio.to_thread(_ensure_app_user, app_row)
+        from venvy import appspec
+        try:
+            await toolchains.ensure_for_app(app_row, appspec.work_dir(app_row), lambda m: logging.info(m))
+        except Exception as exc:
+            raise HTTPException(500, f"Could not install the toolchain: {exc}")
+        env = _app_tool_env(app_row)
+        env.update(env_extra or {})
+        if as_venvy:
+            from venvy import compose_guard
+            try:
+                spawn = await asyncio.to_thread(compose_guard.pinned_argv, app_row, list(argv))
+            except compose_guard.ComposeRefused as exc:
+                raise HTTPException(400, str(exc))
+            env = {**_clean_root_env(), "PATH": runtimes.tool_search_path(), "DOCKER_BUILDKIT": "1"}
+        else:
+            spawn = _as_app_user(app_row, argv)
         try:
             proc = await asyncio.create_subprocess_exec(
-                *_as_app_user(app_row, argv),
+                *spawn,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=_app_tool_env(app_row),
+                env=env,
                 cwd=cwd or _TOOL_CWD,
                 start_new_session=True,
             )
@@ -932,9 +1286,11 @@ async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str,
 
 
 async def _run_steps(app_row: App, steps: List["runtimes.Step"]) -> None:
+    from venvy import appspec
+    wd = str(appspec.work_dir(app_row))
     for step in steps:
         await _run_app_tool(app_row, step.argv, step.timeout, step.what,
-                            cwd=app_row.app_dir if step.in_app_dir else None)
+                            cwd=wd if step.in_app_dir else None, env_extra=dict(step.env), as_venvy=step.as_venvy)
 
 
 @router.post("/apps/{app_id}/packages")
@@ -954,7 +1310,8 @@ async def install_package(
     if app_row.runtime == "rust":
         if not re.fullmatch(r"[A-Za-z0-9_.+\-]+(@[A-Za-z0-9_.+\-]+)?", pkg_name) or pkg_name.startswith("-"):
             raise HTTPException(400, "Invalid package name.")
-        argv = ["cargo", "add", pkg_name, "--manifest-path", str(Path(app_row.app_dir) / "Cargo.toml")]
+        from venvy import appspec as _aspec
+        argv = ["cargo", "add", pkg_name, "--manifest-path", str(_aspec.work_dir(app_row) / "Cargo.toml")]
         timeout, what = 300, "cargo add"
     elif app_row.runtime == "python":
         venv_python = Path(app_row.venv_path) / "bin" / "python"
@@ -968,7 +1325,8 @@ async def install_package(
         timeout, what = 600, "pip install"
     elif runtimes.can_install(app_row.runtime):
         try:
-            steps = runtimes.install_steps(app_row.runtime, Path(app_row.app_dir), pkg_name)
+            from venvy import appspec as _aspec
+            steps = runtimes.install_steps(app_row.runtime, _aspec.work_dir(app_row), pkg_name)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         argv = None
@@ -1008,7 +1366,8 @@ async def uninstall_package(
         raise HTTPException(400, "Invalid package name.")
 
     if app_row.runtime == "rust":
-        argv = ["cargo", "remove", name, "--manifest-path", str(Path(app_row.app_dir) / "Cargo.toml")]
+        from venvy import appspec as _aspec
+        argv = ["cargo", "remove", name, "--manifest-path", str(_aspec.work_dir(app_row) / "Cargo.toml")]
         timeout, what = 120, "cargo remove"
     elif app_row.runtime == "python":
         venv_python = Path(app_row.venv_path) / "bin" / "python"
@@ -1018,7 +1377,8 @@ async def uninstall_package(
         timeout, what = 300, "pip uninstall"
     elif runtimes.can_install(app_row.runtime):
         try:
-            steps = runtimes.remove_steps(app_row.runtime, Path(app_row.app_dir), name)
+            from venvy import appspec as _aspec
+            steps = runtimes.remove_steps(app_row.runtime, _aspec.work_dir(app_row), name)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         argv = None
@@ -1130,9 +1490,12 @@ async def sync_packages(
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
-    if not runtimes.can_install(app_row.runtime):
-        raise HTTPException(400, "This app's runtime has no manifest to install from.")
-    steps = runtimes.sync_steps(app_row.runtime, Path(app_row.app_dir))
+    from venvy import appspec
+    wd = appspec.work_dir(app_row)
+    if app_row.runtime == "python":
+        steps = runtimes.python_steps(wd, app_row.venv_path)
+    else:
+        steps = runtimes.sync_steps(app_row.runtime, wd) + runtimes.build_steps(app_row.runtime, wd, app_row.entrypoint, app_row)
     if not steps:
         raise HTTPException(400, "There is no manifest in the app's folder to install from.")
 

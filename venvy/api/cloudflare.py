@@ -295,7 +295,8 @@ def _publish_refusal(rule: Optional[dict], hostname: str, published: Set[str], u
     apps have published. Never Venvy's own address; and a hostname the tunnel
     sends somewhere Venvy did not set up (another service on this host or
     elsewhere) is only an admin's to take over."""
-    if own_hosts.is_own(hostname) or (rule and own_port and _service_port(rule.get("service", "")) == own_port):
+    if own_hosts.is_own(hostname) or (rule and own_port and _service_port(rule.get("service", "")) == own_port
+                                      and hostname not in published):
         return 409, f"{hostname} is an address Venvy itself is reached under; an app cannot take it over."
     if rule and hostname not in published and user.role != "admin":
         return 403, (f"{hostname} is already in the tunnel, pointing to '{rule.get('service', 'unknown')}', "
@@ -431,7 +432,11 @@ async def check_cf_hostname(
                 check_port = local_port or app_row.port
                 expected_service = f"http://{server_ip}:{check_port}" if check_port else None
                 expected_service_legacy = f"http://localhost:{check_port}" if check_port else None
-                if expected_service and (current_service == expected_service or current_service == expected_service_legacy):
+                via_venvy = f"http://localhost:{_venvy_port(request)}"
+                own_route = any(r.app_id == app_id and (r.hostname or "").lower() == clean
+                                for r in session.exec(select(CfRoute).where(CfRoute.app_id == app_id)).all())
+                if (expected_service and (current_service == expected_service or current_service == expected_service_legacy)) \
+                        or (own_route and current_service == via_venvy):
                     return {"conflict": False}
                 return {
                     "conflict":      True,
@@ -504,8 +509,15 @@ async def publish_cf_route(
     hostnames_to_strip = {new_hostname.lower()}
     if is_hostname_change and old_hostname:
         hostnames_to_strip.add(old_hostname.lower())
-    service = f"http://{get_server_ipv4()}:{req.local_port}"
     own_port = _venvy_port(request)
+    if app_row.instances > 1 or app_row.zero_downtime:
+        # Through Venvy's proxy, which knows the hostname (the route above) and
+        # spreads requests over the replicas, keeping them up through restarts.
+        service = f"http://localhost:{own_port}"
+    elif not app_row.bind_public:
+        service = f"http://localhost:{req.local_port}"      # a private app listens on loopback only
+    else:
+        service = f"http://{get_server_ipv4()}:{req.local_port}"
 
     prior_new_rule: List[dict] = []
     prior_old_rule: List[dict] = []

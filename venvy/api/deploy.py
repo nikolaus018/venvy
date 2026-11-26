@@ -212,10 +212,9 @@ async def start_deploy(
         raise HTTPException(409, "This app is still being set up.")
     if restore_in_progress():
         raise HTTPException(409, "A restore is in progress.")
-    if deploy.is_running(app_id):
-        raise HTTPException(409, "A deploy is already running for this app.")
-    if not app.git_url and not app.build_command:
-        raise HTTPException(400, "Set a git repository or a build command first.")
+    if app.parent_app_id:
+        raise HTTPException(400, "Deploy the app this process belongs to.")
+    queued = deploy.is_running(app_id)
 
     async def _go() -> None:
         try:
@@ -224,12 +223,14 @@ async def start_deploy(
             logging.warning(f"Deploy of app {app_id} not started: {exc}")
 
     _start_background(_go())
+    if queued:
+        return {"ok": True, "queued": True}
     # Let the state appear, so the first poll already sees it running.
     for _ in range(20):
         if deploy.is_running(app_id):
             break
         await asyncio.sleep(0.05)
-    return {"ok": True}
+    return {"ok": True, "queued": False}
 
 
 @router.get("/apps/{app_id}/releases")
@@ -362,6 +363,7 @@ async def deploy_webhook(app_id: int, request: Request):
         name = app.name if app else ""
         status = app.status if app else None
         has_source = bool(app and (app.git_url or app.build_command))
+        previews_on = bool(app and app.previews_enabled and app.git_url)
     # One answer for "no such app", "no secret" and "wrong secret".
     if not secret or not deploy.verify_webhook(request.headers, body, secret):
         raise HTTPException(401, "Invalid signature or token.")
@@ -378,14 +380,21 @@ async def deploy_webhook(app_id: int, request: Request):
     if not has_source:
         return {"ok": True, "deployed": False, "reason": "no git repository or build command configured"}
     pushed, skip = deploy.webhook_push(request.headers, body)
+    if pushed is not None and pushed != branch and previews_on and deploy.clean_branch_ok(pushed):
+        from venvy import previews
+        try:
+            res = await previews.handle_push(app_id, pushed, deleted=bool(skip and "deleted" in skip))
+        except ValueError:
+            return {"ok": True, "deployed": False, "reason": "no preview could be made for this branch"}
+        audit_log("webhook", "app_preview", f"app '{name}' (id={app_id}): {pushed[:100]} {res}")
+        return {"ok": True, **res}
     if pushed is not None and pushed != branch:
         return {"ok": True, "deployed": False, "reason": f"push to {pushed[:200]}, not {branch}"}
     if skip:
         return {"ok": True, "deployed": False, "reason": skip}
     if status == "installing":
         return {"ok": True, "deployed": False, "reason": "the app is still being set up"}
-    if deploy.is_running(app_id):
-        return {"ok": True, "deployed": False, "reason": "a deploy is already running"}
+    queued = deploy.is_running(app_id)
 
     async def _go() -> None:
         try:
@@ -395,7 +404,7 @@ async def deploy_webhook(app_id: int, request: Request):
 
     _start_background(_go())
     audit_log("webhook", "app_webhook_deploy", f"app '{name}' (id={app_id})")
-    return {"ok": True, "deployed": True}
+    return {"ok": True, "deployed": True, "queued": queued}
 
 
 # ---------------------------------------------------------------------------

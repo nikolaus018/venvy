@@ -6,10 +6,13 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/nikolaus018/venvy/badge)](https://securityscorecards.dev/viewer/?uri=github.com/nikolaus018/venvy)
 [![License](https://img.shields.io/github/license/nikolaus018/venvy)](LICENSE)
 
-Self-hosted control panel for running applications on a single Linux server.
-Supports Python, Node.js, Bun, Deno, Go, Rust, PHP, Ruby, Java and static sites.
-Provides per-app virtualenvs, process supervision, git deploys with rollback, a
-browser terminal, live logs, backups and public URLs through Cloudflare Tunnel.
+Self-hosted control panel for running applications on Linux servers.
+Hosts Python, Node.js, Bun, Deno, Go, Rust, PHP, Ruby, Java, static sites, any
+command or binary, Docker images and Compose projects, and managed databases.
+Provides per-app sandboxed systemd services, release builds, git and artifact
+deploys with atomic switch-over and rollback, workers and replicas behind a
+load-balancing proxy, HTTPS on your domains, a browser terminal, live logs,
+metrics, backups and public URLs through Cloudflare Tunnel, Tailscale or ngrok.
 
 ![Venvy dashboard with the in-browser terminal](docs/screenshots/terminal.png)
 
@@ -66,6 +69,14 @@ curl -fsSL https://github.com/nikolaus018/venvy/releases/latest/download/install
 | `--with-ruby` | Also install Ruby and Bundler. |
 | `--with-java` | Also install a headless Java runtime. |
 | `--with-all` | All of the above, and Rust. Python and static sites need nothing extra. |
+| `--with-docker` | Docker Engine and the compose plugin (Docker and Compose apps, managed services). |
+| `--with-caddy` | Caddy, for HTTPS on your own domains (certificates on demand). |
+| `--with-uv` | uv (Python versions on demand, `uv.lock` projects). |
+| `--with-pnpm` | pnpm and Yarn through corepack. |
+| `--with-maven` | A JDK and Maven for Java builds (Gradle projects use their `gradlew`). |
+| `--with-sops` | sops, for secrets kept encrypted in the repository. |
+| `--with-tailscale` / `--with-ngrok` | Tailscale / the ngrok agent, to publish apps through them. |
+| `--with-everything` | Every runtime and every tool above. |
 | `--shared-user` | Run every app as the one `venvy` user instead of one Unix user per app (see [Isolation](#isolation)). |
 | `--allow-downgrade` | Allow installing a release older than the currently installed version. |
 | `--uninstall` | Remove the service and code. Data and config are kept. |
@@ -77,18 +88,40 @@ Settings live in `/etc/venvy/venvy.env`, data in `/var/lib/venvy`, code in `/opt
 Pick one when you create an app; it can be changed later in Settings. Venvy tells you at start-up
 (and in the dropdown) which ones this host is missing.
 
-| Runtime | Starts with | Packages tab |
-|---|---|---|
-| Python | the entrypoint, in its own virtualenv | pip |
-| Node.js | `node <entrypoint>`, or `npm start` if blank | npm |
-| Bun | `bun run <entrypoint>`, or the `start` script if blank | `bun add` / `bun remove` |
-| Deno | `deno run --allow-all <entrypoint>`, or `deno task start` | `deno add` / `deno remove` |
-| Go | `go run .` | `go get` / `go mod` |
-| Rust | `cargo run` | listed from `Cargo.toml` |
-| PHP | PHP's built-in server on the app folder (or `public/`), or your router script | Composer |
-| Ruby | `ruby <entrypoint>`, `rackup` for a `config.ru`; `bundle exec` with a Gemfile | Bundler |
-| Java | `java -jar <entrypoint>` | – |
-| Static site | a small file server on a folder (`public`, `dist`, `build`, … or the one you name) | – |
+| Runtime | Starts with | Built with | Packages tab |
+|---|---|---|---|
+| Python | the entrypoint (a path is fine), in its own virtualenv | – (deps: requirements.txt, uv.lock, poetry.lock, Pipfile.lock, pyproject.toml) | pip |
+| Node.js | `node <entrypoint>`, or `npm/pnpm/yarn start` | `npm ci` / pnpm / yarn, then the `build` script | npm |
+| Bun | `bun run <entrypoint>`, or the `start` script | `bun install`, `build` script | `bun add` / `bun remove` |
+| Deno | `deno run --allow-all <entrypoint>`, or `deno task start` | `deno install` | `deno add` / `deno remove` |
+| Go | `.venvy/bin/app` | `go build` of the package you name (`./cmd/api`, default `.`) | `go get` / `go mod` |
+| Rust | `target/release/<binary>` | `cargo build --release [--bin NAME] [--locked]` | `cargo add` / `cargo remove` |
+| PHP | PHP's built-in server on the app folder (or `public/`), or your router script | `composer install` | Composer |
+| Ruby | `ruby <entrypoint>`, `rackup` for a `config.ru`; `bundle exec` with a Gemfile | `bundle install` | Bundler |
+| Java | `java -jar <jar>` (the one the build made, if not named) | `mvnw`/`mvn package`, `gradlew`/`gradle build` | listed from pom.xml / build.gradle |
+| Static site | a small file server on a folder (`public`, `dist`, `build`, …) | the `build` script of a package.json | – |
+| Any command / binary | the executable you name, or your start command | your build command | – |
+| Docker | `docker run` of the image you name, or of the app's Dockerfile | `docker build` | – |
+| Compose | `docker compose up` of the app's compose file (admins only) | `docker compose build` / `pull` | – |
+
+Any app can have a **start command** instead of the runtime's default (`gunicorn app:app -b 0.0.0.0:$PORT`,
+`./server --port $PORT`, `java -Xmx512m -jar target/app.jar` …), an install, build and **release**
+command (migrations), a **root folder** inside a monorepo, and a language **version** — Node, Go, Bun,
+Deno, Rust and Python versions are installed side by side on first use (checksum-verified), or read
+from the repository (`.nvmrc`, `rust-toolchain.toml`, `.python-version` …). `runtime=auto` picks the
+runtime from the files. A repository can describe itself in `venvy.toml` (and a `Procfile`):
+
+```toml
+runtime = "rust"
+release = "./target/release/api migrate"
+instances = 2
+[health]
+path = "/healthz"
+[processes]
+worker = "./target/release/api worker"
+[env]
+RUST_LOG = "info"
+```
 
 Dependencies are installed when the app is created if its manifest is uploaded with it, and
 otherwise on the first start (or with "Install from manifest" in the Packages tab).
@@ -124,6 +157,28 @@ otherwise on the first start (or with "Install from manifest" in the Packages ta
 - **Users and roles.** Admin, operator and read-only viewer, with optional TOTP two-factor.
 - **Installable PWA** with light and dark themes, a command palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>)
   and keyboard shortcuts.
+- **Processes.** Workers (Procfile, `venvy.toml` or the Hosting tab) and replicas (`instances`) behind
+  the proxy with round-robin load balancing; rolling restarts that drain each process first, and
+  zero-downtime restarts of a single instance.
+- **Apps as services.** On a per-app-users install every app is a systemd service of its own: it
+  keeps running while Venvy restarts or updates, its output waits in the journal, and systemd
+  enforces its stop signal, limits (memory, CPU, tasks, I/O, open files), a sandbox and an optional
+  egress policy.
+- **Deploys.** Atomic deploys (build next to the live folder, switch in one step, switch back when
+  unhealthy), release commands, artifact deploys from CI (`ship.py deploy`), a deploy queue, commit
+  statuses on GitHub / GitLab / Gitea, and preview apps per pushed branch.
+- **Routing.** Aliases, wildcards, path routes, redirects; per route an IP allow-list, basic auth,
+  rate limit, body limit, headers, gzip and a cache; access logs; raw TCP/UDP port forwards.
+- **Edge.** HTTPS for your domains through Caddy, Tailscale serve/Funnel and ngrok besides the
+  Cloudflare tunnel; private apps closed to the network with nftables, and apps kept from each
+  other's ports.
+- **Data.** `$APP_DATA_DIR` that survives deploys, shared volumes, managed PostgreSQL / MariaDB /
+  Redis / MongoDB / Meilisearch / MinIO / RabbitMQ bound to apps, per-app backups, consistent
+  SQLite copies in every backup, and an off-site standby of the database.
+- **Secrets.** Secret files, SOPS files from the repository, HashiCorp Vault.
+- **Observability.** Log shipping (syslog, journald, Loki, HTTP), Prometheus `/metrics` and OTLP,
+  URL monitors, uptime history, a public status page and an external heartbeat.
+- **More.** One-off commands as an app, host-level jobs, managing other Venvy servers from one.
 
 <table>
   <tr>
@@ -207,6 +262,21 @@ that decrypts every app's secrets, or another app. For that, the Venvy service r
 the system, but not from each other or from Venvy's own data, and an operator's terminal can read
 the database. An existing install keeps the mode it was installed with; re-run the installer with
 `--app-users` or `--shared-user` to switch modes (so the service user and file ownership are updated together).
+
+As systemd services (the default install), apps also get a sandbox: the system is read-only, `/tmp`
+and devices are private, other processes are hidden, Venvy's data and other apps' folders are not
+mounted at all, and a system-call filter applies. Venvy's nftables table closes the ports of private
+apps to the network and stops an app's user from connecting to another app's ports (services an app
+is bound to excepted).
+
+Compose runs through the Docker daemon, as root, so only an admin can make an app a Compose app
+(an operator, an API call or a `venvy.toml` can't switch one to it). Every compose file is checked
+before Venvy builds or starts it: it is rendered as the app's user, refused if it asks for a
+privileged container, extra capabilities, devices, host namespaces, unconfined security options,
+external volumes or networks, or host paths outside the app's folder, data folder and volumes, and
+the daemon is given that checked copy, not the app's file. Those host paths are checked when the
+file is rendered; someone who can change the app's files while it starts could still swap a folder
+for a link in between, so give a Compose app only to people you would give the Docker group.
 
 Apps share the host's network. They can reach Venvy on its port like anyone else, but can't pass
 for another client there: a connection from loopback is only taken to be cloudflared's (and its

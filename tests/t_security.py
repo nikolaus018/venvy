@@ -30,6 +30,13 @@ ANY_ROLE = {
     ("GET", "/api/apps/{app_id}/releases"),
     ("GET", "/api/apps/{app_id}/stats"), ("GET", "/api/apps/{app_id}/tunnel"),
     ("GET", "/api/jobs/{job_id}"), ("GET", "/api/runtimes"), ("GET", "/api/system/info"),
+    # Read-only views of what an app runs with and how it is reached.
+    ("GET", "/api/apps/{app_id}/processes"), ("GET", "/api/apps/{app_id}/detect"),
+    ("GET", "/api/apps/{app_id}/routes"), ("GET", "/api/apps/{app_id}/access-log"),
+    ("GET", "/api/apps/{app_id}/traffic"), ("GET", "/api/apps/{app_id}/forwards"),
+    ("GET", "/api/apps/{app_id}/services"), ("GET", "/api/apps/{app_id}/uptime"),
+    ("GET", "/api/apps/{app_id}/previews"), ("GET", "/api/volumes"), ("GET", "/api/services/templates"),
+    ("GET", "/api/toolchains"), ("GET", "/api/monitors"),
     # One's own account.
     ("GET", "/api/tokens"), ("POST", "/api/tokens"), ("DELETE", "/api/tokens/{token_id}"),
     ("GET", "/api/auth/totp/setup"), ("POST", "/api/auth/totp/setup/confirm"),
@@ -42,6 +49,9 @@ OPERATOR = {
     ("GET", "/api/apps/{app_id}/scan-imports"),
     ("GET", "/api/system/cloudflare/status"), ("GET", "/api/system/cloudflare/zones"),
     ("GET", "/api/system/ports"),
+    ("GET", "/api/apps/{app_id}/backups"), ("GET", "/api/apps/{app_id}/backups/{name}/download"),
+    # Operators make databases for their apps, and watch URLs.
+    ("POST", "/api/services"), ("POST", "/api/monitors"), ("PUT", "/api/monitors/{mid}"), ("DELETE", "/api/monitors/{mid}"),
 }
 
 def routes():

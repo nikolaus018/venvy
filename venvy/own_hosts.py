@@ -23,6 +23,21 @@ KEY = "venvy_hosts"
 # with made-up Host headers and then claim it.
 _MAX = 64
 _VALID_HOST_RE = re.compile(r"\A(?:[a-z0-9.\-]{1,253}|[0-9a-f:]{2,45})\Z")
+_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?")
+_TLD_RE = re.compile(r"[a-z]{2,63}")
+
+
+def valid_hostname(name: str, wildcard: bool = False) -> bool:
+    """A lowercase DNS name with a dot (app.example.com), or with *wildcard*
+    also *.example.com. Checked label by label: no pattern that backtracks."""
+    if not name or len(name) > 253:
+        return False
+    labels = name.split(".")
+    if wildcard and labels[0] == "*":
+        labels = labels[1:]
+    if len(labels) < 2 or not _TLD_RE.fullmatch(labels[-1]):
+        return False
+    return all(_LABEL_RE.fullmatch(lb) for lb in labels[:-1])
 
 _lock = threading.Lock()
 _cache: Optional[Set[str]] = None

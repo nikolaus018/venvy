@@ -85,13 +85,18 @@ def _app_username(app_id: int) -> str:
     return f"venvy-app-{app_id}"
 
 
+def _owner(app_row: "App") -> int:
+    """Workers, replicas and companions run as the user of the app they belong to."""
+    return int(getattr(app_row, "parent_app_id", None) or app_row.id)
+
+
 def _app_ids(app_row: "App") -> Optional[tuple]:
     """(uid, gid) of the app's user, or None when isolation is off."""
     if not _isolation_active() or app_row.id is None:
         return None
     import pwd
     try:
-        pw = pwd.getpwnam(_app_username(app_row.id))
+        pw = pwd.getpwnam(_app_username(_owner(app_row)))
     except KeyError:
         return None
     return pw.pw_uid, pw.pw_gid
@@ -122,9 +127,12 @@ def _chown_tree(path: Path, uid: int, gid: int) -> None:
 def _ensure_app_user(app_row: "App") -> Optional[tuple]:
     """Create the app's user if needed and make sure it owns its directory.
     Blocking; returns (uid, gid) or None when isolation is off."""
+    from venvy import appspec
     if not _isolation_active():
+        with contextlib.suppress(OSError):
+            appspec.ensure_state_dirs(app_row, None)
         return None
-    name = _app_username(app_row.id)
+    name = _app_username(_owner(app_row))
     ids = _app_ids(app_row)
     if ids is None:
         with _user_create_lock:
@@ -157,6 +165,9 @@ def _ensure_app_user(app_row: "App") -> Optional[tuple]:
     with contextlib.suppress(OSError):
         if not app_dir.is_symlink():
             app_dir.chmod(0o700)
+    from venvy import appspec
+    with contextlib.suppress(OSError):
+        appspec.ensure_state_dirs(app_row, ids)
     return ids
 
 
@@ -346,14 +357,22 @@ def _as_app_user(app_row: "App", argv: list) -> list:
 
 def _app_tool_env(app_row: "App") -> Dict[str, str]:
     """Environment for venv/pip/cargo/npm/... runs on an app's behalf."""
+    from venvy import appspec, toolchains
     env = child_base_env()
-    env["PATH"] = runtimes.tool_search_path()
-    env["VIRTUAL_ENV"] = str(app_row.venv_path)
+    wd = appspec.work_dir(app_row)
+    venv_bin = [str(Path(app_row.venv_path) / "bin")] if getattr(app_row, "venv_path", None) else []
+    env["PATH"] = ":".join(toolchains.path_dirs(app_row, wd) + venv_bin + [runtimes.tool_search_path()])
+    if getattr(app_row, "venv_path", None):
+        env["VIRTUAL_ENV"] = str(app_row.venv_path)
     env.pop("PYTHONHOME", None)
     env.pop("PYTHONPATH", None)
-    env.update(runtimes.tool_env(app_row.runtime, Path(app_row.app_dir)))
+    env.update(runtimes.tool_env(app_row.runtime, wd))
+    env.update(appspec.cache_env(app_row))
+    env.update(toolchains.tool_env(app_row, wd))
+    env.update(appspec.app_paths_env(app_row))
     if _app_ids(app_row):
-        env.update(HOME=app_row.app_dir, USER=_app_username(app_row.id), LOGNAME=_app_username(app_row.id))
+        env.update(HOME=str(appspec.home_dir(app_row)), USER=_app_username(_owner(app_row)),
+                   LOGNAME=_app_username(_owner(app_row)))
     strip_dangerous_env_vars(env)
     return env
 
@@ -363,4 +382,7 @@ def _app_log_file(app_row: "App") -> Path:
     Venvy writes it as root, and the app owns everything under app_dir."""
     if _isolation_active():
         return APP_LOGS_DIR / str(app_row.id) / "app.log"
+    if getattr(app_row, "parent_app_id", None):
+        # Shares the folder of the app it belongs to: a log of its own there.
+        return Path(app_row.app_dir) / "logs" / f"{app_row.process_kind}-{app_row.id}.log"
     return Path(app_row.app_dir) / "logs" / "app.log"
