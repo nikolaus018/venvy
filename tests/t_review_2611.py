@@ -93,6 +93,12 @@ with server(repo, PORT, env={"VENVY_HEALTH_WAIT_SEC": "20"}) as (base, data, srv
     cl.wait_status(good, "running")
     st = deploy(cl, good)
     check("a deploy whose app answers (even 404) is ok", st["status"] == "ok", "\n".join(st.get("log") or [])[-600:])
+    unchecked = make_app(cl, name="Unchecked", code=web_app(502), health_type="none")
+    cl.req("POST", f"/api/apps/{unchecked}/control?action=start")
+    cl.wait_status(unchecked, "running")
+    st = deploy(cl, unchecked)
+    check("an app whose health check is set to None only has to keep running", st["status"] == "ok",
+          "\n".join(st.get("log") or [])[-600:])
     worker = make_app(cl, name="Worker", code="import time\nwhile True: time.sleep(0.5)\n")
     cl.req("POST", f"/api/apps/{worker}/control?action=start")
     cl.wait_status(worker, "running")

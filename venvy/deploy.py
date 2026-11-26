@@ -765,6 +765,7 @@ async def _wait_healthy(app_id: int, log: _Log) -> bool:
     """True once the restarted app answers: its health check passes; or, with no
     health check, the port it listens on (its process tree's, or what its
     containers publish) answers like a started web app does (monitor.probe_up).
+    With the health check set to "none", running a few seconds is enough.
     A process that listens on nothing a few seconds after the start (a worker,
     a bot) only has to keep running; a container app is waited for until its
     containers are up, and counts as a worker only if they publish nothing."""
@@ -790,6 +791,9 @@ async def _wait_healthy(app_id: int, log: _Log) -> bool:
             if monitor.has_check(app):
                 if await monitor.check_once(app):
                     return True
+            elif (app.health_type or "http") == "none":
+                if time.monotonic() >= settle:
+                    return True              # no check, on purpose: running is enough
             else:
                 held = await asyncio.to_thread(ports.listening, app)
                 port = app.port if app.port in held else (held[0] if held else None)
