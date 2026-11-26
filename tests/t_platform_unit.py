@@ -350,6 +350,21 @@ check("build output reaches the log while it runs", "compiling-one" in mid and "
 check("... and all of it, once, before 'finished'",
       end.count("compiling-one") == 1 and end.count("compiling-two") == 1
       and end.index("compiling-two") < end.index("fake build finished"), repr(end))
+
+# A container's /data must let the image's own user (postgres, mysql) pass
+# through to the folder it made there as root; everyone else's stays private.
+import stat as _stat  # noqa: E402
+modes = {}
+for r_, i_ in (("docker", 9301), ("compose", 9302), ("python", 9303)):
+    probe = SimpleNamespace(id=i_, parent_app_id=None, runtime=r_)
+    appspec.ensure_state_dirs(probe, None)
+    modes[r_] = _stat.S_IMODE(appspec.data_dir(probe).stat().st_mode)
+    (appspec.data_dir(probe)).chmod(0o700)            # an existing folder from before: put right on the next start
+    appspec.ensure_state_dirs(probe, None)
+    modes[r_ + " again"] = _stat.S_IMODE(appspec.data_dir(probe).stat().st_mode)
+check("container data folder 0711, others 0700",
+      modes == {"docker": 0o711, "docker again": 0o711, "compose": 0o711, "compose again": 0o711,
+                "python": 0o700, "python again": 0o700}, str({k: oct(v) for k, v in modes.items()}))
 from venvy import routing  # noqa: E402
 routing._build()
 m = routing.match_sync("a.example.com", "/")
