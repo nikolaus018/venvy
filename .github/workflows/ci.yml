@@ -51,7 +51,13 @@ jobs:
         run: PYTHON=python tests/run_all.sh
       - name: Show logs of failed scripts
         if: failure()
-        run: for f in tests/.out/*.log; do echo "::group::$f"; tail -60 "$f"; echo "::endgroup::"; done
+        # A failed script's log ends with the server's own log (harness.py), which
+        # is what tells why: show enough of those, and only the tail of the rest.
+        run: |
+          for f in tests/.out/*.log; do
+            n=60; grep -qE "^  FAIL |Traceback|^FAILED" "$f" && n=400
+            echo "::group::$f"; tail -n "$n" "$f"; echo "::endgroup::"
+          done
 
   dependency-audit:
     # Known vulnerabilities in the exact versions install.sh installs.
