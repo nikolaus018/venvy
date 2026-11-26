@@ -5,6 +5,12 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v5.0.1
+
+- Deploy, rollback and webhook-deploy failures are logged with the app's id and the error on one line, without any text from the request.
+- The installer saves the sops release information to a file before reading it, instead of piping a download straight into `python3`.
+- `--with-pnpm` no longer installs an unpinned corepack from npm when Node has none (Node 25+); it says what to install instead.
+
 ## v5.0.0
 
 Venvy now hosts anything that runs on Linux, not only the ten runtimes' default way of starting.
