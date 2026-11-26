@@ -109,6 +109,7 @@ class AppUpdateReq(BaseModel):
     # Run, build, deploy, network and sandbox settings (see apply_spec_fields)
     start_command: Optional[str] = None         # "" clears
     install_command: Optional[str] = None
+    build_command: Optional[str] = None         # also PUT …/git; "" clears
     release_command: Optional[str] = None
     root_dir: Optional[str] = None
     stop_signal: Optional[str] = None
@@ -307,7 +308,7 @@ def apply_spec_fields(row: App, fields: Dict[str, object], admin: bool = False) 
 
 # Settings the API takes by name and hands to apply_spec_fields().
 SPEC_FIELDS = (
-    "start_command", "install_command", "release_command", "root_dir", "stop_signal", "stop_timeout",
+    "start_command", "install_command", "build_command", "release_command", "root_dir", "stop_signal", "stop_timeout",
     "container_port", "health_type", "health_command", "health_start_period", "instances", "zero_downtime",
     "deploy_strategy", "spec_from_repo", "commit_status", "previews_enabled", "preview_domain", "environment",
     "bind_public", "egress_policy", "egress_allow", "sandbox", "pids_limit", "io_weight", "nofile_limit",
