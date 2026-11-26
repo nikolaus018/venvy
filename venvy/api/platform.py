@@ -292,13 +292,24 @@ def list_routes(app_id: int, session: Session = Depends(get_session), user: User
     return [_route_json(r) for r in session.exec(select(Route).where(Route.app_id == app_id)).all()]
 
 
+async def _check_route_port(session: Session, a: App, kind: str, request: Request) -> None:
+    """A route sends a hostname's requests to the app's port, as a domain does:
+    that port must be the app's (not Venvy's, another app's or a service that
+    listens on localhost because it trusts this host)."""
+    if kind == "proxy" and a.port:
+        from venvy.api.cloudflare import _check_publish_port
+        await _check_publish_port(session, a, a.port, request)
+
+
 @router.post("/apps/{app_id}/routes")
-def add_route(app_id: int, req: RouteReq, request: Request, session: Session = Depends(get_session),
-              user: User = Depends(require_operator), _rl: None = Depends(rate_limit_mutations)):
+async def add_route(app_id: int, req: RouteReq, request: Request, session: Session = Depends(get_session),
+                    user: User = Depends(require_operator), _rl: None = Depends(rate_limit_mutations)):
     a = _main(session, app_id)
     if len(session.exec(select(Route).where(Route.app_id == app_id)).all()) >= 100:
         raise HTTPException(400, "An app can have 100 routes at most.")
-    r = Route(app_id=app_id, **_clean_route(session, req, app_id, None, request, user))
+    fields = _clean_route(session, req, app_id, None, request, user)
+    await _check_route_port(session, a, fields["kind"], request)
+    r = Route(app_id=app_id, **fields)
     session.add(r)
     session.commit()
     session.refresh(r)
@@ -309,12 +320,14 @@ def add_route(app_id: int, req: RouteReq, request: Request, session: Session = D
 
 
 @router.put("/apps/{app_id}/routes/{route_id}")
-def put_route(app_id: int, route_id: int, req: RouteReq, request: Request, session: Session = Depends(get_session),
-              user: User = Depends(require_operator), _rl: None = Depends(rate_limit_mutations)):
+async def put_route(app_id: int, route_id: int, req: RouteReq, request: Request, session: Session = Depends(get_session),
+                    user: User = Depends(require_operator), _rl: None = Depends(rate_limit_mutations)):
     r = session.get(Route, route_id)
     if not r or r.app_id != app_id:
         raise HTTPException(404)
-    for k, v in _clean_route(session, req, app_id, route_id, request, user).items():
+    fields = _clean_route(session, req, app_id, route_id, request, user)
+    await _check_route_port(session, _main(session, app_id), fields["kind"], request)
+    for k, v in fields.items():
         setattr(r, k, v)
     session.add(r)
     session.commit()

@@ -841,11 +841,12 @@ async def update_app(
         if new_domain != app_row.domain:
             audit_log(user.username, "app_domain_change", f"app '{app_row.name}' (id={app_id}): {new_domain or 'removed'}")
         app_row.domain = new_domain
-    # An app served on its own domain proxies Host-matched traffic to its local
-    # port, so apply the same port ownership check as Cloudflare publishing.
-    if app_row.domain and app_row.port and (
-        req.domain is not None or req.port is not None or req.manual_ports is not None
-    ):
+    # An app served on its own domain or a route proxies Host-matched traffic to
+    # its local port, so apply the same port ownership check as Cloudflare publishing.
+    from venvy.models import Route as _Route
+    port_changed = req.port is not None or req.manual_ports is not None
+    if app_row.port and ((app_row.domain and (req.domain is not None or port_changed)) or (port_changed and session.exec(
+            select(_Route).where(_Route.app_id == app_id, _Route.kind == "proxy")).first())):
         await _check_publish_port(session, app_row, app_row.port, request)
     if req.disk_limit_mb is not None:
         if req.disk_limit_mb != 0 and not (1 <= req.disk_limit_mb <= 100_000_000):
