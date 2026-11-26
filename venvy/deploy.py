@@ -267,7 +267,11 @@ async def _run(app: App, argv: List[str], log: _Log, env: Dict[str, str], cwd: s
     env_tf = None
     try:
         if as_venvy:
-            spawn_argv = list(argv)
+            from venvy import compose_guard
+            try:
+                spawn_argv = await asyncio.to_thread(compose_guard.pinned_argv, app, list(argv))
+            except compose_guard.ComposeRefused as exc:
+                raise DeployError(str(exc))
             spawn_env = {**_clean_root_env(), "DOCKER_BUILDKIT": "1", "PATH": runtimes.tool_search_path()}
             pass_fds = ()
         elif _isolation_active():
@@ -1074,6 +1078,45 @@ async def report_commit_status(app: App, sha: Optional[str], state: str, descrip
 _pending: Dict[int, tuple] = {}
 
 
+def _spec_fields() -> tuple:
+    from venvy import appspec
+    return tuple(sorted(set(appspec.SPEC_KEYS.values()) | set(appspec._HEALTH_KEYS.values()) | {"env_json"}))
+
+
+def _spec_snapshot(app_id: int) -> Optional[dict]:
+    """The settings and workers a repository's venvy.toml / Procfile can change."""
+    from venvy import groups
+    with Session(engine) as s:
+        row = s.get(App, app_id)
+        if row is None:
+            return None
+        return {"fields": {k: getattr(row, k) for k in _spec_fields()},
+                "workers": {w.process_name: w.start_command for w in groups.children(s, app_id, "worker")}}
+
+
+async def _spec_restore(app_id: int, snap: dict, log: _Log) -> None:
+    """Put back what _spec_snapshot saw: the old code gets its old settings."""
+    from venvy import groups
+    removed: List[int] = []
+    with Session(engine) as s:
+        row = s.get(App, app_id)
+        if row is None:
+            return
+        changed = [k for k, v in snap["fields"].items() if getattr(row, k) != v]
+        for k in changed:
+            setattr(row, k, snap["fields"][k])
+        if changed:
+            s.add(row)
+            s.commit()
+            s.refresh(row)
+            log("Settings from venvy.toml put back: " + ", ".join(k for k in changed if k != "env_json")
+                + (" and variables" if "env_json" in changed else ""))
+        res = groups.sync_workers(s, row, snap["workers"])
+        removed = res["removed"] + groups.sync_replicas(s, row)
+    if removed:
+        await groups.delete_children(removed)
+
+
 async def run_deploy(app_id: int, by: str, trigger: str = "manual", target: Optional[Release] = None,
                      start_if_stopped: bool = False, artifact: Optional[Path] = None) -> dict:
     """Deploy (or, with *target*, roll back to) an app — from its git repository,
@@ -1142,6 +1185,9 @@ async def _run_deploy_locked(app_id: int, by: str, trigger: str, target: Optiona
             # checkout and had no repository used to get one; a failed first git
             # deploy had nothing to return to.)
             made_repo = before is None and not _is_repo(app)
+            # What the repository's venvy.toml / Procfile may change, to put back
+            # with the code if this deploy goes wrong.
+            spec_before = await asyncio.to_thread(_spec_snapshot, app_id) if app.spec_from_repo and target is None else None
             if before is None and not atomic:
                 try:
                     before_archive = await _snapshot(app, log)
@@ -1159,7 +1205,11 @@ async def _run_deploy_locked(app_id: int, by: str, trigger: str, target: Optiona
                              protect=target.id if target is not None else None)
 
             async def go_back() -> None:
+                nonlocal app
                 log("Putting the previous version back…")
+                if spec_before is not None:
+                    await _spec_restore(app_id, spec_before, log)
+                    app = _app(app_id) or app
                 if old_tree is not None:
                     await _switch_back(app, old_tree, log)
                     return
@@ -1226,11 +1276,23 @@ async def _run_deploy_locked(app_id: int, by: str, trigger: str, target: Optiona
                 await report_commit_status(app, commit_sha, "pending", "Deploying…")
             elif artifact is not None:
                 message = f"artifact {artifact.name}"
-            await _restart(app_id, log, start_if_stopped)
+            # A start that fails outright (a bad start command, a missing entrypoint)
+            # is a failed deploy like one that never gets healthy: the previous
+            # version goes back — an atomic deploy's old tree must not be deleted
+            # with the app left on the broken one.
+            start_error: Optional[BaseException] = None
+            try:
+                await _restart(app_id, log, start_if_stopped)
+            except Exception as exc:
+                start_error = exc
+                log(f"The app could not be started: {exc}")
             fresh = _app(app_id)
             should_run = was_running or start_if_stopped or (fresh and fresh.status in ("running", "starting"))
-            if should_run and not await _wait_healthy(app_id, log):
-                log("The app did not come up healthy.")
+            if start_error is not None or (should_run and not await _wait_healthy(app_id, log)):
+                if start_error is None:
+                    log("The app did not come up healthy.")
+                else:
+                    message = message or str(start_error)
                 if old_tree is not None or (target is None and (before or before_archive)):
                     await go_back()
                     if old_tree is None:

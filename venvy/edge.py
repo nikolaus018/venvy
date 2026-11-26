@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from venvy import kv
+from venvy import kv, own_hosts
 from venvy.config import PROXY_SECRET, venvy_port
 
 CADDY_KEY = "edge_caddy"          # {"enabled": bool, "email": str, "venvy_hosts": [..]}
@@ -32,7 +32,6 @@ NGROK_KEY = "edge_ngrok"          # {"token": ...} (secret)
 NGROK_APPS_KEY = "edge_ngrok_apps"  # {app_id: domain}
 CADDYFILE = Path(os.getenv("VENVY_CADDYFILE", "/etc/caddy/Caddyfile"))
 _SYS = "/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin"
-_HOST_RE = re.compile(r"(?=.{1,253}\Z)(\*\.)?([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z")
 
 
 def _which(name: str) -> Optional[str]:
@@ -75,6 +74,24 @@ def caddy_status() -> dict:
             "venvy_hosts": cfg.get("venvy_hosts", []), "caddyfile": str(CADDYFILE)}
 
 
+def _write_private(path: Path, text: str) -> None:
+    """The Caddyfile carries Venvy's proxy secret: readable by root and Caddy's
+    group only — never by the apps' users, which could otherwise pose as the proxy."""
+    with contextlib.suppress(FileNotFoundError):
+        path.unlink()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(fd, text.encode("utf-8"))
+        try:
+            import grp
+            os.fchown(fd, 0, grp.getgrnam("caddy").gr_gid)
+            os.fchmod(fd, 0o640)
+        except (KeyError, ImportError, OSError):
+            pass        # no caddy group: Caddy runs as root and reads it as it is
+    finally:
+        os.close(fd)
+
+
 async def apply_caddy(cfg: dict) -> dict:
     """Write the Caddyfile, validate it, reload Caddy. Raises RuntimeError."""
     caddy = _which("caddy")
@@ -82,7 +99,7 @@ async def apply_caddy(cfg: dict) -> dict:
         raise RuntimeError("Caddy is not installed (installer: --with-caddy).")
     hosts = [h.strip().lower() for h in cfg.get("venvy_hosts", []) if h.strip()]
     for h in hosts:
-        if not _HOST_RE.fullmatch(h):
+        if not own_hosts.valid_hostname(h, wildcard=True):
             raise RuntimeError(f"'{h}' is not a hostname.")
     email = (cfg.get("email") or "").strip()
     if email and not re.fullmatch(r"[^@\s{}]+@[^@\s{}]+\.[^@\s{}]+", email):
@@ -94,7 +111,7 @@ async def apply_caddy(cfg: dict) -> dict:
     text = caddyfile_text(cfg)
     tmp = CADDYFILE.with_name(".Caddyfile.venvy")
     CADDYFILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_text(text)
+    await asyncio.to_thread(_write_private, tmp, text)
     r = await asyncio.to_thread(subprocess.run, [caddy, "validate", "--adapter", "caddyfile", "--config", str(tmp)],
                                 capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
@@ -114,7 +131,7 @@ def ask(domain: str) -> bool:
     """Whether Caddy may get a certificate for *domain*."""
     from venvy import routing
     d = (domain or "").strip().lower().rstrip(".")
-    if not d or not _HOST_RE.fullmatch(d) or d.startswith("*."):
+    if not own_hosts.valid_hostname(d):
         return False
     cfg = caddy_settings()
     if not cfg.get("enabled"):

@@ -606,6 +606,12 @@ def forget_app_runtime(app_id: int) -> None:
     _restart_backoff.pop(app_id, None)
     _last_port_scan.pop(app_id, None)
     _cancel_log_task(app_id)
+    container_usage.pop(app_id, None)
+    # The app's variables, as handed to docker / compose: nothing to keep them for.
+    from venvy import compose_guard
+    compose_guard.forget(runtimes.docker_name(app_id))
+    with contextlib.suppress(OSError):
+        (DOCKER_ENV_DIR / f"{app_id}.env").unlink()
     lock = _app_locks.get(app_id)
     if lock is not None and not lock.locked():
         _app_locks.pop(app_id, None)
@@ -628,8 +634,14 @@ async def _run_prestart_step(db_app, step: "runtimes.Step", log_file: Path, firs
     env_tf = None
     try:
         if step.as_venvy:
-            # docker build: the daemon is root's; the app's variables stay out of it.
-            argv = list(step.argv)
+            # docker build: the daemon is root's; the app's variables stay out of it,
+            # and a compose file runs only as checked (compose_guard).
+            from venvy import compose_guard
+            try:
+                argv = await asyncio.to_thread(compose_guard.pinned_argv, db_app, list(step.argv))
+            except compose_guard.ComposeRefused as exc:
+                _venvy_log(log_file, str(exc))
+                raise RuntimeError(str(exc))
             spawn_env = _clean_root_env()
             spawn_env["DOCKER_BUILDKIT"] = "1"
             pass_fds = ()
@@ -736,9 +748,10 @@ async def _docker_cleanup(app) -> None:
     if app.runtime == "docker":
         argv = ["docker", "rm", "-f", name]
     elif app.runtime == "compose":
-        from venvy import appspec
-        wd = appspec.work_dir(app)
-        f = runtimes.compose_file(wd, app.entrypoint)
+        # Down by project name (or with the checked copy): the app's own file is
+        # never handed to the daemon unchecked.
+        from venvy import compose_guard
+        f = compose_guard.rendered_file(name)
         argv = ["docker", "compose", "-p", name] + (["-f", str(f)] if f else []) + ["down", "--remove-orphans"]
     else:
         return
@@ -950,8 +963,8 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             _mark_start_error(session, db_app, str(exc), log_file)
         if container:
             denv = {k: v for k, v in env.items() if k not in _DOCKER_SKIP_ENV}
-            env_file = await asyncio.to_thread(_docker_env_file, db_app.id, denv)
             if spec.runtime == "docker":
+                env_file = await asyncio.to_thread(_docker_env_file, db_app.id, denv)
                 start_args = appspec.command_argv(spec.start_command, env) if spec.start_command else []
                 out = []
                 for w in cmd:
@@ -963,7 +976,14 @@ async def _start_app_process(app_id: int, session: Session) -> App:
                         out.append(w)
                 cmd = out
             else:
-                cmd = cmd[:2] + ["--env-file", str(env_file)] + cmd[2:]
+                # Its variables are put into the file when it is rendered; the
+                # daemon gets that checked copy, never the app's own file.
+                from venvy import compose_guard
+                try:
+                    cmd = await asyncio.to_thread(compose_guard.pinned_argv,
+                                                  types.SimpleNamespace(**{**vars_of(spec), "id": db_app.id}), cmd, denv)
+                except compose_guard.ComposeRefused as exc:
+                    _mark_start_error(session, db_app, str(exc), log_file)
             await _docker_cleanup(types.SimpleNamespace(**{**vars_of(spec), "id": db_app.id}))
         elif spec.runtime == "command" and not spec.start_command and spec.entrypoint:
             exe = wd / spec.entrypoint
@@ -988,7 +1008,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             db_app.last_start_time = utc_now()
             db_app.last_exit_code = None
             if not pid:
-                code = launcher.exit_code(db_app.id)
+                code = await launcher.wait_exit_code(db_app.id)
                 db_app.status = "stopped"
                 db_app.pid = None
                 db_app.pid_start = None
@@ -1087,7 +1107,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         async def _reap_process(proc: asyncio.subprocess.Process, _app_id: int, _start_id: Optional[str]):
             try:
                 rc = await proc.wait()
-                logging.info(f"App {_app_id} (PID {proc.pid}) exited with code {rc}")
+                logging.info("App %d (PID %d) exited with code %s", int(_app_id), proc.pid, rc)
 
                 def _record_exit() -> None:
                     # In a thread: a write that has to wait for SQLite's lock must
@@ -1130,7 +1150,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
 
             _trigger_supervisor()
 
-        reap_task = asyncio.create_task(_reap_process(process, app_id, pid_start))
+        reap_task = asyncio.create_task(_reap_process(process, db_app.id, pid_start))
         _running_tasks.add(reap_task)
         process = None  # ownership transferred to _reap_process
         return db_app
@@ -1527,8 +1547,10 @@ async def supervisor_task() -> None:
                 if app_row.status == "running" and not is_alive:
                     died = False
                     async with _app_lock(app_row.id):
-                        def _mark_dead(target_id: int, expected_pid: Optional[int]) -> bool:
+                        def _mark_dead(target_id: int, expected_pid: Optional[int], was_service: bool) -> bool:
                             from venvy import launcher
+                            # Before the database is opened: ExecStopPost may still be writing it.
+                            service_code = launcher.exit_code_wait(target_id) if was_service else None
                             with Session(engine) as update_session:
                                 refreshed = update_session.get(App, target_id)
                                 if (refreshed and refreshed.status == "running"
@@ -1540,7 +1562,7 @@ async def supervisor_task() -> None:
                                     refreshed.status = "stopped"
                                     refreshed.last_stop_time = utc_now()
                                     if service:
-                                        code = launcher.exit_code(target_id)
+                                        code = service_code if service_code is not None else launcher.exit_code(target_id)
                                         refreshed.last_exit_code = 1 if code is None else code
                                     elif refreshed.last_exit_code is None:
                                         refreshed.last_exit_code = 1
@@ -1550,7 +1572,9 @@ async def supervisor_task() -> None:
                                     return True
                             return False
                         try:
-                            died = await asyncio.to_thread(_mark_dead, app_row.id, app_row.pid)
+                            died = await asyncio.to_thread(
+                                _mark_dead, app_row.id, app_row.pid,
+                                bool(app_row.systemd_scope and app_row.systemd_scope.endswith(".service")))
                         except Exception as db_exc:
                             logging.error(f"Failed to update state for {app_row.name}: {db_exc}")
                     if not died:

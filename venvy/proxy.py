@@ -151,11 +151,23 @@ class DomainProxyMiddleware:
             if k == b"host":
                 host = v.decode("latin-1")
                 break
-        path = _request_path(scope) or "/"
-        rule = (await routing.match(host, path)) if host else None
+        raw_path = _request_path(scope) or "/"
+        # Matched on the normalised path, so an encoded or padded one can't
+        # slip past a path route (and its controls) to the host's "/" rule.
+        mpath = routing.normalize_path(raw_path)
+        rule = (await routing.match(host, mpath)) if host else None
         if rule is None:
             await self.app(scope, receive, send)
             return
+        if routing.path_sensitive(host, rule):
+            # The app gets the path the route was chosen with — and none it
+            # could read differently (an encoded slash or a backslash).
+            if routing.ambiguous_path(raw_path):
+                await self._refuse(scope, receive, send, 400, "That path is not allowed here.")
+                return
+            path = mpath
+        else:
+            path = raw_path
         ip = _client_ip(scope)
         hdrs = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
         if not routing.ip_allowed(rule, ip):
@@ -178,7 +190,7 @@ class DomainProxyMiddleware:
         if not ups and routing.age() > 0.5:
             # Just started (or given its port) a moment ago: look again before saying it is down.
             routing.invalidate()
-            rule = (await routing.match(host, path)) or rule
+            rule = (await routing.match(host, mpath)) or rule
             ups = [u for u in routing.upstreams(rule.app_id) if not (own_port and int(u[1]) == int(own_port))]
         upath = path
         if rule.strip and rule.prefix not in ("", "/"):
@@ -187,7 +199,8 @@ class DomainProxyMiddleware:
             if not upath.startswith("/"):
                 upath = "/" + upath
         if scope["type"] == "websocket":
-            await self._websocket(scope, receive, send, ups[0][1] if ups else None, upath)
+            await self._websocket(scope, receive, send, ups[0][1] if ups else None, upath,
+                                  drop_auth=bool(rule.users))
         else:
             await self._http_request(scope, receive, send, ups, host, rule, upath, ip, hdrs)
 
@@ -388,7 +401,8 @@ class DomainProxyMiddleware:
                     routing.inflight.pop(_pid, None)
         await _plain(send, 502, "The app did not answer.")
 
-    async def _websocket(self, scope, receive, send, port, path: Optional[str] = None) -> None:
+    async def _websocket(self, scope, receive, send, port, path: Optional[str] = None,
+                         drop_auth: bool = False) -> None:
         if not port:
             with contextlib.suppress(Exception):
                 await receive()
@@ -410,7 +424,8 @@ class DomainProxyMiddleware:
             val = v.decode("latin-1")
             if kl == "cookie":
                 cookies.append(val)
-            elif kl in ("host", "origin", "user-agent", "authorization"):
+            elif kl in ("host", "origin", "user-agent") or (kl == "authorization" and not drop_auth):
+                # A route's basic auth is Venvy's: its password is not the app's business.
                 fwd[kl] = val
         if cookies:
             fwd["cookie"] = "; ".join(cookies)

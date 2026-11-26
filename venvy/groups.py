@@ -21,6 +21,7 @@ from typing import Dict, List, Optional
 
 from sqlmodel import Session, select
 
+from venvy.config import one_line
 from venvy.db import engine
 from venvy.models import App
 
@@ -152,6 +153,12 @@ async def delete_children(ids: List[int]) -> None:
                 s.delete(row)
                 s.commit()
         process.forget_app_runtime(cid)
+        # SQLite hands a deleted row's id to the next one: nothing of this
+        # process (its health, its place in rotation) may stick to that one.
+        from venvy import monitor, routing
+        monitor.forget_app(cid)
+        routing.undrain(cid)
+        routing.inflight.pop(cid, None)
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +177,7 @@ async def start_children(app_id: int) -> None:
             with Session(engine) as s:
                 await process.start_app_process_logic(cid, s)
         except Exception as exc:
-            logging.warning("Could not start process %s of app %s: %s", cid, app_id, exc)
+            logging.warning("Could not start process %s: %s", cid, one_line(exc))
 
 
 async def stop_children(app_id: int) -> None:
@@ -181,7 +188,7 @@ async def stop_children(app_id: int) -> None:
             with Session(engine) as s:
                 await process.stop_app_process_logic(cid, s, manual=True)
         except Exception as exc:
-            logging.warning("Could not stop process %s of app %s: %s", cid, app_id, exc)
+            logging.warning("Could not stop process %s: %s", cid, one_line(exc))
     await asyncio.gather(*(one(c) for c in group_ids(app_id)))
 
 
@@ -210,6 +217,12 @@ async def _wait_ready(app_id: int, timeout: float) -> bool:
 _group_locks: Dict[int, asyncio.Lock] = {}
 
 
+def _still_replica(cid: int, app_id: int) -> bool:
+    with Session(engine) as s:
+        row = s.get(App, cid)
+        return row is not None and row.parent_app_id == app_id and row.process_kind == "replica"
+
+
 async def restart_group(app_id: int) -> None:
     """One rolling restart of an app at a time: two at once would take every copy
     out of rotation together."""
@@ -233,6 +246,7 @@ async def _restart_group(app_id: int) -> None:
         replicas = [c.id for c in children(s, app_id, "replica")]
         others = [c.id for c in children(s, app_id) if c.process_kind in ("worker", "tunnel")]
         zero = bool(row.zero_downtime)
+        rid = row.id
         wait = max(30, int(row.health_start_period or 0) + 30)
     surge = None
     if zero and not replicas:
@@ -247,11 +261,13 @@ async def _restart_group(app_id: int) -> None:
             await process.start_app_process_logic(surge, s)
         proxy.invalidate()
         if not await _wait_ready(surge, wait):
-            logging.warning("Zero-downtime restart of app %s: the new copy did not become ready; restarting in place.", app_id)
+            logging.warning("Zero-downtime restart of app %s: the new copy did not become ready; restarting in place.", rid)
     from venvy import routing
     rolling = bool(replicas or surge)
     try:
         for target in [app_id] + replicas:
+            if target != app_id and not _still_replica(target, app_id):
+                continue        # removed (instances lowered) while this restart ran
             if rolling:
                 # Out of rotation first, and let it finish what it is serving.
                 routing.drain(target)
@@ -262,6 +278,12 @@ async def _restart_group(app_id: int) -> None:
                 proxy.invalidate()
                 if rolling:
                     await _wait_ready(target, wait)
+            except Exception as exc:
+                if target == app_id:
+                    raise
+                # One replica that can't start is that replica's problem: the
+                # others still get their restart, and the app is not in error.
+                logging.warning("Rolling restart: process %s did not restart: %s", target, one_line(exc))
             finally:
                 routing.undrain(target)
                 proxy.invalidate()

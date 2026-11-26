@@ -102,7 +102,7 @@ Pick one when you create an app; it can be changed later in Settings. Venvy tell
 | Static site | a small file server on a folder (`public`, `dist`, `build`, …) | the `build` script of a package.json | – |
 | Any command / binary | the executable you name, or your start command | your build command | – |
 | Docker | `docker run` of the image you name, or of the app's Dockerfile | `docker build` | – |
-| Compose | `docker compose up` of the app's compose file | `docker compose build` / `pull` | – |
+| Compose | `docker compose up` of the app's compose file (admins only) | `docker compose build` / `pull` | – |
 
 Any app can have a **start command** instead of the runtime's default (`gunicorn app:app -b 0.0.0.0:$PORT`,
 `./server --port $PORT`, `java -Xmx512m -jar target/app.jar` …), an install, build and **release**
@@ -268,6 +268,15 @@ and devices are private, other processes are hidden, Venvy's data and other apps
 mounted at all, and a system-call filter applies. Venvy's nftables table closes the ports of private
 apps to the network and stops an app's user from connecting to another app's ports (services an app
 is bound to excepted).
+
+Compose runs through the Docker daemon, as root, so only an admin can make an app a Compose app
+(an operator, an API call or a `venvy.toml` can't switch one to it). Every compose file is checked
+before Venvy builds or starts it: it is rendered as the app's user, refused if it asks for a
+privileged container, extra capabilities, devices, host namespaces, unconfined security options,
+external volumes or networks, or host paths outside the app's folder, data folder and volumes, and
+the daemon is given that checked copy, not the app's file. Those host paths are checked when the
+file is rendered; someone who can change the app's files while it starts could still swap a folder
+for a link in between, so give a Compose app only to people you would give the Docker group.
 
 Apps share the host's network. They can reach Venvy on its port like anyone else, but can't pass
 for another client there: a connection from loopback is only taken to be cloudflared's (and its

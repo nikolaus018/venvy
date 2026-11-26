@@ -9,7 +9,7 @@ shipping and Vault."""
 import gzip, json, os, socket, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
-from harness import Sink, admin, free_port, server
+from harness import Sink, admin, free_port, login_as, server
 
 repo = sys.argv[1]
 fails = []
@@ -238,6 +238,40 @@ with server(repo, 55021) as (base, data, srv):
     check("... /api goes to the other app, prefix stripped", rr.status_code == 200 and f"PORT={p2}" in rr.text and "PATH=/users" in rr.text
           and "PREFIX=/api" in rr.text, rr.text)
     check("... the rest still goes to the first app", f"PORT={p2}" not in via("echo.test", "/apix").text)
+
+    def raw(host, target):
+        # Sent as written: an HTTP client would tidy the path up first.
+        with socket.create_connection(("127.0.0.1", int(base.rsplit(":", 1)[1])), timeout=10) as sk:
+            sk.sendall(f"GET {target} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+            data = b""
+            while True:
+                chunk = sk.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+        head, _, body = data.partition(b"\r\n\r\n")
+        return int(head.split()[1]), body.decode(errors="replace")
+    code, body = raw("echo.test", "/%61pi/users")
+    check("an encoded path still takes its path route", code == 200 and f"PORT={p2}" in body and "PATH=/users" in body, f"{code} {body[:200]}")
+    code, body = raw("echo.test", "//api/users")
+    check("... and so does a doubled slash", code == 200 and f"PORT={p2}" in body, f"{code} {body[:200]}")
+    check("an encoded slash on a path-routed host is refused", raw("echo.test", "/x/..%2Fapi/users")[0] == 400)
+    R({"hostname": "echo.test", "path_prefix": "/admin", "basic_auth": {"ann": "pa55word"}})
+    check("a path route's basic auth can't be skipped with an encoded path", raw("echo.test", "/%61dmin")[0] == 401
+          and raw("echo.test", "/x/../admin")[0] == 401)
+    # Someone who manages only this app can't take another app's hostname.
+    cl.req("POST", "/api/users", json={"username": "op1", "password": "hunter2hunter2", "role": "operator"})
+    op_id = next(u["id"] for u in cl.req("GET", "/api/users").json() if u["username"] == "op1")
+    cl.req("PUT", f"/api/users/{op_id}/access", json={"all_apps": False, "app_ids": [a2]})
+    op = login_as(base, "op1", "hunter2hunter2")
+    rr = op.req("POST", f"/api/apps/{a2}/routes", json={"hostname": "echo.test", "path_prefix": "/login"})
+    check("an operator can't route a path of another app's hostname", rr.status_code == 409, rr.text)
+    rr = op.req("PUT", f"/api/apps/{a2}", json={"domain": "echo.test"})
+    check("... nor take that hostname as the app's domain", rr.status_code == 409, rr.text)
+    rr = op.req("POST", "/api/apps/upload", data={"name": "Compose", "runtime": "compose"})
+    check("only an admin makes compose apps", rr.status_code == 403, rr.text)
+    rr = op.req("PUT", f"/api/apps/{a2}", json={"runtime": "compose"})
+    check("... or switches an app to compose", rr.status_code == 403, rr.text)
     check("alias hostname", R({"hostname": "alias.test"}).status_code == 200 and f"PORT={p2}" in via("alias.test").text)
     check("wildcard hostname", R({"hostname": "*.wild.test"}).status_code == 200 and f"PORT={p2}" in via("abc.wild.test").text)
     check("duplicate route refused", R({"hostname": "alias.test"}).status_code == 409)

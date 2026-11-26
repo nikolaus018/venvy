@@ -349,16 +349,37 @@ def _sum_from(text: str, filename: str) -> str:
     raise ToolchainError(f"No checksum for {filename}.")
 
 
+def _within(root: str, path: str) -> bool:
+    return path == root or path.startswith(root + os.sep)
+
+
+def _checked_members(tf: tarfile.TarFile, dest: Path) -> List[tarfile.TarInfo]:
+    """The members of *tf*, refusing any that would land (or point) outside
+    *dest*, and devices — what filter="data" does, for Pythons without it."""
+    root = os.path.realpath(dest)
+    members = []
+    for m in tf.getmembers():
+        if not (m.isfile() or m.isdir() or m.issym() or m.islnk()):
+            raise ToolchainError(f"Unsafe entry in archive: {m.name}")
+        target = os.path.realpath(os.path.join(root, m.name))
+        if os.path.isabs(m.name) or not _within(root, target):
+            raise ToolchainError(f"Unsafe path in archive: {m.name}")
+        if m.issym() or m.islnk():
+            base = os.path.dirname(target) if m.issym() else root
+            link = os.path.realpath(os.path.join(base, m.linkname))
+            if os.path.isabs(m.linkname) or not _within(root, link):
+                raise ToolchainError(f"Unsafe link in archive: {m.name}")
+        m.mode &= 0o755
+        members.append(m)
+    return members
+
+
 def _safe_extract_tar(archive: Path, dest: Path) -> None:
     with tarfile.open(archive) as tf:
-        try:
+        if hasattr(tarfile, "data_filter"):
             tf.extractall(dest, filter="data")
-        except TypeError:          # Python without extraction filters
-            for m in tf.getmembers():
-                target = (dest / m.name).resolve()
-                if not str(target).startswith(str(dest.resolve())) or m.issym() and os.path.isabs(m.linkname):
-                    raise ToolchainError(f"Unsafe path in archive: {m.name}")
-            tf.extractall(dest)
+        else:                      # Python without extraction filters (3.11.0 – 3.11.3)
+            tf.extractall(dest, members=_checked_members(tf, dest))
 
 
 def _safe_extract_zip(archive: Path, dest: Path) -> None:

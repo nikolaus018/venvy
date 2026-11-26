@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -126,6 +127,15 @@ def write_env_file(app_id: int, env: Dict[str, str], ids: Optional[tuple]) -> Pa
     return d / "env.json"
 
 
+def _user_name(uid: int) -> str:
+    """The user's name, as `systemctl show` and the journal then say it too."""
+    import pwd
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except (KeyError, ImportError):
+        return str(uid)
+
+
 def properties(app, *, ids: Optional[tuple], wd: Path, signal_name: str, grace: float,
                rw_paths: List[str], ro_paths: List[str], as_root: bool) -> List[str]:
     """The unit properties of an app's service."""
@@ -145,7 +155,7 @@ def properties(app, *, ids: Optional[tuple], wd: Path, signal_name: str, grace: 
     if systemd_version() >= 240:
         props.append("LogRateLimitIntervalSec=0")
     if ids and not as_root:
-        props += [f"User={ids[0]}", f"Group={ids[1]}"]
+        props += [f"User={_user_name(ids[0])}", f"Group={ids[1]}"]
     if app.memory_limit_mb:
         props.append(f"MemoryMax={app.memory_limit_mb}M")
     if app.cpu_limit_percent:
@@ -271,6 +281,22 @@ def exit_code(app_id: int) -> Optional[int]:
         sig = getattr(_signal, "SIG" + status, None) if not status.isdigit() else int(status)
         return -int(sig) if sig else -9
     return None
+
+
+def exit_code_wait(app_id: int, timeout: float = 5.0) -> Optional[int]:
+    """exit_code(), giving ExecStopPost a moment: it writes the file only
+    after the main process is gone, so a reader that noticed the exit first
+    would otherwise see nothing. Blocking."""
+    end = time.monotonic() + timeout
+    while True:
+        code = exit_code(app_id)
+        if code is not None or time.monotonic() >= end:
+            return code
+        time.sleep(0.1)
+
+
+async def wait_exit_code(app_id: int, timeout: float = 5.0) -> Optional[int]:
+    return await asyncio.to_thread(exit_code_wait, app_id, timeout)
 
 
 # ---------------------------------------------------------------------------

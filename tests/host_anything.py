@@ -21,7 +21,14 @@ def t(name, fn):
         fn(); print(name + "=open", flush=True)
     except Exception as e:
         print(name + "=closed", flush=True)
-t("APPS_DIR", lambda: os.listdir("/var/lib/venvy/apps"))
+def other_apps():
+    # Only the way down to its own folder may be there, nothing beside it.
+    here = os.getcwd()
+    seen = [n for n in os.listdir(os.path.dirname(here)) if n != os.path.basename(here)]
+    seen += [n for n in os.listdir("/var/lib/venvy/apps") if not here.startswith("/var/lib/venvy/apps/" + n + "/")]
+    if not seen:
+        raise PermissionError("nothing else visible")
+t("APPS_DIR", other_apps)
 t("SHADOW", lambda: open("/etc/shadow").read(1))
 t("USR_WRITE", lambda: open("/usr/venvy-probe", "w"))
 t("VENVY_KEY", lambda: open("/var/lib/venvy/.venvy_key").read(1))

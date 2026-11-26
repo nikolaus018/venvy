@@ -54,11 +54,14 @@
 
         function _btn(label, call, kind = 'btn-ghost', needs = 'operator') {
             const attr = needs === 'admin' ? 'data-requires-admin' : (needs === 'operator' ? 'data-requires-operator' : '');
-            return `<button class="${kind} px-3 py-1.5 text-xs font-semibold" ${attr} data-on-click="${call}">${_H(label)}</button>`;
+            return `<button class="${kind} px-3 py-1.5 text-xs font-semibold" ${attr} data-on-click="${_H(call)}">${_H(label)}</button>`;
         }
 
-        const _ha = (name, arg = '') => `hostingAction('${name}', '${String(arg).replace(/'/g, "\\'")}')`;
-        const _pa = (name, arg = '') => `platformAction('${name}', '${String(arg).replace(/'/g, "\\'")}')`;
+        // A string literal for a data-on-* handler: backslashes first, then quotes
+        // (the attribute itself is HTML-escaped by _btn).
+        const _jsq = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        const _ha = (name, arg = '') => `hostingAction('${_jsq(name)}', '${_jsq(arg)}')`;
+        const _pa = (name, arg = '') => `platformAction('${_jsq(name)}', '${_jsq(arg)}')`;
 
         async function _toastResult(r, ok = 'Saved') {
             if (r.ok) showToast(ok, 'success');

@@ -384,6 +384,118 @@ check("Procfile -> workers (web skipped)", sorted(w.process_name for w in worker
 check("a worker runs with its app's settings and its own command", eff.app_dir == parent.app_dir and eff.start_command in ("celery", "celery beat")
       and eff.health_type == "none")
 
+# ── paths a route is chosen with ────────────────────────────────────────────
+n = routing.normalize_path
+check("path normalised: escapes, dots, slashes",
+      n("/%61dmin") == "/admin" and n("//admin") == "/admin" and n("/x/../admin/") == "/admin/"
+      and n("/a/./b") == "/a/b" and n("/") == "/" and n("/%2e%2e/admin") == "/admin" and n("/caf%c3%a9") == "/caf%C3%A9")
+routing._build()
+check("an encoded path can't miss a path route", routing.match_sync("a.example.com", n("/%61pi/users")).app_id == ids[1]
+      and routing.match_sync("a.example.com", n("//api")).app_id == ids[1])
+check("path-routed hosts are path sensitive", routing.path_sensitive("a.example.com", routing.match_sync("a.example.com", "/"))
+      and not routing.path_sensitive("x.wild.example.com", routing.match_sync("x.wild.example.com", "/")))
+check("encoded slashes and backslashes are ambiguous", routing.ambiguous_path("/api%2F..%2Fx") and routing.ambiguous_path("/a\\b")
+      and not routing.ambiguous_path("/api/x?q=%2F"))
+with Session(engine) as s:
+    check("hostname owners: domain and routes", routing.hostname_apps(s, "a.example.com") == {ids[0], ids[1]}
+          and routing.hostname_apps(s, "nobody.example.com") == set())
+
+# ── hostnames (no backtracking pattern) ─────────────────────────────────────
+from venvy import own_hosts  # noqa: E402
+vh = own_hosts.valid_hostname
+check("hostnames checked label by label", vh("app.example.com") and vh("*.example.com", wildcard=True)
+      and not vh("*.example.com") and not vh("example") and not vh("-a.example.com") and not vh("a..b.com")
+      and not vh("0." * 3000 + "!"))
+t0 = time.monotonic()
+vh("0." * 120 + "0!", wildcard=True)
+check("hostname check is quick on hostile input", time.monotonic() - t0 < 0.05)
+
+# ── compose files ───────────────────────────────────────────────────────────
+from venvy import compose_guard as cg  # noqa: E402
+root = WORK / "capp"
+(root / "sub").mkdir(parents=True)
+roots = [Path(os.path.realpath(root))]
+
+
+def refused(project):
+    try:
+        cg.check(project, roots)
+        return False
+    except cg.ComposeRefused:
+        return True
+
+
+ok_project = {"services": {"web": {"image": "nginx", "volumes": [{"type": "bind", "source": str(root / "sub"), "target": "/x"},
+                                                                  {"type": "volume", "source": "d", "target": "/d"}],
+                                   "build": {"context": str(root), "dockerfile": "Dockerfile"}, "cap_add": ["NET_BIND_SERVICE"],
+                                   "security_opt": ["no-new-privileges:true"]}},
+              "volumes": {"d": {}}}
+check("a contained compose project passes", not refused(ok_project))
+os.symlink("/etc", root / "etc-link")
+bad = [
+    {"services": {"x": {"privileged": True}}},
+    {"services": {"x": {"cap_add": ["SYS_ADMIN"]}}},
+    {"services": {"x": {"devices": ["/dev/sda:/dev/sda"]}}},
+    {"services": {"x": {"network_mode": "host"}}},
+    {"services": {"x": {"pid": "host"}}},
+    {"services": {"x": {"ipc": "container:other"}}},
+    {"services": {"x": {"security_opt": ["seccomp:unconfined"]}}},
+    {"services": {"x": {"volumes": [{"type": "bind", "source": "/", "target": "/host"}]}}},
+    {"services": {"x": {"volumes": [{"type": "bind", "source": str(root / "etc-link"), "target": "/e"}]}}},
+    {"services": {"x": {"volumes": [{"type": "bind", "source": "/var/run/docker.sock", "target": "/s"}]}}},
+    {"services": {"x": {"build": {"context": "/"}}}},
+    {"services": {"x": {"build": {"context": str(root), "ssh": ["default"]}}}},
+    {"services": {"x": {"build": {"context": str(root), "dockerfile": "/etc/shadow"}}}},
+    {"services": {"x": {"env_file": [{"path": "/var/lib/venvy/.venvy_key"}]}}},
+    {"services": {"x": {}}, "volumes": {"v": {"driver_opts": {"type": "none", "o": "bind", "device": "/etc"}}}},
+    {"services": {"x": {}}, "volumes": {"v": {"external": True}}},
+    {"services": {"x": {}}, "networks": {"n": {"driver": "macvlan"}}},
+    {"services": {"x": {}}, "secrets": {"s": {"file": "/etc/shadow"}}},
+]
+check("compose escapes refused", all(refused(b) for b in bad), str([b for b in bad if not refused(b)]))
+
+# ── toolchain archives on Pythons without tar filters ───────────────────────
+from venvy import toolchains as tcx  # noqa: E402
+
+
+def tar_with(*members):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for name, kind, link in members:
+            ti = tarfile.TarInfo(name)
+            if kind == "sym":
+                ti.type, ti.linkname = tarfile.SYMTYPE, link
+            elif kind == "dir":
+                ti.type = tarfile.DIRTYPE
+            tf.addfile(ti, io.BytesIO(b"") if kind == "file" else None)
+    buf.seek(0)
+    return tarfile.open(fileobj=buf)
+
+
+dest = WORK / "tdest"
+dest.mkdir()
+
+
+def unsafe(*members):
+    try:
+        tcx._checked_members(tar_with(*members), dest)
+        return False
+    except tcx.ToolchainError:
+        return True
+
+
+check("tar fallback: plain archive passes", not unsafe(("bin", "dir", ""), ("bin/node", "file", ""), ("lib", "sym", "bin")))
+check("tar fallback: escapes refused", unsafe(("../x", "file", "")) and unsafe(("x", "sym", "../../..")) and unsafe(("y", "sym", "/etc"))
+      and unsafe(("bin/z", "sym", "../../z")) and unsafe(("../" + dest.name + "2/x", "file", "")))
+
+check("monitor targets: no metadata address, this host only for admins",
+      telemetry.clean_target("https://example.com/health") and telemetry.clean_target("tcp://127.0.0.1:5432")
+      and raises(telemetry.clean_target, "http://169.254.169.254/latest/meta-data/")
+      and raises(telemetry.clean_target, "tcp://127.0.0.1:5432", local_ok=False)
+      and raises(telemetry.clean_target, "http://localhost:8080/", local_ok=False)
+      and raises(telemetry.clean_target, "tcp://[::ffff:127.0.0.1]:22", local_ok=False)
+      and telemetry.clean_target("https://example.com/", local_ok=False))
+
 shutil.rmtree(WORK, ignore_errors=True)
 print("FAILED" if fails else "ALL OK", fails)
 sys.exit(1 if fails else 0)

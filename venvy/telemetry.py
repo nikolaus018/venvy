@@ -182,10 +182,34 @@ async def push_otlp(http: aiohttp.ClientSession) -> None:
 _TARGET_RE = re.compile(r"(https?://\S+|tcp://[A-Za-z0-9.\-\[\]:]+:\d{1,5})")
 
 
-def clean_target(t: str) -> str:
+def target_host(t: str) -> str:
+    import urllib.parse
+    if t.startswith("tcp://"):
+        return t[6:].rpartition(":")[0].strip("[]").lower()
+    return (urllib.parse.urlsplit(t).hostname or "").lower()
+
+
+def clean_target(t: str, local_ok: bool = True) -> str:
+    """A monitor target. Never a cloud-metadata / link-local address; with
+    *local_ok* False (not an admin) not this host either — the check runs as
+    Venvy, past the firewall that keeps apps off each other's ports."""
+    import ipaddress
+    from venvy.notify import _check_safe_outbound_host
     t = (t or "").strip()
     if not _TARGET_RE.fullmatch(t) or len(t) > 2000:
         raise ValueError("The target must be an http(s):// URL or tcp://host:port.")
+    host = target_host(t)
+    _check_safe_outbound_host(host, "target")
+    if not local_ok:
+        local = host in ("localhost", "localhost.localdomain") or host.endswith(".localhost")
+        try:
+            ip = ipaddress.ip_address(host)
+            ip = ip.ipv4_mapped or ip if isinstance(ip, ipaddress.IPv6Address) else ip
+            local = local or ip.is_loopback or ip.is_unspecified
+        except ValueError:
+            pass
+        if local:
+            raise ValueError("Only an admin can monitor addresses on this host.")
     return t
 
 

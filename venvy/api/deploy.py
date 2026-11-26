@@ -384,8 +384,8 @@ async def deploy_webhook(app_id: int, request: Request):
         from venvy import previews
         try:
             res = await previews.handle_push(app_id, pushed, deleted=bool(skip and "deleted" in skip))
-        except ValueError as exc:
-            return {"ok": True, "deployed": False, "reason": str(exc)}
+        except ValueError:
+            return {"ok": True, "deployed": False, "reason": "no preview could be made for this branch"}
         audit_log("webhook", "app_preview", f"app '{name}' (id={app_id}): {pushed[:100]} {res}")
         return {"ok": True, **res}
     if pushed is not None and pushed != branch:

@@ -133,6 +133,11 @@ def _make_tz_aware(dt: datetime.datetime) -> datetime.datetime:
 _VENVY_BOOT_TIME = utc_now()
 
 
+def one_line(value) -> str:
+    """*value* as text for a log line: no line breaks that could forge another line."""
+    return str(value).replace("\r", " ").replace("\n", " ")
+
+
 def venvy_port() -> int:
     """The port Venvy itself listens on."""
     try:

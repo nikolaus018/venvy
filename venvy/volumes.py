@@ -59,12 +59,13 @@ def apply_acl(volume: Volume) -> None:
     setfacl = shutil.which("setfacl", path="/usr/sbin:/usr/bin:/sbin:/bin")
     if not setfacl:
         raise RuntimeError("setfacl is not installed (apt-get install acl): volumes can't be shared under per-app users.")
-    cmds = [[setfacl, "-R", "-b", str(p)]]
+    # -P: never follow a link an app put in the volume (it would carry the ACL out).
+    cmds = [[setfacl, "-R", "-P", "-b", str(p)]]
     for app_id, ro in _attached(volume.id):
         perm = "rX" if ro else "rwX"
         user = _app_username(app_id)
-        cmds.append([setfacl, "-R", "-m", f"u:{user}:{perm}", str(p)])
-        cmds.append([setfacl, "-R", "-d", "-m", f"u:{user}:{perm}", str(p)])
+        cmds.append([setfacl, "-R", "-P", "-m", f"u:{user}:{perm}", str(p)])
+        cmds.append([setfacl, "-R", "-P", "-d", "-m", f"u:{user}:{perm}", str(p)])
     for argv in cmds:
         r = subprocess.run(argv, capture_output=True, timeout=300)
         if r.returncode != 0:

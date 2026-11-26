@@ -31,6 +31,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -119,6 +120,16 @@ def _users(raw: str) -> Dict[str, str]:
     return {}
 
 
+def hostname_apps(session: Session, host: str, skip_route: Optional[int] = None) -> set:
+    """The ids of the apps *host* already leads to: as their domain, through a
+    route (other than *skip_route*) or through the Cloudflare tunnel."""
+    host = (host or "").lower()
+    ids = {a.id for a in session.exec(select(App).where(App.domain == host)).all()}
+    ids |= {r.app_id for r in session.exec(select(Route).where(Route.hostname == host)).all() if r.id != skip_route}
+    ids |= {c.app_id for c in session.exec(select(CfRoute).where(CfRoute.hostname == host)).all() if c.app_id}
+    return ids
+
+
 def _build() -> None:
     global _rules, _wild, _targets, _built_at
     from venvy import monitor
@@ -179,6 +190,53 @@ async def _ensure() -> None:
             await asyncio.to_thread(_build)
         except Exception as exc:
             logging.warning("Could not read the routes: %s", exc)
+
+
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+_PCT_RE = re.compile(r"%([0-9A-Fa-f]{2})")
+_AMBIGUOUS_RE = re.compile(r"%2[Ff]|%5[Cc]|\\")
+
+
+def normalize_path(raw: str) -> str:
+    """The path rules are matched against: percent-escapes of unreserved
+    characters decoded (others upper-cased), '.' and '..' segments resolved,
+    repeated slashes merged — so '/%61dmin', '//admin' or '/x/../admin' can't
+    miss an '/admin' route that the app would then serve anyway."""
+    def dec(m) -> str:
+        ch = chr(int(m.group(1), 16))
+        return ch if ch in _UNRESERVED else "%" + m.group(1).upper()
+    p = _PCT_RE.sub(dec, (raw or "/").split("?", 1)[0])
+    segs: List[str] = []
+    for seg in p.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if segs:
+                segs.pop()
+            continue
+        segs.append(seg)
+    out = "/" + "/".join(segs)
+    if out != "/" and (p.endswith("/") or p.endswith("/.") or p.endswith("/..")):
+        out += "/"
+    return out
+
+
+def ambiguous_path(raw: str) -> bool:
+    """An encoded slash or a backslash, which an app may turn into a path
+    separator after Venvy has picked the route."""
+    return bool(_AMBIGUOUS_RE.search((raw or "").split("?", 1)[0]))
+
+
+def path_sensitive(host: str, rule: "Rule") -> bool:
+    """Whether the path decides where requests for *host* go (path routes):
+    then the app must be sent the path the route was chosen with."""
+    if rule.prefix not in ("", "/"):
+        return True
+    name = own_hosts.host_name(host)
+    lst = _rules.get(name)
+    if lst is None:
+        lst = next((v for s, v in _wild if name.endswith("." + s) and name != s), [])
+    return len(lst) > 1
 
 
 def _prefix_match(path: str, prefix: str) -> bool:

@@ -180,10 +180,12 @@ def _bool(name: str, v) -> bool:
     raise ValueError(f"{name} must be true or false.")
 
 
-def apply_spec_fields(row: App, fields: Dict[str, object]) -> List[str]:
+def apply_spec_fields(row: App, fields: Dict[str, object], admin: bool = False) -> List[str]:
     """Validate and set app settings by field name — from the API (PUT
     /apps/{id}) and from a repository's venvy.toml. Raises ValueError with a
-    message for the user. Returns the names of the fields that changed."""
+    message for the user. Returns the names of the fields that changed.
+    *admin*: the change comes from an admin (only one may pick a runtime that
+    runs as root, see runtimes.ROOT_RUNTIMES); a venvy.toml never is."""
     from venvy import appspec, secrets_ext
     changed: List[str] = []
 
@@ -197,6 +199,8 @@ def apply_spec_fields(row: App, fields: Dict[str, object]) -> List[str]:
         if rt not in runtimes.RUNTIMES:
             raise ValueError(runtimes.RUNTIME_ERROR)
         if rt != row.runtime:
+            if rt in runtimes.ROOT_RUNTIMES and not admin:
+                raise ValueError(runtimes.ROOT_RUNTIME_ERROR)
             old = runtimes.RUNTIMES.get(row.runtime)
             if old is not None and old.entry == runtimes.FIXED:
                 row.entrypoint = ""
@@ -430,6 +434,8 @@ async def upload_app(
         raise HTTPException(400, str(exc))
     def _check_runtime(rt: str, ep: str, ver: str):
         version = None
+        if rt in runtimes.ROOT_RUNTIMES and user.role != "admin":
+            raise HTTPException(403, runtimes.ROOT_RUNTIME_ERROR)
         try:
             ep_clean = runtimes.clean_entrypoint(rt, ep)
             if rt == "python":
@@ -500,7 +506,7 @@ async def upload_app(
         except HTTPException:
             await asyncio.to_thread(shutil.rmtree, app_dir, ignore_errors=True)
             raise
-        logging.info(f"New app '{name}': runtime {runtime} ({why})")
+        logging.info("New app: runtime %s (%s)", runtime, why)
 
     venv_path = app_dir / "venv"
     new_app = App(
@@ -616,7 +622,9 @@ async def control_app(
             logging.error(f"Background start failed for app {app_id}: {exc}")
             with Session(engine) as s:
                 a = s.get(App, app_id)
-                if a:
+                # A failed start has marked itself; an app that is running (one
+                # of its processes failed) must not be taken out of the proxy.
+                if a and not (a.pid and a.status == "running"):
                     a.status = "error"
                     s.add(a)
                     s.commit()
@@ -652,7 +660,7 @@ async def control_app(
             logging.error(f"Background restart failed for app {app_id}: {exc}")
             with Session(engine) as s:
                 a = s.get(App, app_id)
-                if a:
+                if a and not (a.pid and a.status == "running"):
                     a.status = "error"
                     s.add(a)
                     s.commit()
@@ -768,6 +776,8 @@ async def update_app(
         if req.runtime not in runtimes.RUNTIMES:
             raise HTTPException(400, runtimes.RUNTIME_ERROR)
         if req.runtime != app_row.runtime:
+            if req.runtime in runtimes.ROOT_RUNTIMES and user.role != "admin":
+                raise HTTPException(403, runtimes.ROOT_RUNTIME_ERROR)
             if runtimes.RUNTIMES[app_row.runtime if app_row.runtime in runtimes.RUNTIMES else "python"].entry == runtimes.FIXED:
                 app_row.entrypoint = ""     # the old runtime's main.rs means nothing to the new one
             app_row.runtime = req.runtime
@@ -818,6 +828,15 @@ async def update_app(
                 if has_app_access(session, user, other.id):
                     raise HTTPException(409, f"{new_domain} already belongs to '{other.name}'.")
                 raise HTTPException(409, f"{new_domain} is already in use by another app.")
+            # Another app's route on this hostname: taking the hostname as a domain
+            # takes its requests too — unless it is a path route of an app the
+            # same user manages (example.com -> this app, example.com/api -> that one).
+            from venvy.models import CfRoute, Route
+            for r in session.exec(select(Route).where(Route.hostname == new_domain, Route.app_id != app_id)).all():
+                if not has_app_access(session, user, r.app_id) or r.path_prefix in ("", "/"):
+                    raise HTTPException(409, f"{new_domain} is already routed to another app (Hosting → Routes).")
+            if session.exec(select(CfRoute).where(CfRoute.hostname == new_domain, CfRoute.app_id != app_id)).first():
+                raise HTTPException(409, f"{new_domain} is published for another app through the tunnel.")
         if new_domain != app_row.domain:
             audit_log(user.username, "app_domain_change", f"app '{app_row.name}' (id={app_id}): {new_domain or 'removed'}")
         app_row.domain = new_domain
@@ -837,7 +856,7 @@ async def update_app(
     if app_row.parent_app_id and set(spec_fields) - {"start_command"}:
         raise HTTPException(400, "A worker or replica runs with the settings of its app — change them there.")
     try:
-        changed = apply_spec_fields(app_row, spec_fields)
+        changed = apply_spec_fields(app_row, spec_fields, admin=user.role == "admin")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     if req.preview_env is not None:
@@ -1230,7 +1249,11 @@ async def _run_app_tool(app_row: App, argv: List[str], timeout: int, what: str,
         env = _app_tool_env(app_row)
         env.update(env_extra or {})
         if as_venvy:
-            spawn = list(argv)
+            from venvy import compose_guard
+            try:
+                spawn = await asyncio.to_thread(compose_guard.pinned_argv, app_row, list(argv))
+            except compose_guard.ComposeRefused as exc:
+                raise HTTPException(400, str(exc))
             env = {**_clean_root_env(), "PATH": runtimes.tool_search_path(), "DOCKER_BUILDKIT": "1"}
         else:
             spawn = _as_app_user(app_row, argv)

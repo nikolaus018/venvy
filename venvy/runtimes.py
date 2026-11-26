@@ -188,6 +188,14 @@ RUNTIMES: Dict[str, Runtime] = {r.key: r for r in (
 
 RUNTIME_KEYS: Tuple[str, ...] = tuple(RUNTIMES)
 RUNTIME_ERROR = "runtime must be one of: " + ", ".join(RUNTIME_KEYS)
+
+# Runtimes whose processes run as root through the Docker daemon from files
+# the app controls (a compose file can ask for anything the daemon can do):
+# only an admin may give an app one of these. compose_guard checks every file
+# anyway; docker apps are run by Venvy's own fixed docker run line instead.
+ROOT_RUNTIMES = ("compose",)
+ROOT_RUNTIME_ERROR = ("Only an admin can make an app a Docker Compose app: compose runs through the Docker "
+                      "daemon, as root.")
 _ENTRY_EXAMPLE = {"node": "server.js", "bun": "index.ts", "deno": "main.ts", "php": "index.php", "static": "dist",
                   "command": "./server", "java": "target/app.jar"}
 _STATIC_DOCROOTS = ("public", "dist", "build", "site", "www", "html")

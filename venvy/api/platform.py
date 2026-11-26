@@ -20,13 +20,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from venvy import (appbackup, appspec, deploy, edge, federation, firewall, forwards, groups, kv, logship, proxy,
-                   replication, routing, runtimes, scheduler, secrets_ext, services, telemetry, toolchains, volumes)
+from venvy import (appbackup, appspec, deploy, edge, federation, firewall, forwards, groups, kv, logship, own_hosts,
+                   proxy, replication, routing, runtimes, scheduler, secrets_ext, services, telemetry, toolchains,
+                   volumes)
 from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
 from venvy.auth import (check_admin, check_ip_allowlist, get_current_user, get_download_user, has_app_access,
                         rate_limit_mutations, require_app_access, require_operator)
-from venvy.config import APPS_BASE_DIR, DATA_DIR, utc_now
+from venvy.config import APPS_BASE_DIR, DATA_DIR, one_line, utc_now
 from venvy.crypto import _encrypt_secret
 from venvy.db import engine, get_session
 from venvy.jobs import _start_job
@@ -37,7 +38,6 @@ router = APIRouter(prefix="/api", tags=["platform"],
                    dependencies=[Depends(check_ip_allowlist), Depends(require_app_access)])
 public = APIRouter(tags=["public"])
 
-_HOST_RE = re.compile(r"(?=.{1,253}\Z)(\*\.)?([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z")
 _HEADER_RE = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~\-]{1,64}")
 
 
@@ -230,10 +230,10 @@ def _route_json(r: Route) -> dict:
     return d
 
 
-def _clean_route(session: Session, req: RouteReq, app_id: int, route_id: Optional[int], request: Request) -> dict:
-    from venvy import own_hosts
+def _clean_route(session: Session, req: RouteReq, app_id: int, route_id: Optional[int], request: Request,
+                 user: User) -> dict:
     host = req.hostname.strip().lower().rstrip(".")
-    if not _HOST_RE.fullmatch(host):
+    if not own_hosts.valid_hostname(host, wildcard=True):
         raise HTTPException(400, "The hostname must look like app.example.com or *.example.com.")
     if own_hosts.is_own(host) or host == own_hosts.host_name(request.headers.get("host", "")):
         raise HTTPException(400, "That is an address Venvy itself is reached under.")
@@ -257,6 +257,11 @@ def _clean_route(session: Session, req: RouteReq, app_id: int, route_id: Optiona
     owner = session.exec(select(App).where(App.domain == host)).first()
     if owner and owner.id != app_id and prefix == "/":
         raise HTTPException(409, f"{host} is the domain of another app.")
+    # Any path on a hostname another app is served under would take its
+    # requests (the longest prefix wins): only for someone who manages that app too.
+    for other_id in routing.hostname_apps(session, host, skip_route=route_id):
+        if other_id != app_id and not has_app_access(session, user, other_id):
+            raise HTTPException(409, f"{host} is used by an app you can't manage.")
     for net in [c.strip() for c in req.ip_allow.split(",") if c.strip()]:
         import ipaddress
         try:
@@ -293,7 +298,7 @@ def add_route(app_id: int, req: RouteReq, request: Request, session: Session = D
     a = _main(session, app_id)
     if len(session.exec(select(Route).where(Route.app_id == app_id)).all()) >= 100:
         raise HTTPException(400, "An app can have 100 routes at most.")
-    r = Route(app_id=app_id, **_clean_route(session, req, app_id, None, request))
+    r = Route(app_id=app_id, **_clean_route(session, req, app_id, None, request, user))
     session.add(r)
     session.commit()
     session.refresh(r)
@@ -309,7 +314,7 @@ def put_route(app_id: int, route_id: int, req: RouteReq, request: Request, sessi
     r = session.get(Route, route_id)
     if not r or r.app_id != app_id:
         raise HTTPException(404)
-    for k, v in _clean_route(session, req, app_id, route_id, request).items():
+    for k, v in _clean_route(session, req, app_id, route_id, request, user).items():
         setattr(r, k, v)
     session.add(r)
     session.commit()
@@ -788,12 +793,12 @@ def _mon_json(m: UrlMonitor) -> dict:
     return d
 
 
-def _clean_mon(req: MonitorReq) -> dict:
+def _clean_mon(req: MonitorReq, user: User) -> dict:
     name = req.name.strip()
     if not name or len(name) > 60 or any(ord(c) < 32 for c in name):
         raise HTTPException(400, "A monitor needs a name (up to 60 characters).")
     try:
-        target = telemetry.clean_target(req.target)
+        target = telemetry.clean_target(req.target, local_ok=user.role == "admin")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     if not 10 <= req.interval <= 86400 or not 1 <= req.timeout <= 120 or not 0 <= req.expect_status <= 599:
@@ -812,7 +817,7 @@ def add_monitor(req: MonitorReq, session: Session = Depends(get_session), user: 
                 _rl: None = Depends(rate_limit_mutations)):
     if len(session.exec(select(UrlMonitor)).all()) >= 200:
         raise HTTPException(400, "200 monitors at most.")
-    m = UrlMonitor(**_clean_mon(req))
+    m = UrlMonitor(**_clean_mon(req, user))
     session.add(m)
     session.commit()
     session.refresh(m)
@@ -826,7 +831,7 @@ def put_monitor(mid: int, req: MonitorReq, session: Session = Depends(get_sessio
     m = session.get(UrlMonitor, mid)
     if not m:
         raise HTTPException(404)
-    for k, v in _clean_mon(req).items():
+    for k, v in _clean_mon(req, user).items():
         setattr(m, k, v)
     session.add(m)
     session.commit()
@@ -937,10 +942,12 @@ async def publish(app_id: int, req: PublishReq, session: Session = Depends(get_s
             raise HTTPException(400, str(exc))
     elif req.provider == "ngrok":
         dom = req.domain.strip().lower()
-        if not _HOST_RE.fullmatch(dom) or dom.startswith("*."):
+        if not own_hosts.valid_hostname(dom):
             raise HTTPException(400, "Give the ngrok domain (e.g. myapp.ngrok.app).")
         if not edge.ngrok_token():
             raise HTTPException(400, "Set the ngrok authtoken under System → Edge first.")
+        if any(o != app_id for o in routing.hostname_apps(session, dom)):
+            raise HTTPException(409, f"{dom} is already used by another app.")
         if not session.exec(select(Route).where(Route.hostname == dom)).first() and a.domain != dom:
             session.add(Route(app_id=app_id, hostname=dom, path_prefix="/"))
             session.commit()
@@ -987,6 +994,10 @@ def edge_ask(request: Request, domain: str = ""):
     Answered only to this host."""
     client = (request.client.host if request.client else "") or ""
     if client not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        raise HTTPException(403)
+    # Caddy and cloudflared pass visitors on from loopback too: what they
+    # forward carries their headers, Caddy's own question does not.
+    if any(h in request.headers for h in ("x-forwarded-for", "cf-connecting-ip", "x-venvy-proxy-secret", "forwarded")):
         raise HTTPException(403)
     if edge.ask(domain):
         return PlainTextResponse("ok")
@@ -1214,13 +1225,14 @@ async def deploy_artifact(app_id: int, file: UploadFile = File(...), start: bool
         dest.unlink(missing_ok=True)
         raise HTTPException(400, f"That is not a usable .tar.gz: {exc}")
     username = user.username
+    a_id = a.id
 
     async def go() -> None:
         try:
             await deploy.run_deploy(app_id, username, "artifact", start_if_stopped=start, artifact=dest)
         except deploy.DeployError as exc:
             dest.unlink(missing_ok=True)
-            logging.warning(f"Artifact deploy of app {app_id} not started: {exc}")
+            logging.warning("Artifact deploy of app %s not started: %s", a_id, one_line(exc))
     from venvy.api.deploy import _start_background
     _start_background(go())
     audit_log(username, "app_deploy_artifact", f"app '{a.name}' (id={app_id}): {size} bytes")

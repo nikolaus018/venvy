@@ -110,13 +110,20 @@ async def handle_push(parent_id: int, branch: str, deleted: bool) -> dict:
         _running_tasks.add(t)
         t.add_done_callback(_running_tasks.discard)
         return {"preview": p.id, "deleted": True}
+    if find(parent_id, branch) is None:
+        with Session(engine) as s:
+            count = len(s.exec(select(App).where(App.preview_of == parent_id)).all())
+        if count >= MAX_PREVIEWS:
+            return {"preview": None, "deployed": False,
+                    "reason": f"This app already has {count} previews (the most allowed)."}
     pid = await ensure(parent_id, branch)
 
     async def go() -> None:
+        from venvy.config import one_line
         try:
-            await deploy.run_deploy(pid, "webhook", f"preview {branch}", start_if_stopped=True)
+            await deploy.run_deploy(pid, "webhook", "preview " + one_line(branch), start_if_stopped=True)
         except deploy.DeployError as exc:
-            logging.warning("Preview deploy of %s failed to start: %s", branch, exc)
+            logging.warning("Preview deploy of app %s failed to start: %s", pid, one_line(exc))
     t = asyncio.ensure_future(go())
     _running_tasks.add(t)
     t.add_done_callback(_running_tasks.discard)

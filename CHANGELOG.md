@@ -27,6 +27,7 @@ Venvy now hosts anything that runs on Linux, not only the ten runtimes' default 
 - **Observability:** log shipping to syslog, journald, Loki or any HTTP endpoint; Prometheus `/metrics` and OTLP push; URL/TCP monitors; uptime history; a public status page; a heartbeat to an external dead-man's switch.
 - **Operations:** one-off commands as an app, host-level scheduled jobs, managing other Venvy servers from one, runtime detection on create (`runtime=auto`).
 - Installer: `--with-docker`, `--with-caddy`, `--with-uv`, `--with-pnpm`, `--with-maven`, `--with-sops`, `--with-tailscale`, `--with-ngrok`, `--with-everything`; `nftables` and `acl` are always installed.
+- Docker Compose is admin-only (it runs through the Docker daemon, as root), and every compose file is rendered as the app's user, checked (no privileged containers, extra capabilities, devices, host namespaces or host paths outside the app) and run from that checked copy.
 - Changed: deploying an app without a repository or build command now rebuilds it as it is instead of being refused; every web process gets a `$PORT` (followed to the port it really listens on if it ignores it); the Rust entrypoint is the binary name (was the fixed `main.rs`), Go's is the package (was `main.go`).
 
 ## v4.9.5
