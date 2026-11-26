@@ -238,5 +238,12 @@ check("preview domain: one in use by an app gets another name", d1 and d1 != "ap
 check("preview domain: one in use by a route too", d2 and d2 != "docs.prev.example.com", str(d2))
 check("preview domain: a free one is kept", d3 == "feat-x.prev.example.com", str(d3))
 
+# ── finding 14: Venvy's own docker calls get its own home ───────────────────
+from venvy.isolation import _clean_root_env  # noqa: E402
+import pwd  # noqa: E402
+want_home = "/root" if os.geteuid() == 0 else pwd.getpwuid(os.geteuid()).pw_dir
+check("the environment for Venvy's own docker calls has its user's home", _clean_root_env()["HOME"] == want_home,
+      _clean_root_env()["HOME"])
+
 print("FAILED" if fails else "ALL OK", fails)
 sys.exit(1 if fails else 0)

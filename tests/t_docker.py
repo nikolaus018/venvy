@@ -121,6 +121,8 @@ try:
         st = deploy(cl, app_id, 200, "V1")
         log = "\n".join(st.get("log") or [])
         check("a compose app deploys from an artifact", st["status"] == "ok", log[-1500:])
+        if st["status"] != "ok":
+            raise SystemExit("FAILED " + str(fails))
         app = cl.status(app_id)
         port = app["port"]
         check("... and is running on a port", app["status"] == "running" and port, str(app)[:300])

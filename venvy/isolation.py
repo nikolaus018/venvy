@@ -236,8 +236,21 @@ def _clean_root_env() -> Dict[str, str]:
     return {
         "PATH": _SYSTEM_BIN_PATH,
         "LANG": os.environ.get("LANG", "C.UTF-8"),
-        "HOME": "/root",
+        "HOME": _own_home(),
     }
+
+
+def _own_home() -> str:
+    """The home of the user Venvy runs as: /root as root. Not root (a
+    --shared-user install), the docker CLI that Venvy runs itself needs its
+    own home for its config and CLI plugins (compose), not root's."""
+    if os.geteuid() == 0:
+        return "/root"
+    try:
+        import pwd
+        return pwd.getpwuid(os.geteuid()).pw_dir or "/"
+    except (ImportError, KeyError):
+        return "/"
 
 
 def _prepare_exec_env(env: Dict[str, str]):
