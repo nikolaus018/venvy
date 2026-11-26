@@ -396,9 +396,14 @@ async def _follow(app_id: int, log_file: Path, write) -> None:
 
 
 def forget(app_id: int, log_file: Optional[Path] = None) -> None:
+    app_id = int(app_id)
+    exit_file = os.path.normpath(os.path.join(str(EXIT_DIR), unit_name(app_id)))
+    env_dir = os.path.normpath(os.path.join(str(ENV_DIR), str(app_id)))
+    if not exit_file.startswith(str(EXIT_DIR) + os.sep) or not env_dir.startswith(str(ENV_DIR) + os.sep):
+        return
     with contextlib.suppress(OSError):
-        (EXIT_DIR / unit_name(app_id)).unlink()
-    shutil.rmtree(ENV_DIR / str(app_id), ignore_errors=True)
+        os.unlink(exit_file)
+    shutil.rmtree(env_dir, ignore_errors=True)
     if log_file is not None:
         with contextlib.suppress(OSError):
             _cursor_file(log_file).unlink()

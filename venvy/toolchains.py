@@ -631,8 +631,12 @@ def remove(kind: str, version: str) -> bool:
         return bool(cands)
     else:
         p = _kind_dir(kind) / version
-    if p.is_dir() and _kind_dir(kind) in p.parents:
-        shutil.rmtree(p, ignore_errors=True)
+    root = os.path.normpath(str(_kind_dir(kind)))
+    target = os.path.normpath(str(p))
+    if not target.startswith(root + os.sep):
+        return False
+    if os.path.isdir(target) and not os.path.islink(target):
+        shutil.rmtree(target, ignore_errors=True)
         return True
     return False
 
