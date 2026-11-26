@@ -32,6 +32,25 @@ def branch_label(branch: str) -> str:
     return (s or "branch")[:40].strip("-")
 
 
+def free_domain(session: Session, label: str, preview_domain: str) -> str:
+    """<label>.<preview domain>, or with a short suffix when that hostname is
+    taken: by another app's domain, a route, the tunnel or Venvy itself
+    (branches feat/x and feat-x have the same label; a branch called api must
+    not get the hostname of an app called api)."""
+    from venvy import own_hosts
+    from venvy.models import CfRoute, Route
+
+    def taken(host: str) -> bool:
+        return bool(own_hosts.is_own(host)
+                    or session.exec(select(App).where(App.domain == host)).first()
+                    or session.exec(select(Route).where(Route.hostname == host)).first()
+                    or session.exec(select(CfRoute).where(CfRoute.hostname == host)).first())
+    host = f"{label}.{preview_domain}"
+    while taken(host):
+        host = f"{label[:33].strip('-')}-{secrets.token_hex(3)}.{preview_domain}"
+    return host
+
+
 def find(parent_id: int, branch: str) -> Optional[App]:
     with Session(engine) as s:
         return s.exec(select(App).where(App.preview_of == parent_id, App.git_branch == branch)).first()
@@ -77,7 +96,7 @@ async def ensure(parent_id: int, branch: str) -> int:
                       env_json=_merged_env(parent), git_url=parent.git_url, git_branch=branch, status="stopped",
                       restart_policy=parent.restart_policy, start_on_boot=False, preview_of=parent_id,
                       environment="preview", previews_enabled=False, auto_deploy=False, instances=1,
-                      domain=f"{label}.{parent.preview_domain}" if parent.preview_domain else None,
+                      domain=free_domain(s, label, parent.preview_domain) if parent.preview_domain else None,
                       preview_env="", preview_domain=None)
         row = App(**fields)
         s.add(row)
