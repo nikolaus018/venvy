@@ -59,4 +59,4 @@ A module only imports from modules above it. `main.py` at the repository
 root is the entry point (`python main.py`).
 """
 
-__version__ = "5.0.5"
+__version__ = "5.0.6"

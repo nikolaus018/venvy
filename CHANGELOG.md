@@ -5,6 +5,24 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v5.0.6
+
+- A deploy counts as done only once the app answers. Without a health check it used to be "ok" as soon as the app was still running a few seconds after the restart; a Compose app's site could answer 502 for a while after that. Now a web app's port has to answer (anything but 502, 503 or 504); if it doesn't within the deploy's wait, the previous version is put back. Apps that listen on no port (workers, bots), and apps whose health check is set to None, deploy as before.
+- A route (Hosting → Routes) can only send a hostname to the app's own port, as the domain field already could. A route could point a public hostname at any service on the server that listens on localhost, or at another app's port. Moving an app that has routes to a port that isn't its own is refused the same way.
+- Two apps are no longer handed the same port. A port an app had but wasn't listening on (stopped, a worker, still starting) went to the next app that started; saving a domain or publishing a hostname for the first one then failed with "also another app's port".
+- Which ports are an app's is answered in one place for tunnel publishing, domains, routes, starting, deploys, the free-port search and System → Ports in use. A Compose app's ports are the ones its containers publish: every one of them can now be published through the tunnel (only the first one could), and Ports in use names the app for each.
+- Compose apps get their memory, CPU and process limits: each container gets them, as Docker apps already did. They used to apply only to the `docker compose` command, not to the containers.
+- An egress policy that Docker can't enforce (any for a Compose app; deny for a Docker app with a port; an allow-list for a Docker app) is refused with the reason, instead of being saved and silently ignored. An app that already has one says so in its log when it starts.
+- A Compose app's old containers are removed before its compose file is checked, not after: they can write to the app's folder, and could change it between the check and the start.
+- A Compose service's `container_name` must start with the app's own project name (`venvy-app-<id>-`): another app's name made that app fail to start and counted its usage wrong.
+- A failed app-backup restore starts the app again and leaves nothing half-unpacked behind; it used to leave the app stopped.
+- An operator restoring an app backup with its settings can't turn the app into a Compose app that way (only an admin can make one).
+- The build command in Hosting → Run and build is saved. It said "Saved" but kept the old one; only the Deploy tab's field worked.
+- Preview apps get a hostname of their own: one that another app, a route, the tunnel or Venvy itself already uses gets a short suffix.
+- An operator who may use only some apps can't change or delete monitors any more (they can still add them), and the volume list shows only the apps they can see.
+- Docker and Compose builds work when Venvy doesn't run as root (a `--shared-user` install with access to Docker): they were run with root's home, where the Docker CLI found neither its config nor the Compose plugin.
+- CI runs a Compose app on real Docker: it deploys one, restarts Venvy, checks the app keeps its port and route, and checks that a broken deploy is rolled back.
+
 ## v5.0.5
 
 - A Docker or Compose app keeps its port when the server boots. Docker restarted the app's containers by itself (a `restart:` policy) before Venvy started the app; Venvy took the port they held for someone else's and moved the app to another one, away from its tunnel route and domain. The app's own leftover containers are now removed before its port is checked.

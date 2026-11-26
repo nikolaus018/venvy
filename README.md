@@ -273,10 +273,14 @@ Compose runs through the Docker daemon, as root, so only an admin can make an ap
 (an operator, an API call or a `venvy.toml` can't switch one to it). Every compose file is checked
 before Venvy builds or starts it: it is rendered as the app's user, refused if it asks for a
 privileged container, extra capabilities, devices, host namespaces, unconfined security options,
-external volumes or networks, or host paths outside the app's folder, data folder and volumes, and
-the daemon is given that checked copy, not the app's file. Those host paths are checked when the
-file is rendered; someone who can change the app's files while it starts could still swap a folder
-for a link in between, so give a Compose app only to people you would give the Docker group.
+external volumes or networks, another app's container names, or host paths outside the app's folder,
+data folder and volumes, and the daemon is given that checked copy, not the app's file, with the
+app's memory, CPU and process limits on every container. The app's old containers are removed
+before the file is checked, so nothing of the app runs between the check and the start. Those host
+paths are checked when the file is rendered; someone who can change the app's files from outside
+its containers while it starts could still swap a folder for a link in between, and a container
+that Docker restarts by itself (`restart:`) is mounted again without a check, so give a Compose app
+only to people you would give the Docker group.
 
 Apps share the host's network. They can reach Venvy on its port like anyone else, but can't pass
 for another client there: a connection from loopback is only taken to be cloudflared's (and its
