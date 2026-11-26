@@ -1156,6 +1156,15 @@ async def restore_app_backup(app_id: int, name: str, req: AppRestoreReq = AppRes
         raise HTTPException(404, str(exc))
     if deploy.is_running(app_id):
         raise HTTPException(409, "A deploy is running for this app.")
+    if req.settings and user.role != "admin":
+        # The settings come back as they were, without PUT's rules: only an
+        # admin may pick a runtime that runs as root.
+        try:
+            old_runtime = appbackup.read_settings(app_id, name).get("runtime")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if old_runtime != a.runtime and old_runtime in runtimes.ROOT_RUNTIMES:
+            raise HTTPException(403, runtimes.ROOT_RUNTIME_ERROR + " Restore only the files, or ask an admin.")
     audit_log(user.username, "app_restore", f"app '{a.name}' (id={app_id}) from {name}")
 
     async def job() -> dict:

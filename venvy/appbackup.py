@@ -161,22 +161,36 @@ async def restore(app_id: int, name: str, settings: bool = False, log=lambda m: 
             if ids:
                 os.chown(inner, ids[0], ids[1])
         return meta
-    meta = await asyncio.to_thread(prep)
+    try:
+        meta = await asyncio.to_thread(prep)
+    except BaseException:
+        await asyncio.to_thread(shutil.rmtree, work, True)
+        raise
     was_running = app.status == "running"
     with Session(engine) as s:
         await process.stop_app_process_logic(app_id, s, manual=True)
-    proc = await asyncio.create_subprocess_exec(
-        *_as_app_user(app, ["tar", "-xzf", str(work / "content.tar.gz"), "-C", str(work), "--no-same-owner"]),
-        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
-        env=_app_tool_env(app), cwd="/", start_new_session=True)
-    _, err = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError("The backup could not be unpacked: " + err.decode(errors="replace")[-300:])
-    files, data = work / "files", work / "data"
-    if files.is_dir():
-        await asyncio.to_thread(_swap, Path(app.app_dir), files)
-    if data.is_dir():
-        await asyncio.to_thread(_swap, appspec.data_dir(app), data)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *_as_app_user(app, ["tar", "-xzf", str(work / "content.tar.gz"), "-C", str(work), "--no-same-owner"]),
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            env=_app_tool_env(app), cwd="/", start_new_session=True)
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError("The backup could not be unpacked: " + err.decode(errors="replace")[-300:])
+        files, data = work / "files", work / "data"
+        if files.is_dir():
+            await asyncio.to_thread(_swap, Path(app.app_dir), files)
+        if data.is_dir():
+            await asyncio.to_thread(_swap, appspec.data_dir(app), data)
+    except BaseException:
+        # As it was: the app's own files were not replaced (a swap is all or
+        # nothing), so it starts again on them.
+        await asyncio.to_thread(shutil.rmtree, work, True)
+        if was_running:
+            with contextlib.suppress(Exception):
+                with Session(engine) as s:
+                    await process.start_app_process_logic(app_id, s)
+        raise
     await asyncio.to_thread(shutil.rmtree, work, True)
     if settings:
         with Session(engine) as s:
@@ -194,6 +208,20 @@ async def restore(app_id: int, name: str, settings: bool = False, log=lambda m: 
         with Session(engine) as s:
             await process.start_app_process_logic(app_id, s)
     return {"ok": True, "restarted": was_running}
+
+
+def read_settings(app_id: int, name: str) -> dict:
+    """The settings (app.json) stored in a backup. Raises ValueError."""
+    p = path_of(app_id, name)
+    try:
+        with tarfile.open(p, "r:gz") as tar:
+            f = tar.extractfile("app.json")
+            meta = json.loads(f.read(1 << 20)) if f else None
+    except (tarfile.TarError, KeyError, OSError, ValueError) as exc:
+        raise ValueError(f"That is not an app backup: {exc}")
+    if not isinstance(meta, dict):
+        raise ValueError("That is not an app backup.")
+    return meta
 
 
 def delete(app_id: int, name: str) -> None:
