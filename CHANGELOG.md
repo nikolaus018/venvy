@@ -5,6 +5,10 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v5.0.5
+
+- A Docker or Compose app keeps its port when the server boots. Docker restarted the app's containers by itself (a `restart:` policy) before Venvy started the app; Venvy took the port they held for someone else's and moved the app to another one, away from its tunnel route and domain. The app's own leftover containers are now removed before its port is checked.
+
 ## v5.0.4
 
 - Signing in after a failed attempt clears its "Invalid credentials" message; it used to stay on screen for the whole session.

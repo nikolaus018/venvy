@@ -820,6 +820,21 @@ async def _docker_cleanup(app) -> None:
         await asyncio.wait_for(proc.wait(), timeout=120)
 
 
+async def _launch_port_free(spec, app_id: int, port: int) -> bool:
+    """Whether *port* is free for the app about to start. A docker / compose
+    app's own containers from before may hold it: Docker restarts them by
+    itself when the host boots (a `restart:` policy), before Venvy starts the
+    app. They are removed before the launch anyway; here that happens first,
+    or the app would be moved off its port, and off the tunnel route and
+    domain that point at it."""
+    if await asyncio.to_thread(_verify_port_free, port):
+        return True
+    if spec.runtime not in ("docker", "compose"):
+        return False
+    await _docker_cleanup(types.SimpleNamespace(**{**vars_of(spec), "id": app_id}))
+    return await asyncio.to_thread(_verify_port_free, port)
+
+
 def _signal_of(app) -> int:
     name = (getattr(app, "stop_signal", None) or "SIGTERM").upper()
     return int(getattr(signal, name, signal.SIGTERM))
@@ -987,7 +1002,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
             effective_port = db_app.port
 
         if effective_port:
-            port_free = await asyncio.to_thread(_verify_port_free, effective_port)
+            port_free = await _launch_port_free(spec, db_app.id, effective_port)
             if not port_free:
                 new_port = await asyncio.to_thread(find_free_port)
                 if new_port:

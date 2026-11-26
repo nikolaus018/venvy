@@ -576,6 +576,39 @@ try:
 finally:
     _sp.run, _pr.shutil.which = _real_run, _real_which
 
+# ── a container app's port, held by its own containers at launch ────────────
+# At boot Docker restarts an app's containers by itself; their port must not
+# send the app to another one (and away from its tunnel route).
+_real_free, _real_cleanup = _pr._verify_port_free, _pr._docker_cleanup
+try:
+    busy, cleaned = set(), []
+
+    async def _fake_cleanup(app):
+        cleaned.append((app.id, app.runtime))
+        busy.discard(f"own-{app.id}")
+
+    def _launch(runtime, app_id, held_by):
+        busy.clear()
+        cleaned.clear()
+        busy.add(held_by)
+        _pr._verify_port_free = lambda _port: not busy
+        return asyncio.run(_pr._launch_port_free(SimpleNamespace(runtime=runtime, id=None), app_id, 8010))
+
+    _pr._docker_cleanup = _fake_cleanup
+    check("a compose app's own leftover containers give its port back", _launch("compose", 12, "own-12") is True
+          and cleaned == [(12, "compose")], str(cleaned))
+    check("... a docker app's too", _launch("docker", 5, "own-5") is True and cleaned == [(5, "docker")], str(cleaned))
+    check("a port held by something else stays taken", _launch("compose", 12, "other") is False
+          and cleaned == [(12, "compose")], str(cleaned))
+    check("other runtimes don't clear containers", _launch("python", 3, "own-3") is False and cleaned == [],
+          str(cleaned))
+    _pr._verify_port_free = lambda _port: True
+    cleaned.clear()
+    check("a free port clears nothing", asyncio.run(_pr._launch_port_free(SimpleNamespace(runtime="compose"), 12, 8010))
+          is True and cleaned == [], str(cleaned))
+finally:
+    _pr._verify_port_free, _pr._docker_cleanup = _real_free, _real_cleanup
+
 # ── toolchain archives on Pythons without tar filters ───────────────────────
 from venvy import toolchains as tcx  # noqa: E402
 
