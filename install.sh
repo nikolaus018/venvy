@@ -379,6 +379,36 @@ install_compose() {
   rm -rf "$WORK"; WORK=""
 }
 
+# `docker compose build` hands builds to buildx and refuses one older than
+# 0.17 — which is what some distributions ship (Debian 13: 0.13). The release
+# binary goes in /usr/local/lib/docker/cli-plugins, which the docker CLI
+# searches before the distribution's plugin folder.
+BUILDX_MIN_MINOR=17
+install_buildx() {
+  v="$(docker buildx version 2>/dev/null | awk '{print $2; exit}')"; v="${v#v}"
+  case "$v" in
+    0.*) minor="${v#0.}"; minor="${minor%%[!0-9]*}"; [ -n "$minor" ] && [ "$minor" -ge "$BUILDX_MIN_MINOR" ] && return 0 ;;
+    [1-9]*) return 0 ;;
+  esac
+  case "$(uname -m)" in x86_64|amd64) a=amd64 ;; aarch64|arm64) a=arm64 ;; *) die "buildx: unsupported CPU $(uname -m)" ;; esac
+  say "Installing docker buildx (${v:-none found} is too old for docker compose build)..."
+  WORK="$(mktemp -d)"
+  # The latest release's tag, from where github.com redirects (no API rate limit).
+  tag="$(curl -fsSLI --connect-timeout 15 --max-time 60 --retry 3 -o /dev/null -w '%{url_effective}' \
+    https://github.com/docker/buildx/releases/latest)" || die "Could not find the current buildx release."
+  tag="${tag##*/tag/}"
+  case "$tag" in v[0-9]*.[0-9]*) ;; *) die "Unexpected buildx release tag." ;; esac
+  case "$tag" in *[!v0-9.]*) die "Unexpected buildx release tag." ;; esac
+  base="https://github.com/docker/buildx/releases/download/$tag"; f="buildx-$tag.linux-$a"
+  fetch_to "$base/$f" "$WORK/$f"
+  fetch_to "$base/checksums.txt" "$WORK/sums"
+  verify_sha256 "$WORK/$f" "$(awk -v f="$f" '$2 == f || $2 == "*" f {print $1}' "$WORK/sums")" "$f"
+  install -d /usr/local/lib/docker/cli-plugins
+  install -m 0755 "$WORK/$f" /usr/local/lib/docker/cli-plugins/docker-buildx
+  rm -rf "$WORK"; WORK=""
+  docker buildx version >/dev/null 2>&1 || die "docker buildx $tag was installed but does not run."
+}
+
 install_uv() {
   command -v uv >/dev/null 2>&1 && return 0
   case "$(uname -m)" in x86_64|amd64) t=x86_64-unknown-linux-gnu ;; aarch64|arm64) t=aarch64-unknown-linux-gnu ;; *) die "uv: unsupported CPU $(uname -m)" ;; esac
@@ -428,7 +458,7 @@ OS_CODENAME="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"')"
 [ "$WITH_GO" -eq 1 ]   && install_go
 [ "$WITH_BUN" -eq 1 ]  && install_bun
 [ "$WITH_DENO" -eq 1 ] && install_deno
-if [ "$WITH_DOCKER" -eq 1 ]; then install_compose; systemctl enable --now docker >/dev/null 2>&1 || true; fi
+if [ "$WITH_DOCKER" -eq 1 ]; then install_compose; install_buildx; systemctl enable --now docker >/dev/null 2>&1 || true; fi
 [ "$WITH_UV" -eq 1 ]   && install_uv
 [ "$WITH_SOPS" -eq 1 ] && install_sops
 if [ "$WITH_PNPM" -eq 1 ] && command -v corepack >/dev/null 2>&1; then corepack enable >/dev/null 2>&1 || true; fi

@@ -16,7 +16,8 @@ wrote it. So before Venvy runs compose for an app (build, pull, up), it:
 Refused: privileged containers and builds, added capabilities beyond
 Docker's defaults, devices and GPUs, the host's (or another container's)
 network / PID / IPC / UTS / user / cgroup namespaces, cgroup parents,
-security options other than no-new-privileges, other OCI runtimes,
+security options other than no-new-privileges, compose's own
+com.docker.compose.* labels (they say which app a container is), other OCI runtimes,
 external volumes, networks, configs, secrets and links, volume drivers or
 driver options (which can bind any host path), network drivers other than
 bridge, SSH-agent forwarding into builds, build entitlements, and any host
@@ -115,6 +116,11 @@ def check(project: dict, roots: List[Path]) -> None:
                 no(f"service '{name}' sets security_opt {opt!r}")
         if svc.get("runtime") not in (None, "", "runc"):
             no(f"service '{name}' uses the {svc.get('runtime')} runtime")
+        labels = svc.get("labels") or {}
+        for label in (labels if isinstance(labels, dict) else [str(x).split("=", 1)[0] for x in labels]):
+            if str(label).strip().startswith("com.docker.compose."):
+                # Which project a container belongs to is how Venvy tells an app's ports apart.
+                no(f"service '{name}' sets compose's own label {label!r}")
         if svc.get("external_links"):
             no(f"service '{name}' links to containers outside the project")
         for vf in svc.get("volumes_from") or []:

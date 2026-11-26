@@ -176,6 +176,48 @@ def _detect_ports_sync(app_pid: int) -> List[int]:
     return sorted(list(detected_ports))
 
 
+_COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+_DOCKER_CLI_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin"}
+
+
+def _container_host_ports_sync(app_row: "App") -> List[int]:
+    """The host ports a docker / compose app's own containers publish. Docker
+    listens on those itself (docker-proxy, or only iptables rules), so they
+    are not in the app's process tree, but they are the app's: its project
+    (compose) or its container (docker), and compose_guard keeps any other
+    app from taking that project's label or that container's name."""
+    if getattr(app_row, "runtime", "") not in ("docker", "compose") or not shutil.which("docker"):
+        return []
+    name = runtimes.docker_name(app_row.id)
+    filt = f"label={_COMPOSE_PROJECT_LABEL}={name}" if app_row.runtime == "compose" else f"name=^{name}$"
+    try:
+        ids = subprocess.run(["docker", "ps", "-q", "--no-trunc", "--filter", filt], capture_output=True,
+                             text=True, timeout=20, env=_DOCKER_CLI_ENV, stdin=subprocess.DEVNULL)
+        if ids.returncode != 0 or not ids.stdout.split():
+            return []
+        out = subprocess.run(["docker", "inspect", *ids.stdout.split()], capture_output=True, text=True,
+                             timeout=20, env=_DOCKER_CLI_ENV, stdin=subprocess.DEVNULL)
+        containers = json.loads(out.stdout) if out.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    ports: Set[int] = set()
+    for c in containers if isinstance(containers, list) else []:
+        if not isinstance(c, dict):
+            continue
+        labels = (c.get("Config") or {}).get("Labels") or {}
+        if app_row.runtime == "compose" and labels.get(_COMPOSE_PROJECT_LABEL) != name:
+            continue
+        if app_row.runtime == "docker" and (_COMPOSE_PROJECT_LABEL in labels or c.get("Name") != f"/{name}"):
+            continue
+        for bindings in ((c.get("NetworkSettings") or {}).get("Ports") or {}).values():
+            for b in bindings or []:
+                with contextlib.suppress(TypeError, ValueError, AttributeError):
+                    p = int(b.get("HostPort"))
+                    if 0 < p < 65536:
+                        ports.add(p)
+    return sorted(ports)
+
+
 _port_alloc_lock = threading.Lock()
 _recent_allocated_ports: Dict[int, float] = {}
 

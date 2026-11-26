@@ -471,8 +471,12 @@ def java_artifact(app_dir: Path, entrypoint: str) -> Optional[Path]:
 
 
 def compose_file(app_dir: Path, entrypoint: str) -> Optional[Path]:
+    """The app's compose file, or None until it has one. A file named in
+    Settings counts only once it exists: an app is made first and gets its
+    files afterwards, and there is nothing to build or pull before that."""
     if entrypoint:
-        return app_dir / entrypoint
+        f = app_dir / entrypoint
+        return f if f.is_file() else None
     for n in ("compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"):
         if (app_dir / n).is_file():
             return app_dir / n
@@ -574,7 +578,8 @@ def start_command(key: str, app_dir: Path, entrypoint: str, port: Optional[int],
             raise ValueError("compose apps need their settings")
         f = compose_file(app_dir, entrypoint)
         if f is None:
-            raise ValueError("There is no compose.yaml or docker-compose.yml in the app's folder.")
+            raise ValueError(f"The compose file '{entrypoint}' is not in the app's folder." if entrypoint
+                             else "There is no compose.yaml or docker-compose.yml in the app's folder.")
         return ["docker", "compose", "-p", docker_name(app.id), "-f", str(f), "--project-directory", str(app_dir),
                 "up", "--remove-orphans", "--no-color"]
     raise ValueError(f"unknown runtime {key!r}")
@@ -630,7 +635,8 @@ def start_problem(key: str, app_dir: Path, entrypoint: str) -> Optional[str]:
     if key == "docker" and not entrypoint and not (app_dir / "Dockerfile").is_file() and not (app_dir / "Containerfile").is_file():
         return "Name an image in Settings, or upload a Dockerfile."
     if key == "compose" and compose_file(app_dir, entrypoint) is None:
-        return "There is no compose file in the app's folder."
+        return (f"The compose file '{entrypoint}' is not in the app's folder." if entrypoint
+                else "There is no compose file in the app's folder.")
     return None
 
 

@@ -5,6 +5,12 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v5.0.3
+
+- `--with-docker` makes sure `docker compose build` works: a buildx older than 0.17 (Debian 13 ships 0.13) is replaced with the official release, checksum-verified. Running the installer again fixes an existing server.
+- A running Docker or Compose app can publish a hostname through the tunnel: the port its own containers publish counts as the app's, although Docker (not the app's process) listens on it. Compose files may no longer set Compose's own `com.docker.compose.*` labels, which is how a container's app is told apart.
+- A Compose app can be created before it has files, also with its compose file named: there is nothing to build or pull until the file is uploaded, and starting without it says which file is missing.
+
 ## v5.0.2
 
 - Rust and Go apps created before v5 build again: their old `main.rs` / `main.go` entrypoint was passed to cargo as a binary name ("no bin target named `main.rs`"). It is cleared on start, so the package's own binary (or the module root) is used.

@@ -34,7 +34,7 @@ from venvy.cloudflare import (
 from venvy.crypto import _decrypt_secret
 from venvy.db import engine, get_session
 from venvy.models import App, CfRoute, SystemSetting, User
-from venvy.process import _app_pid_alive, _detect_ports_sync, _psutil_net_connections, _verify_port_free, get_server_ipv4
+from venvy.process import _app_pid_alive, _container_host_ports_sync, _detect_ports_sync, _psutil_net_connections, _verify_port_free, get_server_ipv4
 
 router = APIRouter(
     prefix="/api", tags=["apps"], dependencies=[Depends(check_ip_allowlist), Depends(require_app_access)]
@@ -359,8 +359,11 @@ async def _check_publish_port(session: Session, app_row: App, port: int, request
     if not await asyncio.to_thread(_any_host_listener_on_port, port):
         return          # nothing listens there yet on any interface
     # (Not the stored detected_ports: with ports set by hand, those are what it holds.)
-    listening = (await asyncio.to_thread(_detect_ports_sync, app_row.pid)
-                 if app_row.pid and await asyncio.to_thread(_app_pid_alive, app_row) else [])
+    alive = bool(app_row.pid) and await asyncio.to_thread(_app_pid_alive, app_row)
+    listening = await asyncio.to_thread(_detect_ports_sync, app_row.pid) if alive else []
+    if port not in listening and alive:
+        # A docker / compose app's ports are Docker's to listen on, not its CLI process's.
+        listening = await asyncio.to_thread(_container_host_ports_sync, app_row)
     if port not in listening:
         raise HTTPException(409, f"Something other than this app is listening on port {port}.")
 

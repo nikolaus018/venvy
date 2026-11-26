@@ -522,8 +522,59 @@ bad = [
     {"services": {"x": {}}, "volumes": {"v": {"external": True}}},
     {"services": {"x": {}}, "networks": {"n": {"driver": "macvlan"}}},
     {"services": {"x": {}}, "secrets": {"s": {"file": "/etc/shadow"}}},
+    {"services": {"x": {"labels": {"com.docker.compose.project": "venvy-app-1"}}}},
+    {"services": {"x": {"labels": ["com.docker.compose.project=venvy-app-1"]}}},
 ]
 check("compose escapes refused", all(refused(b) for b in bad), str([b for b in bad if not refused(b)]))
+check("an app's own labels pass", not refused({"services": {"x": {"labels": {"traefik.enable": "false"}}}}))
+
+# ── a compose app made before it has files ──────────────────────────────────
+empty = WORK / "compose-empty"
+empty.mkdir()
+_capp = SimpleNamespace(id=31, runtime="compose", app_dir=str(empty))
+check("an empty compose app has nothing to build yet",
+      rt.setup_steps("compose", empty, "compose.yaml", _capp) == [] and rt.setup_steps("compose", empty, "", _capp) == [])
+check("... and says which file it is waiting for",
+      "compose.yaml" in (rt.start_problem("compose", empty, "compose.yaml") or ""))
+(empty / "compose.yaml").write_text("services: {}\n")
+check("... and builds once the file is there", [s.what for s in rt.setup_steps("compose", empty, "compose.yaml", _capp)]
+      == ["docker compose build", "docker compose pull"])
+
+# ── a docker / compose app's published ports ────────────────────────────────
+import subprocess as _sp  # noqa: E402
+import types as _types  # noqa: E402
+from venvy import process as _pr  # noqa: E402
+
+
+def _fake_docker(containers):
+    def run(argv, **_kw):
+        if argv[1] == "ps":
+            return _types.SimpleNamespace(returncode=0, stdout="\n".join(c["Id"] for c in containers))
+        return _types.SimpleNamespace(returncode=0, stdout=json.dumps([c for c in containers if c["Id"] in argv]))
+    return run
+
+
+def _ctr(cid, name, labels, ports):
+    return {"Id": cid, "Name": "/" + name, "Config": {"Labels": labels},
+            "NetworkSettings": {"Ports": {f"{c}/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(h)}] for c, h in ports}}}
+
+
+_real_run, _real_which = _sp.run, _pr.shutil.which
+try:
+    _pr.shutil.which = lambda *_a, **_k: "/usr/bin/docker"
+    _sp.run = _fake_docker([_ctr("a", "venvy-app-7-web-1", {"com.docker.compose.project": "venvy-app-7"}, [(80, 9701)]),
+                            _ctr("b", "venvy-app-7-db-1", {"com.docker.compose.project": "venvy-app-7"}, []),
+                            _ctr("c", "intruder", {"com.docker.compose.project": "venvy-app-8"}, [(80, 9702)])])
+    got = _pr._container_host_ports_sync(_types.SimpleNamespace(id=7, runtime="compose"))
+    check("a compose app's published ports are its own", got == [9701], str(got))
+    _sp.run = _fake_docker([_ctr("d", "venvy-app-9", {}, [(8080, 9703)]),
+                            _ctr("e", "venvy-app-9", {"com.docker.compose.project": "x"}, [(80, 9704)])])
+    got = _pr._container_host_ports_sync(_types.SimpleNamespace(id=9, runtime="docker"))
+    check("a docker app's container's ports, not a compose container's", got == [9703], str(got))
+    check("other runtimes have no container ports",
+          _pr._container_host_ports_sync(_types.SimpleNamespace(id=9, runtime="python")) == [])
+finally:
+    _sp.run, _pr.shutil.which = _real_run, _real_which
 
 # ── toolchain archives on Pythons without tar filters ───────────────────────
 from venvy import toolchains as tcx  # noqa: E402
