@@ -27,12 +27,14 @@ run login_timing "$PYB" t_timing.py "$R"
     run restore_integrity "$PYB" t_restore2.py "$R"
     run monitor "$PYB" t_monitor.py "$R"
     run platform_unit "$PYB" t_platform_unit.py "$R"
+    run review_unit "$PYB" t_review_unit.py "$R"
     run platform "$PYB" t_platform.py "$R"
 ) &
 (
     run small "$PYB" t_small.py "$R"
     run hardening "$PYB" t_hardening.py "$R"
     run review_fixes "$PYB" t_review_fixes.py "$R"
+    run review_2611 "$PYB" t_review_2611.py "$R"
     # Browser pass; needs `pip install playwright` and an installed Google Chrome.
     if "$PYB" -c "import playwright" 2>/dev/null; then
         run ui "$PYB" t_ui.py "$R"
