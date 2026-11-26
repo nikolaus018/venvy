@@ -145,9 +145,15 @@ if not EXISTING:
     check("set a memory limit", r.status_code == 200, r.text)
     cl.req("POST", f"/api/apps/{app_id}/control?action=start")
     check("app starts", cl.wait_status(app_id, "running", 30))
-    time.sleep(2.5)
+    # The app prints its findings at once, except the loopback probe, which
+    # makes several logins against Venvy first: wait for its line.
+    deadline = time.time() + 20
+    while True:
+        logs = cl.req("GET", f"/api/apps/{app_id}/logs").json()["content"]
+        if "SPOOF_LOCKED_AT=" in logs or "SPOOF_PROBE_ERROR=" in logs or time.time() > deadline:
+            break
+        time.sleep(0.5)
     st = cl.status(app_id)
-    logs = cl.req("GET", f"/api/apps/{app_id}/logs").json()["content"]
     expect_user = f"venvy-app-{app_id}" if APP_USERS else "venvy"
     check("app runs as the expected user", f"WHOAMI={expect_user}" in logs, logs[-300:])
     check("app does not inherit Venvy's PORT", "PORT_SEEN=54783" not in logs and "PORT_SEEN=" in logs, logs[-300:])

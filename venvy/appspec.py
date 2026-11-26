@@ -121,6 +121,15 @@ def secrets_dir(app) -> Path:
     return state_root(app) / "secrets" / str(app.id)
 
 
+def _data_mode(app) -> int:
+    """The data folder is the app user's own (0700), except for containers:
+    there it is /data, and images such as postgres or mariadb create their
+    folder in it as root, then use it as their own user (postgres, mysql),
+    who must be able to pass through /data to reach it. 0711 lets them in
+    without letting anyone list what is there, as the state root above it."""
+    return 0o711 if getattr(app, "runtime", "") in ("docker", "compose") else 0o700
+
+
 def ensure_state_dirs(app, ids: Optional[Tuple[int, int]]) -> None:
     """Create the app's state folders.
 
@@ -137,14 +146,15 @@ def ensure_state_dirs(app, ids: Optional[Tuple[int, int]]) -> None:
             d.chmod(0o711)
     owned = [home_dir(app), state_root(app) / "cache", data_dir(app)]
     for d in owned:
+        mode = _data_mode(app) if d == data_dir(app) else 0o700
         if d.is_symlink():
             d.unlink()
-        d.mkdir(mode=0o700, exist_ok=True)
+        d.mkdir(mode=mode, exist_ok=True)
         if ids:
             with _suppress():
                 os.chown(d, ids[0], ids[1], follow_symlinks=False)
         with _suppress():
-            d.chmod(0o700)
+            d.chmod(mode)
     sd = secrets_dir(app)
     if sd.is_symlink():
         sd.unlink()

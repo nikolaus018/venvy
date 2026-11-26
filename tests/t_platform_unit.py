@@ -316,6 +316,77 @@ with Session(engine) as s:
     s.add(ServiceBinding(app_id=a2.id, service_app_id=svc.id))
     s.commit()
     ids = (a1.id, a2.id, svc.id)
+    legacy = [App(user_id=1, name=n, slug=n, app_dir=str(WORK / n), venv_path="", entrypoint=ep, runtime=r, port=p)
+              for n, r, ep, p in (("lr", "rust", "main.rs", 9201), ("lg", "go", "main.go", 9202),
+                                  ("nr", "rust", "api", 9203), ("np", "python", "main.rs", 9204))]
+    for x in legacy:
+        s.add(x)
+    s.commit()
+    legacy_ids = [x.id for x in legacy]
+create_db_and_tables()                           # the startup migration runs again, as after an update
+with Session(engine) as s:
+    eps = [s.get(App, i).entrypoint for i in legacy_ids]
+check("pre-v5 main.rs / main.go entrypoints cleared, others kept", eps == ["", "", "api", "main.rs"], str(eps))
+
+# A build before the start writes its output to the app's log while it runs
+# (a cold cargo build takes minutes; the log must not sit still meanwhile).
+from venvy import process  # noqa: E402
+with Session(engine) as s:
+    papp = s.get(App, legacy_ids[0])
+(WORK / "lr").mkdir(exist_ok=True)
+plog = WORK / "prestart.log"
+
+
+async def _prestart_live():
+    step = rt.Step(["sh", "-c", "echo compiling-one; sleep 1.5; echo compiling-two"], 30, "fake build", True)
+    task = asyncio.create_task(process._run_prestart_step(papp, step, plog))
+    await asyncio.sleep(0.8)
+    mid = plog.read_text()
+    await task
+    return mid, plog.read_text()
+
+mid, end = asyncio.run(_prestart_live())
+check("build output reaches the log while it runs", "compiling-one" in mid and "compiling-two" not in mid, repr(mid))
+check("... and all of it, once, before 'finished'",
+      end.count("compiling-one") == 1 and end.count("compiling-two") == 1
+      and end.index("compiling-two") < end.index("fake build finished"), repr(end))
+
+# A container's /data must let the image's own user (postgres, mysql) pass
+# through to the folder it made there as root; everyone else's stays private.
+import stat as _stat  # noqa: E402
+modes = {}
+for r_, i_ in (("docker", 9301), ("compose", 9302), ("python", 9303)):
+    probe = SimpleNamespace(id=i_, parent_app_id=None, runtime=r_)
+    appspec.ensure_state_dirs(probe, None)
+    modes[r_] = _stat.S_IMODE(appspec.data_dir(probe).stat().st_mode)
+    (appspec.data_dir(probe)).chmod(0o700)            # an existing folder from before: put right on the next start
+    appspec.ensure_state_dirs(probe, None)
+    modes[r_ + " again"] = _stat.S_IMODE(appspec.data_dir(probe).stat().st_mode)
+
+# Apps that run as their own systemd service are measured too (CPU/memory).
+me, me_start = os.getpid(), process._proc_start_id(os.getpid())
+with Session(engine) as s:
+    rows = [App(user_id=1, name=n, slug=n, app_dir=str(WORK / n), venv_path="", entrypoint="", port=p, status=st,
+                pid=me, pid_start=ps, systemd_scope=sc)
+            for n, p, st, ps, sc in (("svc", 9401, "running", me_start, "venvy-app-1.service"),
+                                     ("scoped", 9402, "running", me_start, "venvy-app-2"),        # a child: tracked elsewhere
+                                     ("reused", 9403, "running", "not-it", "venvy-app-3.service"),  # PID now someone else's
+                                     ("down", 9404, "stopped", me_start, "venvy-app-4.service"))]
+    for r_ in rows:
+        s.add(r_)
+    s.commit()
+    svc_ids = [r_.id for r_ in rows]
+sp = process._service_pids()
+check("service apps' PIDs are picked up for metrics", sp == {svc_ids[0]: me}, str(sp))
+_, snap = process._collect_metrics_tick(sp, {})
+check("... and measured", snap.get(svc_ids[0], {}).get("memory", 0) > 0, str(snap))
+with Session(engine) as s:                       # leave the other checks' database as it was
+    for i_ in svc_ids:
+        s.delete(s.get(App, i_))
+    s.commit()
+check("container data folder 0711, others 0700",
+      modes == {"docker": 0o711, "docker again": 0o711, "compose": 0o711, "compose again": 0o711,
+                "python": 0o700, "python again": 0o700}, str({k: oct(v) for k, v in modes.items()}))
 from venvy import routing  # noqa: E402
 routing._build()
 m = routing.match_sync("a.example.com", "/")
