@@ -277,6 +277,17 @@ if [ -n "$MISSING" ]; then
   # shellcheck disable=SC2086
   apt-get install -y -q --no-install-recommends $MISSING
 fi
+# Newer Debian/Ubuntu split the docker command out of docker.io into
+# docker-cli, which docker.io only recommends: without it the daemon runs
+# but there is no `docker` to talk to it (or for compose to plug into).
+if [ "$WITH_DOCKER" -eq 1 ] && ! command -v docker >/dev/null 2>&1; then
+  if ! apt-cache show docker-cli >/dev/null 2>&1; then apt-get update -y -q; fi
+  if apt-cache show docker-cli >/dev/null 2>&1; then
+    say "Installing the docker command (docker-cli)..."
+    apt-get install -y -q --no-install-recommends docker-cli
+  fi
+  command -v docker >/dev/null 2>&1 || die "docker.io is installed but there is no docker command; install the Docker CLI and run this again."
+fi
 # Runtimes that are not in Debian/Ubuntu's repositories, or too old there to be
 # any use (Go): the official release, checked against the checksum its
 # publisher lists. A tool that is already installed is left alone.

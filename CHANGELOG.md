@@ -5,6 +5,12 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v5.0.2
+
+- Rust and Go apps created before v5 build again: their old `main.rs` / `main.go` entrypoint was passed to cargo as a binary name ("no bin target named `main.rs`"). It is cleared on start, so the package's own binary (or the module root) is used.
+- `--with-docker` installs the `docker` command too: newer Debian and Ubuntu ship it separately (`docker-cli`), so only the daemon was installed and Docker apps and Compose stayed unavailable. Running the installer again fixes an existing server.
+- A build or install before an app starts writes its output to the app's log as it runs, instead of only when it ends; a first `cargo build --release` no longer looks stuck.
+
 ## v5.0.1
 
 - Deploy, rollback and webhook-deploy failures are logged with the app's id and the error on one line, without any text from the request.

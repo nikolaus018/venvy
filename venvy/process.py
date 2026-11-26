@@ -617,6 +617,9 @@ def forget_app_runtime(app_id: int) -> None:
         _app_locks.pop(app_id, None)
 
 
+# Build output goes to the app's log as it comes (a cold cargo or npm build
+# can run for many minutes); past this much only the end is kept, at the end.
+_PRESTART_LOG_MAX = 2 * 1024 * 1024
 _PRESTART_TAIL_MAX = 64 * 1024
 
 
@@ -673,13 +676,26 @@ async def _run_prestart_step(db_app, step: "runtimes.Step", log_file: Path, firs
             env_tf.close()
 
     tail = bytearray()
+    written = 0
+
+    def _append(data: bytes) -> None:
+        with contextlib.suppress(OSError):
+            with open(log_file, "ab") as lf:
+                lf.write(data)
 
     async def _drain() -> None:
+        nonlocal written
         assert proc.stdout is not None
         while True:
             chunk = await proc.stdout.read(8192)
             if not chunk:
                 break
+            if written < _PRESTART_LOG_MAX:
+                written += len(chunk)
+                await asyncio.to_thread(_append, chunk)
+                if written >= _PRESTART_LOG_MAX:
+                    await asyncio.to_thread(_append, b"\n[venvy] (more output; the end follows when it finishes)\n")
+                continue
             tail.extend(chunk)
             if len(tail) > _PRESTART_TAIL_MAX:
                 del tail[:len(tail) - _PRESTART_TAIL_MAX]
@@ -697,10 +713,10 @@ async def _run_prestart_step(db_app, step: "runtimes.Step", log_file: Path, firs
             raise RuntimeError(f"{step.what} timed out after {step.timeout} seconds.")
         raise
     text = tail.decode(errors="replace").strip()
-    if text:
-        with contextlib.suppress(OSError):
-            with open(log_file, "a", encoding="utf-8") as lf:
-                lf.write(text[-6000:] + "\n")
+    if text:                                     # only past _PRESTART_LOG_MAX
+        _append((text[-6000:] + "\n").encode())
+    elif written:
+        _append(b"\n")                          # the [venvy] line below starts on a line of its own
     if proc.returncode != 0:
         _venvy_log(log_file, f"{step.what} failed (exit code {proc.returncode}).")
         raise RuntimeError(f"{step.what} failed — see the Logs tab.")

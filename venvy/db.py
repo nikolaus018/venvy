@@ -153,6 +153,15 @@ def create_db_and_tables() -> None:
             "DELETE FROM systemsetting WHERE key IN ('gh_token', 'gh_client_id', 'gh_username', 'gh_avatar')"
         )
 
+        # Before v5 the Rust and Go entrypoints were fixed at main.rs / main.go.
+        # Now they name a cargo binary / Go package, and the old value made
+        # every build fail ("no bin target named `main.rs`"). Empty means the
+        # default: the package's own binary, or the module root.
+        conn.exec_driver_sql(
+            "UPDATE app SET entrypoint = '' WHERE (runtime = 'rust' AND entrypoint = 'main.rs')"
+            " OR (runtime = 'go' AND entrypoint = 'main.go')"
+        )
+
     # TOTP secrets used to be stored as-is; anyone who could read data.db (or a
     # backup of it) could generate every user's codes. Encrypt what's there.
     with Session(engine) as session:

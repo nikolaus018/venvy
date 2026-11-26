@@ -316,6 +316,40 @@ with Session(engine) as s:
     s.add(ServiceBinding(app_id=a2.id, service_app_id=svc.id))
     s.commit()
     ids = (a1.id, a2.id, svc.id)
+    legacy = [App(user_id=1, name=n, slug=n, app_dir=str(WORK / n), venv_path="", entrypoint=ep, runtime=r, port=p)
+              for n, r, ep, p in (("lr", "rust", "main.rs", 9201), ("lg", "go", "main.go", 9202),
+                                  ("nr", "rust", "api", 9203), ("np", "python", "main.rs", 9204))]
+    for x in legacy:
+        s.add(x)
+    s.commit()
+    legacy_ids = [x.id for x in legacy]
+create_db_and_tables()                           # the startup migration runs again, as after an update
+with Session(engine) as s:
+    eps = [s.get(App, i).entrypoint for i in legacy_ids]
+check("pre-v5 main.rs / main.go entrypoints cleared, others kept", eps == ["", "", "api", "main.rs"], str(eps))
+
+# A build before the start writes its output to the app's log while it runs
+# (a cold cargo build takes minutes; the log must not sit still meanwhile).
+from venvy import process  # noqa: E402
+with Session(engine) as s:
+    papp = s.get(App, legacy_ids[0])
+(WORK / "lr").mkdir(exist_ok=True)
+plog = WORK / "prestart.log"
+
+
+async def _prestart_live():
+    step = rt.Step(["sh", "-c", "echo compiling-one; sleep 1.5; echo compiling-two"], 30, "fake build", True)
+    task = asyncio.create_task(process._run_prestart_step(papp, step, plog))
+    await asyncio.sleep(0.8)
+    mid = plog.read_text()
+    await task
+    return mid, plog.read_text()
+
+mid, end = asyncio.run(_prestart_live())
+check("build output reaches the log while it runs", "compiling-one" in mid and "compiling-two" not in mid, repr(mid))
+check("... and all of it, once, before 'finished'",
+      end.count("compiling-one") == 1 and end.count("compiling-two") == 1
+      and end.index("compiling-two") < end.index("fake build finished"), repr(end))
 from venvy import routing  # noqa: E402
 routing._build()
 m = routing.match_sync("a.example.com", "/")
