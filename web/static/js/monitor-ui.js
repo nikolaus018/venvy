@@ -19,6 +19,47 @@
             if (sp) sp.innerHTML = h ? statusPill(h.status) : '';
         }
 
+        // Overview: what the app is doing right now, and where it is reached.
+        function renderOverview(app) {
+            const el = $id('ov-summary');
+            if (!el || !app) return;
+            const H = (x) => escapeHtml(x == null ? '' : String(x));
+            const st = appStatus(app);
+            const h = app.status === 'running' ? app.health : null;
+            const urls = [];
+            if (app.external_url) urls.push(['Public', app.external_url]);
+            if (app.domain) urls.push(['Domain', (/^https?:/.test(app.domain) ? '' : 'http://') + app.domain]);
+            if (app.local_url) urls.push(['Local network', app.local_url]);
+            const link = (u) => /^https?:\/\//i.test(u) ? `<a href="${H(u)}" target="_blank" rel="noopener noreferrer" class="mono hover:underline" style="color:var(--text);overflow-wrap:anywhere">${H(u)}</a>` : `<span class="mono">${H(u)}</span>`;
+            const dep = app.last_deploy_status
+                ? `${statusPill(app.last_deploy_status)} <span style="color:var(--text3)">${H(fmtWhen(app.last_deploy_at))}${app.last_deploy_commit ? ' · ' + H(app.last_deploy_commit.slice(0, 10)) : ''}</span>`
+                : '<span style="color:var(--text3)">never deployed</span>';
+            const m = app.metrics || {};
+            const row = (label, val) => `<div class="flex items-start gap-3 text-xs"><span class="w-28 shrink-0 section-label pt-0.5">${label}</span><div class="min-w-0 flex-1 flex flex-wrap items-center gap-2" style="color:var(--text2)">${val}</div></div>`;
+            const runtime = (typeof runtimeMeta === 'function' && runtimeMeta(app.runtime)?.label) || app.runtime;
+            el.innerHTML = [
+                row('Status', `<span class="${_BADGE_BASE + statusMeta(st).cls}">${H(statusMeta(st).label)}</span>${app.status === 'running' && app.port ? `<span>port ${H(app.port)}</span>` : ''}${app.status === 'running' ? `<span style="color:var(--text3)">${(m.cpu ?? 0).toFixed(1)}% CPU · ${fmtBytes(m.memory || 0)}</span>` : ''}`),
+                row('Health', h ? `${statusPill(h.status)}<span style="color:var(--text3)">${H(h.error || (h.checked_at ? 'checked ' + fmtAgo(h.checked_at) : 'waiting for the first check'))}</span>`
+                    : `<span style="color:var(--text3)">${app.status !== 'running' ? 'not running' : (app.health_type === 'none' || (!app.healthcheck_path && (app.health_type || 'http') === 'http')) ? 'no health check' : 'waiting for the first check'}</span>
+                       <button type="button" class="underline" style="color:var(--text3)" data-on-click="switchTab('health')">Health</button>`),
+                row('Reached at', urls.length ? urls.map(([k, u]) => `<span class="w-full flex flex-wrap gap-2"><span style="color:var(--text3)">${H(k)}</span>${link(u)}</span>`).join('')
+                    : `<span style="color:var(--text3)">${app.status === 'running' ? 'no port found yet' : 'start the app to get an address'}</span>`),
+                row('Hostnames', `<span id="ov-hosts" style="color:var(--text3)">…</span><button type="button" class="underline" style="color:var(--text3)" data-on-click="switchTab('network')">Network</button>`),
+                row('Last deploy', dep),
+                row('Runs', `<span>${H(runtime)}${app.entrypoint ? ' · <span class="mono">' + H(app.entrypoint) + '</span>' : ''}</span><button type="button" class="underline" style="color:var(--text3)" data-on-click="switchTab('deploy')">Build and run</button>`),
+            ].join('');
+            _fillOverviewHosts(app);
+        }
+
+        async function _fillOverviewHosts(app) {
+            const [r, t] = await Promise.all([apiJson('GET', `/apps/${app.id}/routes`), apiJson('GET', `/apps/${app.id}/tunnel`)]);
+            const el = $id('ov-hosts');
+            if (!el || activeAppId !== app.id) return;
+            const names = [...new Set([app.domain, ...(r.ok ? r.data.filter(x => x.kind === 'proxy').map(x => x.hostname + (x.path_prefix !== '/' ? x.path_prefix : '')) : []),
+                ...(t.ok ? t.data.routes.filter(x => x.published).map(x => x.hostname) : [])].filter(Boolean))];
+            el.innerHTML = names.length ? names.map(n => `<span class="mono" style="color:var(--text2)">${escapeHtml(n)}</span>`).join(' · ') : 'none';
+        }
+
         let _usageApp = null;
         async function loadUsage() {
             const appId = activeAppId;
@@ -41,6 +82,7 @@
 
         // Python card: the version picker and its rebuild button.
         function renderSettingsExtras(app) {
+            if (typeof renderFormExtras === 'function') renderFormExtras(app);
             const card = $id('pyenv-card');
             if (!card) return;
             const isPy = (app.runtime || 'python') === 'python';

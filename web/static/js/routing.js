@@ -30,7 +30,7 @@
             const h = (window.location.hash || '').replace(/^#/, '');
             if (h === '/system') return { view: 'system' };
             const m = h.match(/^\/app\/(\d+)(?:\/([a-z]+))?$/);
-            if (m) return { view: 'app', id: parseInt(m[1], 10), tab: m[2] || 'terminal' };
+            if (m) return { view: 'app', id: parseInt(m[1], 10), tab: m[2] || defaultTab() };
             return null;
         }
 

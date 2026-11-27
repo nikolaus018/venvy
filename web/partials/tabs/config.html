@@ -1,0 +1,16 @@
+                    <!-- CONFIG -->
+                    <div id="tab-config"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-3xl mx-auto space-y-5 pb-10">
+                            <div class="card p-5 space-y-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="sliders" class="w-4 h-4"></i> Variables
+                                </h3>
+                                <div id="env-mount"></div>
+                                <p class="text-xs" style="color:var(--text3)">Variables every app gets: <button type="button" data-on-click="openSharedEnvModal()" class="underline">shared variables</button> (System). The app's own win.</p>
+                                <div class="flex justify-end pt-1"><button data-on-click="saveSettings()" data-requires-operator
+                                        class="btn-primary px-4 py-2 text-xs font-bold settings-card-save">Save</button></div>
+                            </div>
+                            <div id="config-hosting-root" class="space-y-5"></div>
+                        </div>
+                    </div>

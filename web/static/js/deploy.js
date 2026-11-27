@@ -36,7 +36,6 @@
             if (!opts.keepForm) {
                 $id('git-url').value = g.url;
                 $id('git-branch').value = g.branch;
-                $id('git-build').value = g.build_command;
                 $id('git-token').value = '';
             }
             $id('git-token').placeholder = g.has_token ? 'Saved — type to replace' : 'Paste a read-only personal access token';
@@ -114,7 +113,7 @@
         async function saveGit() {
             const appId = activeAppId;
             const btn = $id('git-save-btn');
-            const body = { git_url: _val('git-url'), git_branch: _val('git-branch') || 'main', build_command: _val('git-build') };
+            const body = { git_url: _val('git-url'), git_branch: _val('git-branch') || 'main' };
             const tok = $id('git-token').value.trim();
             if (tok) body.token = tok;
             btn.disabled = true;

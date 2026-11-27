@@ -475,8 +475,8 @@
 
             // Guard: app must have a port set for the tunnel to route traffic anywhere
             if (!localPort) {
-                showToast('Set a port for this app in Settings → Networking first.', 'warn', 5000);
-                switchTab('settings');
+                showToast('Set a port for this app in Network → Port first.', 'warn', 5000);
+                switchTab('network');
                 return;
             }
 

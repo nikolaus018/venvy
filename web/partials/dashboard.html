@@ -43,6 +43,27 @@
                             style="background:var(--surface3);color:var(--text2);border:1px solid var(--border2)">
                             Open <i data-feather="external-link" class="w-3 h-3"></i>
                         </button>
+                        <div class="relative shrink-0">
+                            <button id="btn-app-menu" data-on-click="toggleAppMenu()" aria-haspopup="menu" aria-expanded="false"
+                                aria-controls="app-menu" title="More" aria-label="More actions for this app"
+                                class="h-9 w-9 rounded-xl flex items-center justify-center active:scale-95 transition"
+                                style="background:var(--surface3);color:var(--text2);border:1px solid var(--border2)">
+                                <i data-feather="more-horizontal" class="w-4 h-4"></i>
+                            </button>
+                            <div id="app-menu" role="menu" class="hidden absolute right-0 top-11 z-40 w-56 rounded-xl p-1.5 shadow-xl"
+                                style="background:var(--surface);border:1px solid var(--border2)">
+                                <button role="menuitem" data-requires-operator data-on-click="toggleAppMenu(); duplicateApp()"
+                                    class="w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="copy" class="w-4 h-4"></i> Duplicate…</button>
+                                <button role="menuitem" data-requires-operator data-on-click="toggleAppMenu(); switchTab('data')"
+                                    class="w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="download-cloud" class="w-4 h-4"></i> Back up or export…</button>
+                                <div class="my-1" style="border-top:1px solid var(--border)"></div>
+                                <button role="menuitem" data-requires-operator data-on-click="toggleAppMenu(); deleteApp()"
+                                    class="w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2" style="color:var(--red)">
+                                    <i data-feather="trash-2" class="w-4 h-4"></i> Delete…</button>
+                            </div>
+                        </div>
                     </div>
                 </header>
 
@@ -52,34 +73,50 @@
                     <!-- Scrollable tab buttons -->
                     <div role="tablist" aria-label="Application sections" data-on-keydown="onTabListKey(event)"
                         class="flex-1 min-w-0 px-4 md:px-6 flex gap-5 text-sm font-medium overflow-x-auto overflow-y-hidden scrollbar-hide h-[44px]">
-                        <button class="tab-btn active h-full whitespace-nowrap" data-requires-operator role="tab"
-                            id="tabbtn-terminal" aria-controls="tab-terminal" aria-selected="true" data-tab="terminal"
-                            title="Terminal (1)" data-on-click="switchTab('terminal')">Terminal</button>
-                        <button class="tab-btn h-full whitespace-nowrap" data-requires-operator role="tab" id="tabbtn-files"
-                            aria-controls="tab-files" aria-selected="false" data-tab="files" tabindex="-1"
-                            title="Files (2)" data-on-click="switchTab('files')">Files</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-overview"
+                            aria-controls="tab-overview" aria-selected="false" data-tab="overview" tabindex="-1"
+                            title="Overview (1)" data-on-click="switchTab('overview')">Overview</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-code"
+                            aria-controls="tab-code" aria-selected="false" data-tab="code" tabindex="-1"
+                            title="Code (2)" data-on-click="switchTab('code')">Code</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-deploy" data-requires-operator
+                            aria-controls="tab-deploy" aria-selected="false" data-tab="deploy" tabindex="-1"
+                            title="Deploy (3)" data-on-click="switchTab('deploy')">Deploy</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-network"
+                            aria-controls="tab-network" aria-selected="false" data-tab="network" tabindex="-1"
+                            title="Network (4)" data-on-click="switchTab('network')">Network</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-config"
+                            aria-controls="tab-config" aria-selected="false" data-tab="config" tabindex="-1"
+                            title="Config (5)" data-on-click="switchTab('config')">Config</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-health"
+                            aria-controls="tab-health" aria-selected="false" data-tab="health" tabindex="-1"
+                            title="Health (6)" data-on-click="switchTab('health')">Health</button>
+                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-data"
+                            aria-controls="tab-data" aria-selected="false" data-tab="data" tabindex="-1"
+                            title="Data (7)" data-on-click="switchTab('data')">Data</button>
                         <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-logs"
                             aria-controls="tab-logs" aria-selected="false" data-tab="logs" tabindex="-1"
-                            title="Logs (3)" data-on-click="switchTab('logs')">Logs</button>
-                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-packages"
-                            aria-controls="tab-packages" aria-selected="false" data-tab="packages" tabindex="-1"
-                            title="Packages (4)" data-on-click="switchTab('packages')">Packages</button>
-                        <button class="tab-btn h-full whitespace-nowrap" data-requires-operator role="tab"
-                            id="tabbtn-deploy" aria-controls="tab-deploy" aria-selected="false" data-tab="deploy"
-                            tabindex="-1" title="Deploy (5)" data-on-click="switchTab('deploy')">Deploy</button>
+                            title="Logs (8)" data-on-click="switchTab('logs')">Logs</button>
                         <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-jobs"
                             aria-controls="tab-jobs" aria-selected="false" data-tab="jobs" tabindex="-1"
-                            title="Jobs (6)" data-on-click="switchTab('jobs')">Jobs</button>
-                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-settings"
-                            aria-controls="tab-settings" aria-selected="false" data-tab="settings" tabindex="-1"
-                            title="Settings (7)" data-on-click="switchTab('settings')">Settings</button>
-                        <button class="tab-btn h-full whitespace-nowrap" role="tab" id="tabbtn-hosting"
-                            aria-controls="tab-hosting" aria-selected="false" data-tab="hosting" tabindex="-1"
-                            title="Hosting (8)" data-on-click="switchTab('hosting')">Hosting</button>
+                            title="Jobs (9)" data-on-click="switchTab('jobs')">Jobs</button>
                     </div>
 
-                    <!-- Save Settings Button (Visible only on Settings tab) — outside scroll so always reachable -->
+                    <!-- Save button of the app's settings (on the tabs that have some) — outside the scroller so it is always reachable -->
                     <div id="settings-save-container" class="hidden items-center px-3 shrink-0 h-[44px]">
+                        <!-- Auto-save status indicator -->
+                        <div id="autosave-indicator" class="hidden flex items-center gap-1.5 mr-2"
+                            style="color:var(--text3)">
+                            <svg id="autosave-spinner" class="hidden w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 12a9 9 0 11-6.219-8.56" />
+                            </svg>
+                            <svg id="autosave-check" class="hidden w-3.5 h-3.5" fill="none" stroke="var(--green)"
+                                viewBox="0 0 24 24" stroke-width="2.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                            <span id="autosave-text" class="text-xs font-medium"></span>
+                        </div>
                         <button id="settings-save-btn" data-on-click="saveSettings()" data-requires-operator
                             class="btn-primary px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-2 active:scale-95 disabled:opacity-50">
                             <span id="save-status-dot"
@@ -89,24 +126,42 @@
                     </div>
                 </div>
 
+                <!-- Code: Terminal, Files and Packages, one row below the tabs -->
+                <div id="code-subnav" role="tablist" aria-label="Code" data-on-keydown="onCodeTabKey(event)"
+                    class="hidden shrink-0 items-center gap-1 px-4 md:px-6 h-[38px] overflow-x-auto scrollbar-hide"
+                    style="background:var(--surface);border-bottom:1px solid var(--border)">
+                    <button class="code-tab px-3 py-1 rounded-lg text-xs font-semibold" role="tab" id="tabbtn-terminal" data-requires-operator
+                        aria-controls="tab-terminal" aria-selected="false" tabindex="-1" data-on-click="switchTab('terminal')">Terminal</button>
+                    <button class="code-tab px-3 py-1 rounded-lg text-xs font-semibold" role="tab" id="tabbtn-files" data-requires-operator
+                        aria-controls="tab-files" aria-selected="false" tabindex="-1" data-on-click="switchTab('files')">Files</button>
+                    <button class="code-tab px-3 py-1 rounded-lg text-xs font-semibold" role="tab" id="tabbtn-packages"
+                        aria-controls="tab-packages" aria-selected="false" tabindex="-1" data-on-click="switchTab('packages')">Packages</button>
+                </div>
+
                 <!-- Tab Content -->
                 <div class="flex-1 overflow-hidden relative" style="background:var(--bg)">
+
+                    <!-- include: partials/tabs/overview.html -->
 
                     <!-- include: partials/tabs/terminal.html -->
 
                     <!-- include: partials/tabs/files.html -->
 
-                    <!-- include: partials/tabs/logs.html -->
-
                     <!-- include: partials/tabs/packages.html -->
 
                     <!-- include: partials/tabs/deploy.html -->
 
+                    <!-- include: partials/tabs/network.html -->
+
+                    <!-- include: partials/tabs/config.html -->
+
+                    <!-- include: partials/tabs/health.html -->
+
+                    <!-- include: partials/tabs/data.html -->
+
+                    <!-- include: partials/tabs/logs.html -->
+
                     <!-- include: partials/tabs/jobs.html -->
-
-                    <!-- include: partials/tabs/settings.html -->
-
-                    <!-- include: partials/tabs/hosting.html -->
 
                 </div>
             </div>

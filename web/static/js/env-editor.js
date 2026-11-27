@@ -1,4 +1,4 @@
-// Settings tab: the environment-variables editor — one row per variable.
+// Config tab: the environment-variables editor — one row per variable.
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
 //

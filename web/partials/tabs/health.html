@@ -1,0 +1,133 @@
+                    <!-- HEALTH -->
+                    <div id="tab-health"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-3xl mx-auto space-y-5 pb-10">
+                            <div class="card p-5 space-y-4" id="health-card">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="heart" class="w-4 h-4"></i> Health check <span id="health-pill"></span>
+                                </h3>
+                                <p class="text-xs" style="color:var(--text3)">While the app runs, Venvy checks it this way; one that keeps failing is reported, and restarted if you like. A deploy waits for it too. (Monitors, under System → Alerts, are for things outside Venvy.)</p>
+                                <div id="health-extra-mount" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div class="md:col-span-3">
+                                        <label class="block section-label mb-1.5" for="setting-health-path">Path</label>
+                                        <input id="setting-health-path" type="text" class="inp w-full px-3.5 py-2.5 text-sm mono" placeholder="/health  (blank = no check)" autocomplete="off" spellcheck="false">
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-1.5" for="setting-health-interval">Every (seconds)</label>
+                                        <input id="setting-health-interval" type="number" min="5" max="3600" class="inp w-full px-3.5 py-2.5 text-sm">
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-1.5" for="setting-health-failures">Unhealthy after</label>
+                                        <input id="setting-health-failures" type="number" min="1" max="20" class="inp w-full px-3.5 py-2.5 text-sm">
+                                    </div>
+                                    <label class="self-end flex items-center gap-2 py-2.5 border border-transparent text-sm cursor-pointer select-none" style="color:var(--text2)">
+                                        <input type="checkbox" id="setting-health-restart" class="rounded"> Restart it
+                                    </label>
+                                </div>
+                                <div class="flex justify-end pt-1"><button data-on-click="saveSettings()" data-requires-operator
+                                        class="btn-primary px-4 py-2 text-xs font-bold settings-card-save">Save</button></div>
+                            </div>
+                            <div class="card p-5 space-y-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="refresh-cw" class="w-4 h-4"></i> Restarts and stopping
+                                </h3>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block section-label mb-2">Restart Policy</label>
+                                        <select id="setting-policy" class="inp w-full px-3.5 py-2.5 text-sm">
+                                            <option value="never">Never (Manual only)</option>
+                                            <option value="on-failure">On Failure (Crash)</option>
+                                            <option value="always">Always (Keep alive)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block section-label mb-2">Auto-Start</label>
+                                        <div class="h-[42px] flex items-center px-3.5 rounded-xl"
+                                            style="background:var(--surface2);border:1px solid var(--border)">
+                                            <label class="flex items-center gap-3 cursor-pointer select-none w-full">
+                                                <input type="checkbox" id="setting-boot" class="rounded"
+                                                    style="accent-color:var(--text)">
+                                                <span class="text-sm font-medium" style="color:var(--text2)">Start on
+                                                    System Boot</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="stop-extra-mount" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                                <div class="flex justify-end pt-1"><button data-on-click="saveSettings()" data-requires-operator
+                                        class="btn-primary px-4 py-2 text-xs font-bold settings-card-save">Save</button></div>
+                            </div>
+                            <div class="card p-5 space-y-4" id="limits-card">
+                                <div class="flex items-center justify-between mb-1">
+                                    <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="cpu" class="w-4 h-4" style="color:var(--text)"></i>
+                                        Limits
+                                    </h3>
+                                    <button type="button" id="setting-limits-toggle" role="switch"
+                                        aria-checked="false" aria-label="Limit resources" data-on-click="toggleResourceLimits()"
+                                        class="toggle-track shrink-0">
+                                        <span class="toggle-knob"></span>
+                                    </button>
+                                </div>
+                                <p class="text-xs" style="color:var(--text3)">Memory and CPU: off = whatever this app wants; on = hard caps below.
+                                    For a Docker or Compose app they apply to each container.</p>
+                                <div id="setting-limits-unenforced-warn"
+                                    class="hidden items-start gap-2.5 mb-4 px-4 py-3 rounded-xl text-xs font-medium"
+                                    style="background:var(--surface3);border:1px solid var(--border3);color:var(--text2)">
+                                    <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor"
+                                        viewBox="0 0 24 24" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                    </svg>
+                                    <span>This host has no systemd — limits below will be saved but not enforced
+                                        until the app runs on a systemd Linux host.</span>
+                                </div>
+                                <div id="resource-limit-sliders-wrap" class="hidden grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <div class="flex items-center justify-between mb-2.5">
+                                            <label class="section-label">Memory Limit</label>
+                                            <span id="setting-memory-limit-label" class="text-xs font-bold mono"
+                                                style="color:var(--text)">512 MB</span>
+                                        </div>
+                                        <input type="range" id="setting-memory-limit" class="slider" min="16"
+                                            max="8192" step="16" value="512"
+                                            data-on-input="_updateResourceLimitLabels()">
+                                        <p class="text-xs mt-2" style="color:var(--text3)">Max reflects this host's
+                                            total RAM<span id="setting-memory-limit-hint"></span>.</p>
+                                    </div>
+                                    <div>
+                                        <div class="flex items-center justify-between mb-2.5">
+                                            <label class="section-label">CPU Limit</label>
+                                            <span id="setting-cpu-limit-label" class="text-xs font-bold mono"
+                                                style="color:var(--text)">0.5 cores</span>
+                                        </div>
+                                        <input type="range" id="setting-cpu-limit" class="slider" min="25" max="800"
+                                            step="25" value="50" data-on-input="_updateResourceLimitLabels()">
+                                        <p class="text-xs mt-2" style="color:var(--text3)">Max reflects this host's
+                                            core count<span id="setting-cpu-limit-hint"></span>.</p>
+                                    </div>
+                                </div>
+                                <div id="limits-extra-mount" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block section-label mb-1.5" for="setting-disk-limit">Disk limit (MB)</label>
+                                        <input id="setting-disk-limit" type="number" min="0" class="inp w-full px-3.5 py-2.5 text-sm" placeholder="0 = none">
+                                        <p class="text-xs mt-1" style="color:var(--text3)">Measured every few minutes. What happens when it is over: next to it.</p>
+                                    </div>
+                                    <div id="disk-action-mount"></div>
+                                </div>
+                                <div class="flex justify-end pt-1"><button data-on-click="saveSettings()" data-requires-operator
+                                        class="btn-primary px-4 py-2 text-xs font-bold settings-card-save">Save</button></div>
+                            </div>
+                            <div class="card p-5 space-y-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="shield" class="w-4 h-4"></i> Sandbox and network access
+                                </h3>
+                                <div id="sandbox-mount" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                                <p id="sandbox-note" class="text-[11px]" style="color:var(--text3)">Enforced when apps run as systemd services (Venvy as root on systemd).</p>
+                                <div class="flex justify-end pt-1"><button data-on-click="saveSettings()" data-requires-operator
+                                        class="btn-primary px-4 py-2 text-xs font-bold settings-card-save">Save</button></div>
+                            </div>
+                        </div>
+                    </div>

@@ -1,0 +1,252 @@
+                    <!-- NETWORK -->
+                    <div id="tab-network"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-3xl mx-auto space-y-5 pb-10">
+                            <div class="card p-5 space-y-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="radio" class="w-4 h-4"></i> Port
+                                </h3>
+                                <p class="text-xs" style="color:var(--text3)">Where the app listens. The hostnames below send their requests here.</p>
+                                <div id="net-status-card"></div>
+                                <!-- Open-App URL preference — only shown when CF tunnel is live -->
+                                <div id="open-url-pref-row"
+                                    class="hidden mb-5 flex items-center justify-between px-4 py-3 rounded-xl"
+                                    style="background:var(--surface2);border:1px solid var(--border)">
+                                    <div>
+                                        <p class="text-xs font-semibold" style="color:var(--text2)">Open App button uses
+                                        </p>
+                                        <p class="text-xs mt-0.5" style="color:var(--text3)">Choose which URL the button
+                                            opens</p>
+                                    </div>
+                                    <div class="flex items-center gap-1 p-1 rounded-xl"
+                                        style="background:var(--surface);border:1px solid var(--border)">
+                                        <button id="open-pref-local" data-on-click="setOpenUrlPref('local')"
+                                            class="px-3 py-1.5 text-xs font-bold rounded-lg transition"
+                                            style="color:var(--text3)">Local IP</button>
+                                        <button id="open-pref-public" data-on-click="setOpenUrlPref('public')"
+                                            class="px-3 py-1.5 text-xs font-bold rounded-lg transition"
+                                            style="color:var(--text3)">Public URL</button>
+                                    </div>
+                                </div>
+                                <details id="port-override-details" class="group">
+                                    <summary
+                                        class="flex items-center gap-1.5 cursor-pointer select-none list-none text-xs font-medium transition-colors"
+                                        style="color:var(--text3)">
+                                        <svg class="w-3.5 h-3.5 transition-transform duration-150 group-open:rotate-90"
+                                            fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                                        </svg>
+                                        Set ports manually (comma-separated, overrides auto-detection)
+                                    </summary>
+                                    <div class="mt-3 pl-5 space-y-2">
+                                        <div class="flex justify-between items-center mb-1">
+                                            <label class="block section-label">Port Numbers</label>
+                                            <button data-requires-operator
+                                                data-on-click="clearValue('setting-port'); checkSettingsDirty()"
+                                                class="text-[10px] uppercase font-bold tracking-wider opacity-40 hover:opacity-100 transition-opacity">Clear
+                                                All</button>
+                                        </div>
+                                        <div class="flex gap-2">
+                                            <input type="text" id="setting-port"
+                                                class="inp flex-1 px-3.5 py-2.5 mono text-sm" placeholder="e.g. 8000, 8080">
+                                        </div>
+                                        <p class="text-xs leading-relaxed" style="color:var(--text3)">Injected as
+                                            <code class="px-1 py-0.5 rounded mono text-[10px]"
+                                                style="background:var(--surface2)">PORT</code>
+                                            on next start. First port is primary.
+                                        </p>
+                                    </div>
+                                </details>
+                                <div id="netx-mount" class="grid grid-cols-1 gap-2"></div>
+                                <div class="flex justify-end pt-1"><button data-on-click="saveSettings()" data-requires-operator
+                                        class="btn-primary px-4 py-2 text-xs font-bold settings-card-save">Save</button></div>
+                            </div>
+                            <div class="card p-5 space-y-4" id="hostnames-card">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="globe" class="w-4 h-4"></i> Hostnames
+                                </h3>
+                                <p class="text-xs" style="color:var(--text3)">Every hostname this app is reached under, and what serves it. HTTPS on your own domains comes from Caddy (System → Network) or from the tunnel.</p>
+                                <div id="hostnames-list" class="space-y-1.5"><p class="text-xs" style="color:var(--text3)">Loading…</p></div>
+                                <div class="pt-3 space-y-3" style="border-top:1px solid var(--border)" data-requires-operator>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <label class="section-label" for="host-add-kind">Add or change</label>
+                                        <select id="host-add-kind" class="inp px-3 py-2 text-xs flex-1 min-w-0 max-w-full" data-on-change="showHostnameEditor(this.value)">
+                                            <option value="">Choose how it is served…</option>
+                                            <option value="domain">Main domain (Venvy's proxy)</option>
+                                            <option value="route">More hostnames, paths, redirects (Venvy's proxy)</option>
+                                            <option value="tunnel">Cloudflare tunnel</option>
+                                        </select>
+                                    </div>
+                                    <div id="host-ed-domain" class="hidden space-y-3">
+                                        <div>
+                                            <label class="block section-label mb-1.5" for="setting-domain">Domain</label>
+                                            <input id="setting-domain" type="text" class="inp w-full px-3.5 py-2.5 text-sm mono" placeholder="app.example.com  (blank = none)" autocomplete="off" spellcheck="false">
+                                            <p class="text-xs mt-1" style="color:var(--text3)">Requests that reach Venvy's port with this hostname go to the app, without Venvy's login. Point the name at this server (or at a tunnel or TLS proxy in front of it) — Venvy itself does not do TLS.</p>
+                                        </div>
+                                        <div class="flex justify-end"><button data-on-click="saveSettings()" data-requires-operator
+                                            class="btn-primary px-4 py-2 text-xs font-bold settings-card-save">Save</button></div>
+                                    </div>
+                                    <div id="host-ed-route" class="hidden"><div id="route-form-mount"></div></div>
+                                </div>
+                            </div>
+                            <!-- Cloudflare per-app -->
+                            <div class="card overflow-hidden hidden" id="host-ed-tunnel">
+                                <div class="px-5 py-4 flex items-center gap-3"
+                                    style="border-bottom:1px solid var(--border)">
+                                    <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="var(--cf-orange)">
+                                        <path
+                                            d="M16.5 7.5C16.5 7.5 15.75 4.5 12 4.5C8.68 4.5 6 7.18 6 10.5C6 10.5 3 11.25 3 14.25C3 16.93 5.07 19.5 8.25 19.5H17.25C19.73 19.5 21.75 17.48 21.75 15C21.75 12.8 20.12 10.98 18 10.58" />
+                                    </svg>
+                                    <div class="flex-1 min-w-0">
+                                        <h3 class="text-sm font-semibold" style="color:var(--text)">Cloudflare Tunnel
+                                        </h3>
+                                        <p class="text-xs mt-0.5 truncate" style="color:var(--text3)">Publish this app
+                                            to your domain</p>
+                                    </div>
+                                    <div id="cf-route-badge"
+                                        class="hidden items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold shrink-0"
+                                        style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);color:var(--green)">
+                                        <span class="w-1.5 h-1.5 rounded-full inline-block pulse-dot"
+                                            style="background:var(--green)"></span> Live
+                                    </div>
+                                </div>
+                                <div class="p-5 space-y-4">
+                                    <!-- Warning: no CF creds configured -->
+                                    <div id="cf-no-creds-warn"
+                                        class="hidden items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-medium"
+                                        style="background:var(--surface3);border:1px solid var(--border3);color:var(--text)">
+                                        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round"
+                                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                        <span>Not configured. <button data-on-click="openSystemView()"
+                                                class="underline font-bold">System → Cloudflare Tunnel</button></span>
+                                    </div>
+                                    <!-- Warning: no port set -->
+                                    <div id="cf-no-port-warn"
+                                        class="hidden items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-medium"
+                                        style="background:var(--surface3);border:1px solid var(--border3);color:var(--text)">
+                                        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round"
+                                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                        <span>No port yet. Start the app, or set one in the Port card above.</span>
+                                    </div>
+                                    <!-- Live URL banner (published state only) -->
+                                    <div id="cf-route-url-banner" class="hidden px-4 py-3.5 rounded-xl"
+                                        style="background:var(--surface3);border:1px solid var(--border3)">
+                                        <p class="section-label mb-1.5" style="color:var(--text)">Live Public URL</p>
+                                        <div class="flex items-center gap-2">
+                                            <a id="cf-route-url-link" href="#" target="_blank" rel="noopener noreferrer"
+                                                class="flex-1 text-sm mono font-bold hover:underline truncate min-w-0 select-text"
+                                                style="color:var(--text)"></a>
+                                            <button data-on-click="copyCfRouteUrl()" title="Copy URL"
+                                                class="shrink-0 p-1.5 rounded-lg transition active:scale-95"
+                                                style="color:var(--text)">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                                                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                                                </svg>
+                                            </button>
+                                            <a id="cf-route-url-open" href="#" target="_blank" rel="noopener noreferrer" title="Open in browser"
+                                                class="shrink-0 p-1.5 rounded-lg transition active:scale-95"
+                                                style="color:var(--text)">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+                                                    <polyline points="15 3 21 3 21 9" />
+                                                    <line x1="10" y1="14" x2="21" y2="3" />
+                                                </svg>
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <!-- Hostname + buttons — hidden when tunnel is not configured -->
+                                    <div id="cf-inputs-section" class="space-y-4">
+                                        <!-- Hostname input -->
+                                        <div id="cf-hostname-row">
+                                            <label class="block section-label mb-2">Public Hostname</label>
+                                            <!-- Subdomain + domain dropdown row -->
+                                            <div class="flex items-stretch gap-2">
+                                                <!-- Subdomain part (optional) -->
+                                                <div class="flex items-center rounded-xl overflow-hidden focus-within:ring-2 flex-1 min-w-0"
+                                                    style="background:var(--surface2);border:1px solid var(--border);transition:border-color 0.15s">
+                                                    <input type="text" id="cf-subdomain-input"
+                                                        placeholder="subdomain (optional)" autocomplete="off"
+                                                        spellcheck="false"
+                                                        class="flex-1 bg-transparent px-3 py-3 text-sm mono outline-none min-w-0 select-text"
+                                                        style="color:var(--text)" data-on-input="updateCfHostnamePreview()"
+                                                        data-on-enter="publishCfRoute()">
+                                                </div>
+                                                <!-- Dot separator -->
+                                                <span class="flex items-center text-sm mono shrink-0 px-1 select-none"
+                                                    style="color:var(--text3)">.</span>
+                                                <!-- Domain dropdown -->
+                                                <div class="relative flex-1 min-w-0">
+                                                    <select id="cf-domain-select"
+                                                        class="w-full h-full rounded-xl px-3 py-3 text-sm mono outline-none appearance-none cursor-pointer"
+                                                        style="background:var(--surface2);border:1px solid var(--border);color:var(--text);transition:border-color 0.15s"
+                                                        data-on-change="updateCfHostnamePreview()">
+                                                        <option value="" disabled selected style="color:var(--text3)">
+                                                            loading domains…</option>
+                                                    </select>
+                                                    <!-- Dropdown arrow -->
+                                                    <div
+                                                        class="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+                                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                            viewBox="0 0 24 24" stroke-width="2.5">
+                                                            <polyline points="6 9 12 15 18 9" />
+                                                        </svg>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <!-- Live preview of the full hostname -->
+                                            <p id="cf-hostname-preview" class="text-xs mt-2 mono font-medium"
+                                                style="color:var(--text);min-height:1.2em"></p>
+                                            <p class="text-xs mt-0.5" style="color:var(--text3)">Leave subdomain blank
+                                                to use the root domain.</p>
+                                        </div>
+                                        <!-- Button row — mutually exclusive states managed by loadCfRouteStatus() -->
+                                        <div class="flex gap-3">
+                                            <!-- UNPUBLISHED: single Publish button -->
+                                            <button data-on-click="publishCfRoute()" id="cf-publish-btn" data-requires-operator
+                                                class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
+                                                style="display:flex">
+                                                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                                    <path
+                                                        d="M16.5 7.5C16.5 7.5 15.75 4.5 12 4.5C8.68 4.5 6 7.18 6 10.5C6 10.5 3 11.25 3 14.25C3 16.93 5.07 19.5 8.25 19.5H17.25C19.73 19.5 21.75 17.48 21.75 15C21.75 12.8 20.12 10.98 18 10.58" />
+                                                </svg>
+                                                Publish
+                                            </button>
+                                            <!-- PUBLISHED: Republish + Remove side-by-side -->
+                                            <button data-on-click="publishCfRoute()" id="cf-republish-btn" data-requires-operator
+                                                class="btn-secondary flex-1 py-3 text-sm items-center justify-center gap-2"
+                                                style="display:none">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <polyline points="1 4 1 10 7 10" />
+                                                    <path d="M3.51 15a9 9 0 1 0 .49-4.85" />
+                                                </svg>
+                                                Republish
+                                            </button>
+                                            <button data-on-click="unpublishCfRoute()" id="cf-unpublish-btn" data-requires-operator
+                                                class="btn-danger py-3 px-5 text-sm items-center justify-center gap-2"
+                                                style="display:none">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24" stroke-width="2">
+                                                    <polyline points="3 6 5 6 21 6" />
+                                                    <path d="M19 6l-1 14H6L5 6" />
+                                                    <path d="M10 11v6M14 11v6" />
+                                                    <path d="M9 6V4h6v2" />
+                                                </svg>
+                                                Remove
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="network-hosting-root" class="space-y-5"></div>
+                        </div>
+                    </div>

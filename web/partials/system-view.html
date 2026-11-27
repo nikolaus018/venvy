@@ -7,7 +7,7 @@
                     <div>
                         <h2 class="text-xl font-bold" style="color:var(--text);font-family:'Inter',sans-serif">System
                         </h2>
-                        <p class="text-xs mt-0.5" style="color:var(--text3)">Host, backups and platform</p>
+                        <p class="text-xs mt-0.5" style="color:var(--text3)">Host, backups, alerts, network and platform</p>
                     </div>
                     <button data-on-click="loadSystemView(this); loadBackups()"
                         class="ml-auto flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50 px-2 py-2 -mr-2 rounded-lg"
@@ -19,6 +19,20 @@
                 <div class="flex-1 overflow-y-auto" style="touch-action:pan-y">
                     <div class="p-4 md:p-8 max-w-3xl mx-auto w-full space-y-5 pb-32 md:pb-12">
 
+                        <nav id="sys-nav" aria-label="System sections" class="flex flex-wrap gap-1.5 -mt-1">
+                            <button type="button" class="sys-chip px-2.5 py-1 rounded-lg text-xs font-semibold" data-on-click="systemSection('overview')">Overview</button>
+                            <button type="button" class="sys-chip px-2.5 py-1 rounded-lg text-xs font-semibold sys-admin-only" data-on-click="systemSection('backups')">Backups</button>
+                            <button type="button" class="sys-chip px-2.5 py-1 rounded-lg text-xs font-semibold" data-on-click="systemSection('alerts')">Alerts</button>
+                            <button type="button" class="sys-chip px-2.5 py-1 rounded-lg text-xs font-semibold sys-admin-only" data-on-click="systemSection('network')">Network</button>
+                            <button type="button" class="sys-chip px-2.5 py-1 rounded-lg text-xs font-semibold" data-on-click="systemSection('platform')">Platform</button>
+                            <button type="button" class="sys-chip px-2.5 py-1 rounded-lg text-xs font-semibold sys-admin-only" data-on-click="systemSection('integrations')">Integrations</button>
+                            <button type="button" class="sys-chip px-2.5 py-1 rounded-lg text-xs font-semibold" data-on-click="systemSection('access')">Access</button>
+                            <button type="button" class="sys-chip px-2.5 py-1 rounded-lg text-xs font-semibold sys-admin-only" data-on-click="systemSection('venvy')">Venvy</button>
+                        </nav>
+
+                        <section id="sys-sec-overview" class="space-y-3 scroll-mt-4" aria-labelledby="sys-h-overview">
+                            <div class="pt-2"><h2 id="sys-h-overview" class="text-xs font-bold uppercase tracking-wide" style="color:var(--text3)">Overview</h2>
+                                <p class="text-xs mt-0.5" style="color:var(--text3)">The host, its usage and its ports.</p></div>
                         <!-- Server Status -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div class="card p-5 space-y-4">
@@ -72,7 +86,6 @@
                                 </p>
                             </div>
                         </div>
-
                         <!-- Used Ports -->
                         <div class="card overflow-hidden">
                             <div class="px-5 py-3.5 flex items-center gap-2.5"
@@ -85,7 +98,6 @@
                                 <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
                             </div>
                         </div>
-
                         <!-- Free Ports -->
                         <div class="card overflow-hidden">
                             <div class="px-5 py-3.5 flex items-center gap-2.5"
@@ -98,7 +110,6 @@
                                 <span class="text-xs italic" style="color:var(--text3)">Loading…</span>
                             </div>
                         </div>
-
                         <!-- Host usage history (admins) -->
                         <div class="card p-5 hidden" id="sys-history-card">
                             <div class="flex items-center justify-between gap-3 mb-4">
@@ -114,55 +125,13 @@
                                 <div><p class="section-label mb-1">Disk</p><div id="sys-hist-disk"></div></div>
                             </div>
                         </div>
+                        </section>
 
-                        <!-- Operations (admins) -->
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 hidden" id="sys-ops-cards">
-                            <button id="sys-audit-card" data-on-click="openAuditModal()"
-                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
-                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                                    style="background:var(--ov);border:1px solid var(--ov-border)">
-                                    <i data-feather="list" class="w-4 h-4" style="color:var(--text)"></i>
-                                </div>
-                                <div class="flex-1 min-w-0">
-                                    <p class="text-sm font-semibold" style="color:var(--text)">Activity</p>
-                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-audit-card-sub">Who did what</p>
-                                </div>
-                            </button>
-                            <button id="sys-notify-card" data-on-click="openNotifyModal()"
-                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
-                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                                    style="background:var(--ov);border:1px solid var(--ov-border)">
-                                    <i data-feather="bell" class="w-4 h-4" style="color:var(--text)"></i>
-                                </div>
-                                <div class="flex-1 min-w-0">
-                                    <p class="text-sm font-semibold" style="color:var(--text)">Notifications &amp; alerts</p>
-                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-notify-card-sub">Where to hear about problems</p>
-                                </div>
-                            </button>
-                            <button id="sys-schedule-card" data-on-click="openScheduleModal()"
-                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
-                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                                    style="background:var(--ov);border:1px solid var(--ov-border)">
-                                    <i data-feather="clock" class="w-4 h-4" style="color:var(--text)"></i>
-                                </div>
-                                <div class="flex-1 min-w-0">
-                                    <p class="text-sm font-semibold" style="color:var(--text)">Backup schedule &amp; off-site copy</p>
-                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-schedule-card-sub">Automatic backups</p>
-                                </div>
-                            </button>
-                            <button id="sys-shared-card" data-on-click="openSharedEnvModal()"
-                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
-                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                                    style="background:var(--ov);border:1px solid var(--ov-border)">
-                                    <i data-feather="key" class="w-4 h-4" style="color:var(--text)"></i>
-                                </div>
-                                <div class="flex-1 min-w-0">
-                                    <p class="text-sm font-semibold" style="color:var(--text)">Shared variables</p>
-                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-shared-card-sub">Environment for every app</p>
-                                </div>
-                            </button>
-                        </div>
-
+                        <section id="sys-sec-backups" class="space-y-3 scroll-mt-4 sys-admin-only" aria-labelledby="sys-h-backups">
+                            <div class="pt-2"><h2 id="sys-h-backups" class="text-xs font-bold uppercase tracking-wide" style="color:var(--text3)">Backups</h2>
+                                <p class="text-xs mt-0.5" style="color:var(--text3)">Everything that can bring data back, in one place.</p></div>
+                        <div id="sys-protection" class="card p-5 space-y-2"><p class="text-xs" style="color:var(--text3)">Loading…</p></div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <!-- Backups -->
                         <button id="sys-backups-card" data-on-click="openBackupsModal()"
                             class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
@@ -177,23 +146,43 @@
                             </div>
                             <span class="btn-ghost shrink-0 px-3 py-2 text-xs font-bold rounded-lg pointer-events-none">Manage</span>
                         </button>
-
-                        <!-- Venvy's own version and updates (admins only — see openSystemView) -->
-                        <div id="sys-platform" class="space-y-3 hidden"></div>
-
-                        <div id="sys-update-card" class="card px-5 py-4 flex items-center gap-3 hidden">
-                            <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                                style="background:var(--ov);border:1px solid var(--ov-border)">
-                                <i data-feather="download-cloud" class="w-4 h-4" style="color:var(--text)"></i>
-                            </div>
-                            <div class="flex-1 min-w-0">
-                                <p class="text-sm font-semibold" id="sys-update-card-title" style="color:var(--text)">Venvy</p>
-                                <p class="text-xs mt-0.5 truncate" style="color:var(--text3)"><span id="sys-update-card-sub">Loading…</span><button type="button" id="sys-update-notes" data-on-click="openReleaseNotes()" class="hidden ml-1.5 underline" style="color:var(--accent)">What's new</button></p>
-                            </div>
-                            <button id="sys-update-check" data-on-click="loadUpdateCard(true)" class="btn-ghost shrink-0 px-3 py-2 text-xs font-bold rounded-lg">Check</button>
-                            <button id="sys-update-btn" data-on-click="onUpdateButton()" class="btn-primary shrink-0 px-3 py-2 text-xs font-bold rounded-lg hidden">Update</button>
+                            <button id="sys-schedule-card" data-on-click="openScheduleModal()" data-admin-card
+                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                    style="background:var(--ov);border:1px solid var(--ov-border)">
+                                    <i data-feather="clock" class="w-4 h-4" style="color:var(--text)"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-semibold" style="color:var(--text)">Backup schedule &amp; off-site copy</p>
+                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-schedule-card-sub">Automatic backups</p>
+                                </div>
+                            </button>
                         </div>
+                        <div id="sys-backups-extra" class="space-y-3"></div>
+                        </section>
 
+                        <section id="sys-sec-alerts" class="space-y-3 scroll-mt-4" aria-labelledby="sys-h-alerts">
+                            <div class="pt-2"><h2 id="sys-h-alerts" class="text-xs font-bold uppercase tracking-wide" style="color:var(--text3)">Alerts</h2>
+                                <p class="text-xs mt-0.5" style="color:var(--text3)">Who hears about problems, and what is watched besides the apps. An app's own health check is in its Health tab.</p></div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <button id="sys-notify-card" data-on-click="openNotifyModal()" data-admin-card
+                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                    style="background:var(--ov);border:1px solid var(--ov-border)">
+                                    <i data-feather="bell" class="w-4 h-4" style="color:var(--text)"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-semibold" style="color:var(--text)">Notifications &amp; alerts</p>
+                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-notify-card-sub">Where to hear about problems</p>
+                                </div>
+                            </button>
+                        </div>
+                        <div id="sys-alerts-extra" class="space-y-3"></div>
+                        </section>
+
+                        <section id="sys-sec-network" class="space-y-3 scroll-mt-4 sys-admin-only" aria-labelledby="sys-h-network">
+                            <div class="pt-2"><h2 id="sys-h-network" class="text-xs font-bold uppercase tracking-wide" style="color:var(--text3)">Network</h2>
+                                <p class="text-xs mt-0.5" style="color:var(--text3)">Ways in from the internet. Each app's hostnames are in its Network tab.</p></div>
                         <!-- Cloudflare Tunnel (admins only — see openSystemView) -->
                         <div class="card overflow-hidden" id="sys-cf-card">
                             <div class="px-5 py-4 flex items-center gap-3"
@@ -454,7 +443,76 @@
                                 </div>
                             </div>
                         </div>
+                        <div id="sys-network-extra" class="space-y-3"></div>
+                        </section>
 
+                        <section id="sys-sec-platform" class="space-y-3 scroll-mt-4" aria-labelledby="sys-h-platform">
+                            <div class="pt-2"><h2 id="sys-h-platform" class="text-xs font-bold uppercase tracking-wide" style="color:var(--text3)">Platform</h2>
+                                <p class="text-xs mt-0.5" style="color:var(--text3)">What apps can use: languages, managed services, shared folders and variables, host jobs, secrets.</p></div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <button id="sys-shared-card" data-on-click="openSharedEnvModal()" data-admin-card
+                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                    style="background:var(--ov);border:1px solid var(--ov-border)">
+                                    <i data-feather="key" class="w-4 h-4" style="color:var(--text)"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-semibold" style="color:var(--text)">Shared variables</p>
+                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-shared-card-sub">Environment for every app</p>
+                                </div>
+                            </button>
+                        </div>
+                        <div id="sys-platform" class="space-y-3 hidden"></div>
+                        </section>
+
+                        <section id="sys-sec-integrations" class="space-y-3 scroll-mt-4 sys-admin-only" aria-labelledby="sys-h-integrations">
+                            <div class="pt-2"><h2 id="sys-h-integrations" class="text-xs font-bold uppercase tracking-wide" style="color:var(--text3)">Integrations</h2>
+                                <p class="text-xs mt-0.5" style="color:var(--text3)">Sending logs and metrics elsewhere, and other Venvy servers.</p></div>
+                        <div id="sys-integrations-extra" class="space-y-3"></div>
+                        </section>
+
+                        <section id="sys-sec-access" class="space-y-3 scroll-mt-4" aria-labelledby="sys-h-access">
+                            <div class="pt-2"><h2 id="sys-h-access" class="text-xs font-bold uppercase tracking-wide" style="color:var(--text3)">Access</h2>
+                                <p class="text-xs mt-0.5" style="color:var(--text3)">Users, API tokens and what was done.</p></div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3" id="sys-ops-cards">
+                            <button id="sys-audit-card" data-on-click="openAuditModal()" data-admin-card
+                                class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                    style="background:var(--ov);border:1px solid var(--ov-border)">
+                                    <i data-feather="list" class="w-4 h-4" style="color:var(--text)"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-semibold" style="color:var(--text)">Activity</p>
+                                    <p class="text-xs mt-0.5 truncate" style="color:var(--text3)" id="sys-audit-card-sub">Who did what</p>
+                                </div>
+                            </button>
+                            <button id="sys-users-card" data-on-click="openUsersModal()" class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99] sys-admin-only">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background:var(--ov);border:1px solid var(--ov-border)"><i data-feather="users" class="w-4 h-4" style="color:var(--text)"></i></div>
+                                <div class="flex-1 min-w-0"><p class="text-sm font-semibold" style="color:var(--text)">Users and app access</p><p class="text-xs mt-0.5 truncate" style="color:var(--text3)">Who may sign in, and to which apps</p></div>
+                            </button>
+                            <button id="sys-tokens-card" data-on-click="openTokensModal()" class="card px-5 py-4 flex items-center gap-3 w-full text-left transition active:scale-[0.99]">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background:var(--ov);border:1px solid var(--ov-border)"><i data-feather="key" class="w-4 h-4" style="color:var(--text)"></i></div>
+                                <div class="flex-1 min-w-0"><p class="text-sm font-semibold" style="color:var(--text)">API tokens</p><p class="text-xs mt-0.5 truncate" style="color:var(--text3)">For scripts and CI (ship.py)</p></div>
+                            </button>
+                        </div>
+                        </section>
+
+                        <section id="sys-sec-venvy" class="space-y-3 scroll-mt-4 sys-admin-only" aria-labelledby="sys-h-venvy">
+                            <div class="pt-2"><h2 id="sys-h-venvy" class="text-xs font-bold uppercase tracking-wide" style="color:var(--text3)">Venvy</h2>
+                                <p class="text-xs mt-0.5" style="color:var(--text3)">This server's version and updates.</p></div>
+                        <div id="sys-update-card" class="card px-5 py-4 flex items-center gap-3 hidden">
+                            <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                style="background:var(--ov);border:1px solid var(--ov-border)">
+                                <i data-feather="download-cloud" class="w-4 h-4" style="color:var(--text)"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <p class="text-sm font-semibold" id="sys-update-card-title" style="color:var(--text)">Venvy</p>
+                                <p class="text-xs mt-0.5 truncate" style="color:var(--text3)"><span id="sys-update-card-sub">Loading…</span><button type="button" id="sys-update-notes" data-on-click="openReleaseNotes()" class="hidden ml-1.5 underline" style="color:var(--accent)">What's new</button></p>
+                            </div>
+                            <button id="sys-update-check" data-on-click="loadUpdateCard(true)" class="btn-ghost shrink-0 px-3 py-2 text-xs font-bold rounded-lg">Check</button>
+                            <button id="sys-update-btn" data-on-click="onUpdateButton()" class="btn-primary shrink-0 px-3 py-2 text-xs font-bold rounded-lg hidden">Update</button>
+                        </div>
+                        </section>
                     </div>
                 </div>
             </div>

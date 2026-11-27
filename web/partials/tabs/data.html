@@ -1,0 +1,27 @@
+                    <!-- DATA -->
+                    <div id="tab-data"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-3xl mx-auto space-y-5 pb-10">
+                            <div class="card p-5 space-y-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="hard-drive" class="w-4 h-4"></i> Data that survives deploys
+                                </h3>
+                                <p class="text-xs" style="color:var(--text2)">Keep what the app writes in <span class="mono">$APP_DATA_DIR</span>: deploys, releases and rollbacks never touch it, and it is in every app backup and every full backup. The app folder itself is replaced by atomic and artifact deploys.</p>
+                            </div>
+                            <div id="data-hosting-root" class="space-y-5"></div>
+                            <!-- Export -->
+                            <div class="card p-5">
+                                <h3 class="text-sm font-semibold mb-2 flex items-center gap-2"
+                                    style="color:var(--text)">
+                                    <i data-feather="download-cloud" class="w-4 h-4" style="color:var(--text)"></i>
+                                    Export Application
+                                </h3>
+                                <p class="text-sm mb-4" style="color:var(--text3)">Download a .zip archive with all
+                                    source files for this application.</p>
+                                <button data-on-click="downloadAppZip()" id="btn-download-zip" data-requires-operator
+                                    class="btn-secondary w-full py-3 text-sm flex items-center justify-center gap-2">
+                                    <i data-feather="archive" class="w-4 h-4"></i> Download Source Code
+                                </button>
+                            </div>
+                        </div>
+                    </div>

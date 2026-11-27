@@ -2,17 +2,32 @@
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
         // ── Tab Switching ─────────────────────────────────────────────────────────
-        const TABS = ['terminal', 'files', 'logs', 'packages', 'deploy', 'jobs', 'settings', 'hosting'];
-        let currentTab = 'terminal';
+        // The tab bar: one tab per question. Terminal, Files and Packages are the
+        // panes of Code (a row of their own under the tabs). Settings and Hosting
+        // were tabs before v5.1: links and bookmarks that name them still work.
+        const MAIN_TABS = ['overview', 'code', 'deploy', 'network', 'config', 'health', 'data', 'logs', 'jobs'];
+        const CODE_PANES = ['terminal', 'files', 'packages'];
+        const TABS = [...MAIN_TABS, ...CODE_PANES];
+        const TAB_ALIASES = { settings: 'overview', hosting: 'deploy' };
+        // Tabs that hold the app's settings form (Save in the tab bar).
+        const SETTINGS_TABS = new Set(['overview', 'deploy', 'network', 'config', 'health']);
+        let currentTab = 'overview';
+        let _codePane = null;     // the Code pane last open
 
-        // A shell and the file manager need an operator; a viewer's app view
-        // starts (and stays) on what it may read.
+        // A shell, the file manager and deploys need an operator; a viewer's
+        // app view starts (and stays) on what it may read.
         function tabAllowed(tab) {
             return currentUser?.role !== 'viewer' || (tab !== 'terminal' && tab !== 'files' && tab !== 'deploy');
         }
 
         function defaultTab() {
-            return currentUser?.role === 'viewer' ? 'logs' : 'terminal';
+            return 'overview';
+        }
+
+        function _resolveTab(tab) {
+            tab = TAB_ALIASES[tab] || tab;
+            if (tab === 'code') tab = (_codePane && tabAllowed(_codePane)) ? _codePane : CODE_PANES.find(tabAllowed);
+            return tab;
         }
 
         const LOG_POLL_MS = 1000;
@@ -23,16 +38,21 @@
         }
 
         function switchTab(tab, opts = {}) {
+            tab = _resolveTab(tab);
             if (!TABS.includes(tab) || !tabAllowed(tab)) tab = defaultTab();
             currentTab = tab;
+            const inCode = CODE_PANES.includes(tab);
+            if (inCode) _codePane = tab;
+            const mainTab = inCode ? 'code' : tab;
             document.querySelectorAll('.tab-content').forEach(el => {
                 el.classList.add('hidden');
                 el.classList.remove('tab-content-active');
             });
-            document.querySelectorAll('.tab-btn').forEach(el => {
+            document.querySelectorAll('.tab-btn, .code-tab').forEach(el => {
                 el.classList.remove('active');
                 el.style.color = 'var(--text3)';
-                el.style.borderBottomColor = 'transparent';
+                if (el.classList.contains('tab-btn')) el.style.borderBottomColor = 'transparent';
+                else el.style.background = 'transparent';
                 el.setAttribute('aria-selected', 'false');
                 el.tabIndex = -1;
             });
@@ -40,14 +60,27 @@
             panel.classList.remove('hidden');
             panel.classList.add('tab-content-active');
 
-            const btn = document.getElementById(`tabbtn-${tab}`);
+            const btn = document.getElementById(`tabbtn-${mainTab}`);
             if (btn) {
                 btn.classList.add('active');
                 btn.style.color = 'var(--text)';
                 btn.style.borderBottomColor = 'var(--accent)';
                 btn.setAttribute('aria-selected', 'true');
                 btn.tabIndex = 0;
-                if (opts.focusTab) btn.focus();
+                if (opts.focusTab && !inCode) btn.focus();
+            }
+            const sub = document.getElementById('code-subnav');
+            if (sub) { sub.classList.toggle('hidden', !inCode); sub.classList.toggle('flex', inCode); }
+            if (inCode) {
+                const pb = document.getElementById(`tabbtn-${tab}`);
+                if (pb) {
+                    pb.classList.add('active');
+                    pb.style.color = 'var(--text)';
+                    pb.style.background = 'var(--surface3)';
+                    pb.setAttribute('aria-selected', 'true');
+                    pb.tabIndex = 0;
+                    if (opts.focusTab) pb.focus();
+                }
             }
 
             if (logInterval) { clearInterval(logInterval); logInterval = null; _logsInflight = false; }
@@ -55,30 +88,71 @@
             if (tab === 'logs') startLogPolling();
             if (tab === 'files') loadFiles(currentBrowserPath);
             if (tab === 'packages') loadPackages();
-            if (tab === 'deploy') loadDeploy();
-            if (tab === 'jobs') loadJobs();
-            if (tab === 'hosting') loadHosting();
+            if (tab === 'deploy') { loadDeploy(); loadHosting('deploy'); }
+            if (tab === 'jobs') { loadJobs(); loadHosting('jobs'); }
+            if (tab === 'network') { loadCfRouteStatus(); loadHosting('network'); }
+            if (tab === 'config' || tab === 'data') loadHosting(tab);
+            if (tab === 'overview') { loadUsage(); renderOverview(activeApp); }
             if (tab === 'terminal' && window.term && window.fitAddon) setTimeout(_termFit, 100);
-            if (tab === 'settings') {
-                loadCfRouteStatus();
-                loadUsage();
-                document.getElementById('settings-save-container').classList.remove('hidden');
-                document.getElementById('settings-save-container').classList.add('flex');
-                checkSettingsDirty();
-            } else {
-                document.getElementById('settings-save-container').classList.add('hidden');
-                document.getElementById('settings-save-container').classList.remove('flex');
-            }
+            const saveBox = document.getElementById('settings-save-container');
+            const withSave = SETTINGS_TABS.has(tab);
+            saveBox.classList.toggle('hidden', !withSave);
+            saveBox.classList.toggle('flex', withSave);
+            if (withSave) checkSettingsDirty();
             // Keep the active tab visible in the horizontal scroller on mobile, after the
-            // Settings tab's Save button has (or hasn't) taken its share of the row.
+            // Save button has (or hasn't) taken its share of the row.
             if (btn) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
             if (!opts.silent) syncHash();
         }
 
+        // Scrolls a card into view inside its tab (a "see …" link).
+        function scrollToCard(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+            el.classList.add('card-flash');
+            setTimeout(() => el.classList.remove('card-flash'), 1200);
+        }
+
+        // The ⋯ menu in the app's header: Duplicate, Data, Delete.
+        function toggleAppMenu(force) {
+            const menu = document.getElementById('app-menu');
+            const btn = document.getElementById('btn-app-menu');
+            if (!menu || !btn) return;
+            const open = typeof force === 'boolean' ? force : menu.classList.contains('hidden');
+            menu.classList.toggle('hidden', !open);
+            btn.setAttribute('aria-expanded', String(open));
+            if (open) setTimeout(() => menu.querySelector('[role=menuitem]:not([disabled])')?.focus(), 0);
+        }
+        document.addEventListener('click', (e) => {
+            const menu = document.getElementById('app-menu');
+            if (menu && !menu.classList.contains('hidden') && !e.target.closest('#app-menu, #btn-app-menu')) toggleAppMenu(false);
+        });
+        document.addEventListener('keydown', (e) => {
+            const menu = document.getElementById('app-menu');
+            if (e.key === 'Escape' && menu && !menu.classList.contains('hidden')) { toggleAppMenu(false); document.getElementById('btn-app-menu')?.focus(); }
+        });
+
         // Left/Right arrows move between tabs, Home/End jump to the ends (WAI-ARIA).
         function onTabListKey(e) {
-            const allowed = TABS.filter(tabAllowed);
+            const allowed = MAIN_TABS.filter(t => t === 'code' ? CODE_PANES.some(tabAllowed) : tabAllowed(t));
             if (!allowed.length) return;
+            const here = CODE_PANES.includes(currentTab) ? 'code' : currentTab;
+            const i = Math.max(0, allowed.indexOf(here));
+            let next = null;
+            if (e.key === 'ArrowRight') next = allowed[(i + 1) % allowed.length];
+            else if (e.key === 'ArrowLeft') next = allowed[(i - 1 + allowed.length) % allowed.length];
+            else if (e.key === 'Home') next = allowed[0];
+            else if (e.key === 'End') next = allowed[allowed.length - 1];
+            if (!next) return;
+            e.preventDefault();
+            switchTab(next, { focusTab: true });
+        }
+
+        // The same keys in Code's own row (Terminal, Files, Packages).
+        function onCodeTabKey(e) {
+            const allowed = CODE_PANES.filter(tabAllowed);
+            if (!allowed.length || !CODE_PANES.includes(currentTab)) return;
             const i = Math.max(0, allowed.indexOf(currentTab));
             let next = null;
             if (e.key === 'ArrowRight') next = allowed[(i + 1) % allowed.length];

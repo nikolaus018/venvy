@@ -18,11 +18,18 @@
             // only get a form whose Save is refused.
             const isAdmin = currentUser?.role === 'admin';
             document.getElementById('sys-cf-card').classList.toggle('hidden', !isAdmin);
-            ['sys-history-card', 'sys-ops-cards', 'sys-update-card'].forEach(id => document.getElementById(id).classList.toggle('hidden', !isAdmin));
+            ['sys-history-card', 'sys-update-card'].forEach(id => document.getElementById(id).classList.toggle('hidden', !isAdmin));
+            document.querySelectorAll('#system-view .sys-admin-only, #system-view [data-admin-card]').forEach(el => el.classList.toggle('hidden', !isAdmin));
             if (isAdmin) { loadHostHistory(); loadOpsSummaries(); loadUpdateCard(); }
             loadSystemView(); loadBackups(); loadPlatformView();
             if (isAdmin) loadCfCredsStatus();
         }
+        // The row of section names at the top of System jumps to a section.
+        function systemSection(key) {
+            const el = document.getElementById(`sys-sec-${key}`);
+            if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
+
         function closeSystemView() {
             document.getElementById('system-view').classList.add('hidden');
             document.getElementById('system-nav-btn').classList.remove('active');

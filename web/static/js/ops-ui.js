@@ -13,6 +13,35 @@
             $id('sys-hist-disk').innerHTML = chartSvg(pts, 'disk', { max: 100, color: 'var(--amber)', fmt: v => `${v.toFixed(0)}%` });
         }
 
+        // System → Backups: what is protected, how, and when it last happened.
+        // Seven kinds of backup make it easy to assume one of them covers
+        // everything; this says plainly which run and which don't.
+        async function loadProtection() {
+            const el = $id('sys-protection');
+            if (!el || currentUser?.role !== 'admin') return;
+            const [b, s] = await Promise.all([apiJson('GET', '/system/backups'), apiJson('GET', '/system/backup/schedule')]);
+            const rp = window._protectionRepl || {};
+            const H = (x) => escapeHtml(x == null ? '' : String(x));
+            const list = b.ok ? b.data : [];
+            const latest = list[0];
+            const d = s.ok ? s.data : {};
+            const ok = (t) => `<span style="color:var(--green)">●</span> ${t}`;
+            const off = (t) => `<span style="color:var(--amber)">●</span> ${t}`;
+            const rows = [
+                d.schedule ? ok(`Automatic full backups: <span class="mono">${H(d.schedule)}</span>, the last ${H(d.keep)} kept${d.last ? (d.last.ok ? ', last one ok' : ', <b style="color:var(--red)">last one failed</b>') : ''}.`)
+                    : off('<b>No automatic backup runs.</b> Full backups are only made when someone makes one.'),
+                list.length ? ok(`${list.length} backup${list.length === 1 ? '' : 's'} on this server, the newest from ${H(new Date(latest.created_at).toLocaleString())}.`)
+                    : off('No backup on this server yet.'),
+                d.remote ? ok('Each automatic backup is also copied off-site.') : off('No off-site copy: a backup on this server is lost with the server.'),
+                rp.minutes ? ok(`Venvy's database is replicated off-site every ${H(rp.minutes)} min (settings, users, routes, variables; no app files).`)
+                    : off('Venvy\'s database is not replicated between backups.'),
+            ];
+            el.innerHTML = `<h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)"><i data-feather="shield" class="w-4 h-4"></i> What is protected</h3>
+                <ul class="space-y-1.5 text-xs" style="color:var(--text2)">${rows.map(r => `<li>${r}</li>`).join('')}</ul>
+                <p class="text-[11px]" style="color:var(--text3)">A full backup holds everything: database, key, every app's files and data, volumes. Per app there are also <b>app backups</b> (its folder and data, in its Data tab) and <b>releases</b> (its files before each deploy, in its Deploy tab).</p>`;
+            if (window.feather) feather.replace();
+        }
+
         async function loadOpsSummaries() {
             const [n, s, a] = await Promise.all([apiJson('GET', '/system/notify'), apiJson('GET', '/system/backup/schedule'), apiJson('GET', '/system/alerts')]);
             if (n.ok && a.ok) {

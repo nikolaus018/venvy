@@ -50,7 +50,7 @@
                             <!-- Repository -->
                             <div class="card p-5 space-y-4">
                                 <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
-                                    <i data-feather="git-branch" class="w-4 h-4"></i> Repository &amp; build
+                                    <i data-feather="git-branch" class="w-4 h-4"></i> Source
                                 </h3>
                                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <div class="md:col-span-2">
@@ -72,12 +72,7 @@
                                     </div>
                                     <p class="text-xs mt-1" style="color:var(--text3)">Stored encrypted and never shown again. It is only sent to the repository's own host.</p>
                                 </div>
-                                <div>
-                                    <label class="block section-label mb-1.5" for="git-build">Build command <span class="font-normal normal-case" style="color:var(--text3)">(optional)</span></label>
-                                    <input id="git-build" type="text" class="inp w-full px-3.5 py-2.5 text-sm mono" autocomplete="off" spellcheck="false"
-                                        placeholder="npm run build">
-                                    <p class="text-xs mt-1" style="color:var(--text3)">Runs in the app's folder after the dependencies are installed, with the app's environment variables. Without a repository it just rebuilds.</p>
-                                </div>
+                                <p class="text-xs" style="color:var(--text3)">The build command and the other build steps are in <button type="button" data-on-click="scrollToCard('build-run-card')" class="underline">Build and run</button>, below.</p>
                                 <div class="flex items-center justify-end">
                                     <button id="git-save-btn" data-on-click="saveGit()" data-requires-operator class="btn-primary px-5 py-2 text-xs font-bold">Save</button>
                                 </div>
@@ -125,5 +120,40 @@
                                 </div>
                             </div>
 
+                            <div class="card p-5 space-y-4" id="build-run-card">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="play-circle" class="w-4 h-4"></i> Build and run
+                                </h3>
+                                <p class="text-xs" style="color:var(--text3)">What runs and how it is built. The build command runs after the runtime's own build, on every deploy.</p>
+                                <div class="grid grid-cols-1 gap-4">
+                                    <div>
+                                        <label class="block section-label mb-2">Runtime Environment</label>
+                                        <select id="setting-runtime" class="inp w-full px-3.5 py-2.5 text-sm"
+                                            data-on-change="onRuntimeChange('settings')">
+                                            <option value="python">Python 3 (Venv)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label id="setting-entrypoint-label" class="block section-label mb-2">Entrypoint File</label>
+                                        <input type="text" id="setting-entrypoint" class="inp w-full px-3.5 py-2.5 mono text-sm"
+                                            placeholder="main.py">
+                                        <p id="setting-entrypoint-help" class="text-xs mt-1.5" style="color:var(--text3)"></p>
+                                    </div>
+                                </div>
+                                <div id="pyenv-card" class="hidden space-y-2 pt-1">
+                                    <p class="text-xs" style="color:var(--text3)">Builds the virtualenv again — with another Python version if you pick one — and reinstalls requirements.txt. The app has to be stopped.</p>
+                                    <div class="flex gap-2 items-end">
+                                        <div class="flex-1">
+                                            <label class="block section-label mb-1.5" for="setting-pyver">Python</label>
+                                            <select id="setting-pyver" class="inp w-full px-3.5 py-2.5 text-sm"></select>
+                                        </div>
+                                        <button data-on-click="rebuildVenv()" data-requires-operator id="pyenv-btn" class="btn-secondary px-4 py-2.5 text-sm shrink-0">Rebuild</button>
+                                    </div>
+                                </div>
+                                <div id="run-extra-mount" class="grid grid-cols-1 gap-3"></div>
+                                <div class="flex justify-end pt-1"><button data-on-click="saveSettings()" data-requires-operator
+                                        class="btn-primary px-4 py-2 text-xs font-bold settings-card-save">Save</button></div>
+                            </div>
+                            <div id="deploy-hosting-root" class="space-y-5"></div>
                         </div>
                     </div>

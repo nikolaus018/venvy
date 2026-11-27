@@ -62,7 +62,7 @@
         }
 
         function renderAppList(apps) {
-            // Workers and replicas are shown in their app's Hosting tab, not as apps of their own.
+            // Workers and replicas are shown in their app's Deploy tab (Processes), not as apps of their own.
             apps = apps.filter(a => !a.parent_app_id);
             const needle = _appFilter.trim().toLowerCase();
             const shown = needle ? apps.filter(a => (a.name || '').toLowerCase().includes(needle)) : apps;
@@ -316,6 +316,7 @@
         }
 
         async function selectApp(id, opts = {}) {
+            if (typeof opts === 'string') opts = { tab: opts };   // selectApp(7, 'logs') from a button
             if (id === activeAppId && !opts.force) {
                 // Re-selecting the already-active app should still leave System view,
                 // since that's how the user navigates back from it. activeAppId is
@@ -384,7 +385,7 @@
                 document.getElementById('dashboard').classList.remove('hidden');
             }
 
-            switchTab(opts.tab && TABS.includes(opts.tab) ? opts.tab : defaultTab());
+            switchTab(opts.tab && (TABS.includes(opts.tab) || TAB_ALIASES[opts.tab] || opts.tab === 'code') ? opts.tab : defaultTab());
             // A viewer may not open a shell; connecting anyway only produced
             // a row of failed reconnects.
             if (tabAllowed('terminal')) initTerminal(id); else _termDestroy();
@@ -448,7 +449,7 @@
             _resetPerAppLogUi();
             // Nothing left that could be unsaved.
             document.getElementById('save-status-dot')?.classList.add('hidden');
-            document.querySelector('#tabbtn-settings .settings-dirty-dot')?.remove();
+            document.querySelectorAll('.settings-dirty-dot').forEach(d => d.remove());
             ['delete-app-modal', 'remove-pkg-modal', 'file-name-modal', 'tunnel-conflict-modal'].forEach(closeModal);
             _lastAppListHash = '';
             document.getElementById('dashboard').classList.add('hidden');
@@ -517,6 +518,7 @@
             }
 
             _updateNetworkCard(app);
+            if (currentTab === 'overview') renderOverview(app);
 
             _wireSettingsDirtyCheck();
             checkSettingsDirty();
@@ -670,7 +672,7 @@
         function openExternal() {
             const url = _getEffectiveUrl(activeApp);
             if (!url) {
-                showToast(activeApp?.status === 'running' ? 'Port not yet detected — try again.' : 'Start the app first, or set a port in Settings.', 'warn', 4000);
+                showToast(activeApp?.status === 'running' ? 'Port not yet detected — try again.' : 'Start the app first, or set a port in Network → Port.', 'warn', 4000);
                 return;
             }
             if (!/^https?:\/\//i.test(url)) return;

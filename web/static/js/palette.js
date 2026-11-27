@@ -23,7 +23,7 @@
                     cmds.push({
                         icon: 'chevron-right',
                         label: 'Go to ' + t.charAt(0).toUpperCase() + t.slice(1),
-                        hint: String(i + 1),
+                        hint: i < MAIN_TABS.length ? String(i + 1) : '',
                         run: () => switchTab(t),
                     });
                 });
@@ -177,14 +177,15 @@
             },
             {
                 title: 'Navigation', items: [
-                    [['1'], 'Terminal'],
-                    [['2'], 'Files'],
-                    [['3'], 'Logs'],
-                    [['4'], 'Packages'],
-                    [['5'], 'Deploy'],
-                    [['6'], 'Jobs'],
-                    [['7'], 'Settings'],
-                    [['8'], 'Hosting'],
+                    [['1'], 'Overview'],
+                    [['2'], 'Code (terminal, files, packages)'],
+                    [['3'], 'Deploy'],
+                    [['4'], 'Network'],
+                    [['5'], 'Config'],
+                    [['6'], 'Health'],
+                    [['7'], 'Data'],
+                    [['8'], 'Logs'],
+                    [['9'], 'Jobs'],
                     [['['], 'Previous application'],
                     [[']'], 'Next application'],
                     [['←', '→'], 'Move between tabs (when a tab is focused)'],
@@ -261,9 +262,9 @@
                         document.getElementById('app-search')?.focus();
                     }
                     return;
-                case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8':
+                case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
                     if (!activeAppId) return;
-                    e.preventDefault(); switchTab(TABS[Number(e.key) - 1]); return;
+                    e.preventDefault(); switchTab(MAIN_TABS[Number(e.key) - 1]); return;
                 case '[': case ']':
                     e.preventDefault(); cycleApp(e.key === ']' ? 1 : -1); return;
                 case 'f': case 'F':

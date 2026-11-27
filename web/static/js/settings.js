@@ -1,4 +1,4 @@
-// Settings tab: resource-limit sliders, save and dirty tracking, export as zip, delete app.
+// The app's settings form (spread over Overview, Deploy, Network, Config and Health): resource-limit sliders, save and dirty tracking, export as zip, delete app.
 // A classic script: it shares one global scope with the other files in this
 // directory, in the order web/index.html loads them.
         // ── Settings ──────────────────────────────────────────────────────────────
@@ -306,6 +306,8 @@
                 memory_limit_mb: memoryLimit,
                 cpu_limit_percent: cpuLimit,
                 ..._readMonitoringFields(),
+                // The settings that sit in other cards (Build and run, Health, Limits …): the changed ones.
+                ...formExtrasChanged(),
             };
 
             btn.disabled = true;
@@ -363,6 +365,11 @@
                 _tempOpenUrlPref = activeApp.url_source_pref || 'local';
                 _renderOpenPrefButtons(_tempOpenUrlPref);
                 _updateNetworkCard(activeApp);
+                renderSettingsExtras(activeApp);
+                if (typeof renderOverview === 'function') renderOverview(activeApp);
+                // Deploy now reads the build command from the deploy state.
+                if (currentTab === 'deploy' && typeof loadDeploy === 'function') loadDeploy();
+                if (currentTab === 'network' && typeof loadHosting === 'function') loadHosting('network');
                 checkSettingsDirty();
 
                 _showAutosave('saved');
@@ -374,7 +381,7 @@
                 _showAutosave('error');
             } finally {
                 btn.disabled = false;
-                btnText.innerText = 'Save Changes';
+                btnText.innerText = 'Save';
             }
         }
 
@@ -424,7 +431,8 @@
                 memoryLimit !== (activeApp.memory_limit_mb ?? 0) ||
                 cpuLimit !== (activeApp.cpu_limit_percent ?? 0) ||
                 monDirty ||
-                !envMatch
+                !envMatch ||
+                Object.keys(formExtrasChanged()).length > 0
             );
 
             const dot = document.getElementById('save-status-dot');
@@ -440,9 +448,9 @@
                 btn.classList.add('btn-primary');
                 btn.classList.remove('btn-orange');
             }
-            // Mark the Settings tab itself so unsaved work is visible from any tab.
-            const tabBtn = document.getElementById('tabbtn-settings');
-            if (tabBtn) {
+            // Unsaved work shows on the Save button and on every tab that has settings.
+            document.querySelectorAll('.tab-btn').forEach(tabBtn => {
+                if (!SETTINGS_TABS.has(tabBtn.dataset.tab)) return;
                 let mark = tabBtn.querySelector('.settings-dirty-dot');
                 if (isDirty && !mark) {
                     mark = document.createElement('span');
@@ -450,12 +458,11 @@
                     mark.setAttribute('aria-hidden', 'true');
                     mark.style.cssText = 'display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--amber);margin-left:5px;vertical-align:middle';
                     tabBtn.appendChild(mark);
-                    tabBtn.title = 'Settings (7) — unsaved changes';
                 } else if (!isDirty && mark) {
                     mark.remove();
-                    tabBtn.title = 'Settings (7)';
                 }
-            }
+            });
+            document.querySelectorAll('.settings-card-save').forEach(b => b.classList.toggle('btn-orange', isDirty));
         }
 
         let _settingsWired = false;

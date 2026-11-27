@@ -1,0 +1,40 @@
+                    <!-- OVERVIEW -->
+                    <div id="tab-overview"
+                        class="tab-content absolute inset-0 hidden p-4 md:p-8 overflow-y-auto pb-safe-content md:pb-8">
+                        <div class="max-w-3xl mx-auto space-y-5 pb-10">
+                            <div class="card p-5 space-y-4" id="ov-card">
+                                <div id="ov-summary" class="space-y-3"><p class="text-xs" style="color:var(--text3)">Loading…</p></div>
+                            </div>
+                            <div class="card p-5 space-y-4">
+                                <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                    <i data-feather="box" class="w-4 h-4"></i> App
+                                </h3>
+                                <div >
+                                    <label class="block section-label mb-2">App Name</label>
+                                    <input type="text" id="setting-name"
+                                        class="inp w-full px-3.5 py-2.5 text-sm" placeholder="My App">
+                                </div>
+                                <div class="flex justify-end pt-1"><button data-on-click="saveSettings()" data-requires-operator
+                                        class="btn-primary px-4 py-2 text-xs font-bold settings-card-save">Save</button></div>
+                            </div>
+                            <!-- Usage history -->
+                            <div class="card p-5">
+                                <div class="flex items-center justify-between gap-3 mb-4">
+                                    <h3 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text)">
+                                        <i data-feather="activity" class="w-4 h-4"></i> Usage
+                                    </h3>
+                                    <select id="usage-range" class="inp px-2.5 py-1.5 text-xs" data-on-change="loadUsage()">
+                                        <option value="60">Last hour</option>
+                                        <option value="360">6 hours</option>
+                                        <option value="1440">24 hours</option>
+                                        <option value="10080">7 days</option>
+                                    </select>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    <div><p class="section-label mb-1">CPU <span class="font-normal normal-case" style="color:var(--text3)">(% of one core)</span></p><div id="usage-cpu"></div></div>
+                                    <div><p class="section-label mb-1">Memory</p><div id="usage-mem"></div></div>
+                                </div>
+                                <p class="text-xs mt-4" style="color:var(--text3)">Disk used by the app's folder: <span id="usage-disk" class="mono" style="color:var(--text2)">—</span></p>
+                            </div>
+                        </div>
+                    </div>
