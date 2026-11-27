@@ -5,6 +5,31 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v5.1.0
+
+An app's tabs are reorganised: one tab per question, every setting in one place, and features nobody has set up take one line.
+
+- **The app's tabs** are Overview, Code, Deploy, Network, Config, Health, Data, Logs and Jobs (keys 1–9). The Settings and Hosting tabs are gone; links and bookmarks to them still work (Settings opens the Overview, Hosting opens Deploy).
+  - **Overview:** status, health right now, where the app is reached (addresses and hostnames), the last deploy, what it runs, and the usage charts.
+  - **Code:** the terminal, files and packages, in a row of their own under the tabs.
+  - **Deploy:** source (repository, token, key), deploy on push, releases, and **Build and run**: runtime, entrypoint, version (for Python the version picker with Rebuild), start, install, build and release commands, root folder, container port. Then processes, deploy options with artifact upload, and previews and commit statuses.
+  - **Network:** the port and whether it is reachable from the network, then **Hostnames**: one list of every name the app is reached under, with what serves it (Venvy's proxy as main domain, route or redirect; the Cloudflare tunnel). The domain, routes and the tunnel are added and changed from that one card. Below: port forwards, Tailscale and ngrok, and the traffic through the proxy.
+  - **Config:** the variables, and secrets (files, SOPS, Vault).
+  - **Health:** one health-check card with all of its fields (type, path or command, interval, failures, restart, start period; it shows the fields of the chosen type), restarts and stopping (policy, start on boot, stop signal and timeout), limits (memory, CPU, processes, I/O, open files, and the disk limit together with what happens over it), and the sandbox and outgoing connections.
+  - **Data:** where data that survives deploys goes, services and volumes, app backups, and export.
+  - **Jobs:** scheduled jobs, and **Run once** for a single command.
+  - Duplicate and Delete are in the app's ⋯ menu.
+- **Every setting is in one place.** The build command was in two tabs (and the Hosting one never saved, fixed in v5.0.6); the language version, the health check, the disk limit and its action, and the restart and stop settings were each split over two. Each card has its own Save; unsaved changes show on the Save button and on the tabs that hold them.
+- **System is in sections:** Overview, Backups, Alerts, Network, Platform, Integrations, Access and Venvy, with a row at the top to jump to each.
+  - **Backups** starts with what is protected, in plain sentences: whether automatic backups run (and that none do, when that is so), how many backups there are and the newest, whether they are copied off-site, and whether the database is replicated. App backups and releases are named apart.
+  - **Alerts** has notifications, monitors, the status page and the heartbeat (now in a card of its own, and it can be switched off again); **Integrations** has log shipping, metrics and OTLP, and other servers.
+- **Features with nothing set up take one line** until they are opened: processes, previews, port forwards and Tailscale/ngrok, secrets, services and volumes, toolchains, managed services, volumes, monitors, the status page, the heartbeat, log shipping, metrics, other servers, host jobs, secrets back-ends and replication. The line says what is set up.
+- Egress choices a container app can't have aren't offered for it; the sandbox switch isn't shown for container apps.
+- Saving settings that change the domain together with anything else takes a moment instead of over 20 seconds, and the domain change appears in Activity again. Its audit entry waited for the database the save itself held, and was dropped.
+- "Clear All" under Network → Port marks the form unsaved (it stopped with an error).
+- "Logs" next to a worker opens that worker's logs.
+- Deleting a monitor or an app backup asks first.
+
 ## v5.0.6
 
 - A deploy counts as done only once the app answers. Without a health check it used to be "ok" as soon as the app was still running a few seconds after the restart; a Compose app's site could answer 502 for a while after that. Now a web app's port has to answer (anything but 502, 503 or 504); if it doesn't within the deploy's wait, the previous version is put back. Apps that listen on no port (workers, bots), and apps whose health check is set to None, deploy as before.
