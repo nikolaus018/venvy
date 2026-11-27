@@ -711,6 +711,9 @@ async def update_app(
     user: User = Depends(require_operator),
     _rl: None = Depends(rate_limit_mutations),
 ):
+    # Written after the commit below: the row's changes hold SQLite's write lock
+    # until then, and the audit trail writes from a connection of its own.
+    _audits: List[tuple] = []
     app_row = session.get(App, app_id)
     if not app_row:
         raise HTTPException(404)
@@ -775,7 +778,7 @@ async def update_app(
                 raise HTTPException(400, f"Environment variable {env_key} contains a NUL character.")
         _record_env_change(session, app_row, req.env_vars, user.username)
         app_row.env_json = _encrypt_secret(json.dumps(req.env_vars))
-        audit_log(user.username, "app_env_change", f"app '{app_row.name}' (id={app_id})")
+        _audits.append((user.username, "app_env_change", f"app '{app_row.name}' (id={app_id})"))
     # Runtime first: the entrypoint rules below depend on it, and a request
     # that switches a Rust app to Python *and* names its entrypoint used to
     # have that entrypoint overwritten with main.rs.
@@ -842,11 +845,11 @@ async def update_app(
             if new_domain != app_row.domain:
                 for r in session.exec(select(Route).where(Route.hostname == new_domain, Route.app_id != app_id)).all():
                     if not has_app_access(session, user, r.app_id) or r.path_prefix in ("", "/"):
-                        raise HTTPException(409, f"{new_domain} is already routed to another app (Hosting → Routes).")
+                        raise HTTPException(409, f"{new_domain} is already routed to another app (Network → Hostnames).")
                 if session.exec(select(CfRoute).where(CfRoute.hostname == new_domain, CfRoute.app_id != app_id)).first():
                     raise HTTPException(409, f"{new_domain} is published for another app through the tunnel.")
         if new_domain != app_row.domain:
-            audit_log(user.username, "app_domain_change", f"app '{app_row.name}' (id={app_id}): {new_domain or 'removed'}")
+            _audits.append((user.username, "app_domain_change", f"app '{app_row.name}' (id={app_id}): {new_domain or 'removed'}"))
         app_row.domain = new_domain
     # An app served on its own domain or a route proxies Host-matched traffic to
     # its local port, so apply the same port ownership check as Cloudflare publishing.
@@ -878,13 +881,15 @@ async def update_app(
             app_row.secret_files = secrets_ext.clean_files(req.secret_files)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
-        audit_log(user.username, "app_secret_files_change", f"app '{app_row.name}' (id={app_id}): {len(req.secret_files)} file(s)")
+        _audits.append((user.username, "app_secret_files_change", f"app '{app_row.name}' (id={app_id}): {len(req.secret_files)} file(s)"))
     if changed:
-        audit_log(user.username, "app_settings_change", f"app '{app_row.name}' (id={app_id}): {', '.join(changed)}")
+        _audits.append((user.username, "app_settings_change", f"app '{app_row.name}' (id={app_id}): {', '.join(changed)}"))
 
     app_row.updated_at = utc_now()
     session.add(app_row)
     session.commit()
+    for entry in _audits:
+        audit_log(*entry)
     removed: List[int] = []
     if not app_row.parent_app_id and (req.instances is not None or req.healthcheck_path is not None
                                       or req.health_type is not None or req.restart_policy is not None):

@@ -105,10 +105,19 @@ with server(repo, PORT, env={"VENVY_HEALTH_WAIT_SEC": "20"}) as (base, data, srv
     st = deploy(cl, worker)
     check("a worker that listens nowhere still deploys", st["status"] == "ok", "\n".join(st.get("log") or [])[-600:])
 
+    # ── 15. a settings save with several fields is quick and audited ───────
+    t0 = time.time()
+    r = cl.req("PUT", f"/api/apps/{worker}", json={"healthcheck_path": "/h", "domain": "audited.example.test"})
+    took = time.time() - t0
+    check("a save that changes a domain with other fields doesn't wait on the database", r.status_code == 200 and took < 5, f"{r.status_code} {took:.1f}s")
+    aud = cl.req("GET", "/api/audit", params={"q": "audited.example.test"}).json()
+    rows = aud if isinstance(aud, list) else aud.get("entries", aud.get("rows", []))
+    check("... and its audit entry is written", any("audited.example.test" in json.dumps(e) for e in rows), str(rows)[:300])
+
     # ── 13. the build command saved with the app's settings is kept ─────────
     r = cl.req("PUT", f"/api/apps/{worker}", json={"build_command": "echo built > built.txt"})
     got = cl.req("GET", f"/api/apps/{worker}/deploy").json()["git"].get("build_command")
-    check("PUT /apps keeps a build command (Hosting → Run and build)", r.status_code == 200 and got == "echo built > built.txt",
+    check("PUT /apps keeps a build command (Deploy → Build and run)", r.status_code == 200 and got == "echo built > built.txt",
           f"{r.status_code} {got!r}")
     r = cl.req("PUT", f"/api/apps/{worker}", json={"build_command": ""})
     got = cl.req("GET", f"/api/apps/{worker}/deploy").json()["git"].get("build_command")
