@@ -275,7 +275,9 @@ class TerminalManager:
                 else:
                     spawn_argv = inner_argv
                     spawn_env = _clean_root_env()
-                proc = subprocess.Popen(
+                # fork+exec of a large process takes a moment: not on the event loop.
+                proc = await asyncio.to_thread(
+                    subprocess.Popen,
                     spawn_argv,
                     cwd=str(jail_root),
                     stdin=slave_fd,

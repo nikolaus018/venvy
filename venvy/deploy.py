@@ -978,18 +978,32 @@ async def _stage_archive(app: App, staging: Path, archive: Path, log: _Log, carr
         *_as_app_user(app, ["tar", "-xzf", "-", "-C", str(staging), "--no-same-owner", "--no-same-permissions"]),
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         env=_app_tool_env(app), start_new_session=True)
-    with open(archive, "rb") as f:
-        data_iter = iter(lambda: f.read(1 << 20), b"")
-        assert proc.stdin is not None
-        try:
-            for chunk in data_iter:
-                proc.stdin.write(chunk)
-                await proc.stdin.drain()
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        finally:
-            proc.stdin.close()
-    _, err = await asyncio.wait_for(proc.communicate(), timeout=1200)
+    async def feed_and_wait():
+        # Read off the event loop, and under the one time limit: a tar that
+        # stops reading its input would otherwise hold drain() for ever.
+        with open(archive, "rb") as f:
+            assert proc.stdin is not None
+            try:
+                while True:
+                    chunk = await asyncio.to_thread(f.read, 1 << 20)
+                    if not chunk:
+                        break
+                    proc.stdin.write(chunk)
+                    await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                proc.stdin.close()
+        return await proc.communicate()
+
+    try:
+        _, err = await asyncio.wait_for(feed_and_wait(), timeout=1200)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        raise DeployError("Unpacking the artifact took longer than 20 minutes.")
     if proc.returncode != 0:
         raise DeployError("The artifact could not be unpacked: " + err.decode(errors="replace")[:300])
     if not carry:

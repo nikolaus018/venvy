@@ -119,7 +119,10 @@
         function applyRoleUiGating(role) {
             const isViewer = role === 'viewer';
             document.body.classList.toggle('role-viewer', isViewer);
-            document.querySelectorAll('#tab-settings input, #tab-settings select, #tab-settings textarea, #tab-settings [role="switch"]').forEach(el => {
+            // The fields of the settings form, in whichever tab they are now (v5.1 split
+            // the old Settings tab over several).
+            const sel = [...SETTINGS_TABS].flatMap(t => ['input', 'select', 'textarea', '[role="switch"]'].map(x => `#tab-${t} ${x}`)).join(', ');
+            document.querySelectorAll(sel).forEach(el => {
                 if (el.id === 'usage-range') return;
                 if (isViewer) {
                     if (!el.disabled) el.dataset.viewerDisabled = '1';

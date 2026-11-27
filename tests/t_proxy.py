@@ -1,6 +1,6 @@
 """Rotating a spoofed CF-Connecting-IP from loopback must not allow unlimited guesses; with VENVY_PROXY_SECRET the header needs the secret."""
 import sys
-from harness import admin, make_app, server, APP_CODE
+from harness import admin, make_app, server
 repo = sys.argv[1]
 def guesses(cl, n, extra=None):
     out = []

@@ -736,7 +736,8 @@ async def update_app(
         for p in req.manual_ports:
             if not (1 <= p <= 65535):
                 raise HTTPException(400, f"Invalid port: {p}")
-            valid_ports.append(p)
+            if p not in valid_ports:          # "8000, 8000" is one port
+                valid_ports.append(p)
         app_row.manual_ports = json.dumps(valid_ports)
         if valid_ports:
             app_row.port = valid_ports[0]

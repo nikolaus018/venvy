@@ -3,7 +3,6 @@
 usage: smoke.py <repo_dir> [--keep]
 Exits non-zero on the first failed check.
 """
-import json
 import os
 import shutil
 import signal

@@ -8,7 +8,6 @@ Called by t_installed.py (per-app-users mode) with its client and check()."""
 import json
 import os
 import shutil
-import socket
 import subprocess
 import time
 

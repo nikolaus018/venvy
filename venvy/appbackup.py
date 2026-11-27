@@ -26,7 +26,7 @@ import re
 import shutil
 import tarfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from sqlmodel import Session
 
@@ -103,7 +103,7 @@ async def create(app_id: int) -> dict:
             if size > 20 * 1024 ** 3:
                 proc.kill()
                 break
-            f.write(chunk)
+            await asyncio.to_thread(f.write, chunk)
     _, err = await proc.communicate()
     if proc.returncode != 0:
         inner.unlink(missing_ok=True)

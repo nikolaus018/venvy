@@ -20,7 +20,6 @@ from starlette.staticfiles import StaticFiles
 from venvy.config import (
     _ALLOWED_ORIGINS,
     APPS_BASE_DIR,
-    ASSETS_DIR,
     SESSION_TTL_SECONDS,
     WEB_DIR,
     utc_now,

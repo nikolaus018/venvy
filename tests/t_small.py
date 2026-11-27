@@ -1,6 +1,6 @@
 import concurrent.futures as cf, shutil, sys, time
 import httpx
-from harness import Client, admin, make_app, server, setup_code
+from harness import Client, make_app, server, setup_code
 repo = sys.argv[1]; fails = []
 def check(n, c, x=""):
     print(("  ok   " if c else "  FAIL ") + n, x if not c else "")

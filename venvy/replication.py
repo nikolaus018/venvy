@@ -13,7 +13,6 @@ snapshot alone restores settings, users, routes and variables without
 touching the apps' files.
 """
 import asyncio
-import contextlib
 import logging
 import sqlite3
 import tarfile

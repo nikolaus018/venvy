@@ -16,7 +16,6 @@ import asyncio
 import contextlib
 import datetime
 import json
-import logging
 import re
 import socket
 import time

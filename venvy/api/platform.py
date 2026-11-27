@@ -12,7 +12,6 @@ import re
 import secrets
 import shutil
 import time
-from pathlib import Path
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -27,9 +26,9 @@ from venvy.apps import _app_safe, _clean_app_name, sanitize_slug
 from venvy.audit import audit_log
 from venvy.auth import (check_admin, check_ip_allowlist, get_current_user, get_download_user, has_app_access,
                         rate_limit_mutations, require_app_access, require_operator, visible_app_ids)
-from venvy.config import APPS_BASE_DIR, DATA_DIR, one_line, utc_now
+from venvy.config import APPS_BASE_DIR, one_line
 from venvy.crypto import _encrypt_secret
-from venvy.db import engine, get_session
+from venvy.db import get_session
 from venvy.jobs import _start_job
 from venvy.models import (App, AppAccess, AppVolume, PortForward, RemoteServer, Route, ServiceBinding,
                           ScheduledJob, UrlMonitor, User, Volume)
@@ -270,7 +269,9 @@ def _clean_route(session: Session, req: RouteReq, app_id: int, route_id: Optiona
             raise HTTPException(400, f"'{net}' is not an IP address or range.")
     for k, v in req.headers.items():
         if not _HEADER_RE.fullmatch(k) or k.lower() in ("content-length", "transfer-encoding", "connection", "host") \
-                or any(c in v for c in "\r\n\0") or len(v) > 2000:
+                or any(ord(c) < 32 and c != "\t" or ord(c) == 127 for c in v) or len(v) > 2000:
+            # (Any control character: one in a response header makes the HTTP
+            # layer refuse the whole response, so every request would fail.)
             raise HTTPException(400, f"The header {k!r} can't be set.")
     if not 0 <= req.rate_limit <= 100000 or not 0 <= req.max_body_mb <= 100000 or not 0 <= req.cache_seconds <= 86400:
         raise HTTPException(400, "rate_limit, max_body_mb or cache_seconds is out of range.")
@@ -1217,6 +1218,22 @@ def download_app_backup(app_id: int, name: str, user: User = Depends(get_downloa
 _ARTIFACT_MAX = int(os.getenv("VENVY_ARTIFACT_MAX_MB", "2048")) * 1024 * 1024
 
 
+def _check_artifact(path) -> None:
+    """Raise ValueError unless *path* is a .tar.gz of plain files, folders and
+    links that all stay inside it."""
+    import tarfile
+    try:
+        with tarfile.open(path, "r:gz") as tf:
+            for m in tf:
+                n = m.name
+                if n.startswith("/") or ".." in n.split("/") or not (m.isfile() or m.isdir() or m.issym()):
+                    raise ValueError(f"unsafe entry {n!r}")
+                if m.issym() and (m.linkname.startswith("/") or ".." in m.linkname.split("/")):
+                    raise ValueError(f"unsafe link {n!r}")
+    except (tarfile.TarError, EOFError, OSError) as exc:
+        raise ValueError(str(exc)) from exc
+
+
 @router.post("/apps/{app_id}/deploy/artifact")
 async def deploy_artifact(app_id: int, file: UploadFile = File(...), start: bool = False,
                           session: Session = Depends(get_session), user: User = Depends(require_operator),
@@ -1235,29 +1252,26 @@ async def deploy_artifact(app_id: int, file: UploadFile = File(...), start: bool
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
     dest = d / f"{app_id}-{time.time_ns()}.tar.gz"
     size = 0
-    with open(dest, "wb") as out:
-        while True:
-            chunk = await file.read(1 << 20)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > _ARTIFACT_MAX:
-                out.close()
-                dest.unlink(missing_ok=True)
-                raise HTTPException(413, f"The artifact is larger than {_ARTIFACT_MAX // (1024 * 1024)} MB.")
-            out.write(chunk)
-    import tarfile
     try:
-        with tarfile.open(dest, "r:gz") as tf:
-            for m in tf:
-                n = m.name
-                if n.startswith("/") or ".." in n.split("/") or not (m.isfile() or m.isdir() or m.issym()):
-                    raise ValueError(f"unsafe entry {n!r}")
-                if m.issym() and (m.linkname.startswith("/") or ".." in m.linkname.split("/")):
-                    raise ValueError(f"unsafe link {n!r}")
-    except (tarfile.TarError, ValueError, EOFError, OSError) as exc:
+        with open(dest, "wb") as out:
+            while True:
+                chunk = await file.read(1 << 20)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > _ARTIFACT_MAX:
+                    raise HTTPException(413, f"The artifact is larger than {_ARTIFACT_MAX // (1024 * 1024)} MB.")
+                await asyncio.to_thread(out.write, chunk)
+        # Reading the whole archive through takes as long as unpacking it:
+        # in a thread, or every other request waits for it.
+        await asyncio.to_thread(_check_artifact, dest)
+    except ValueError as exc:
         dest.unlink(missing_ok=True)
         raise HTTPException(400, f"That is not a usable .tar.gz: {exc}")
+    except BaseException:
+        # Too large, a client that hung up, a full disk: nothing will use the part written.
+        dest.unlink(missing_ok=True)
+        raise
     username = user.username
     a_id = a.id
 

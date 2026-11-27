@@ -121,7 +121,7 @@
         }
 
         async function refreshNotify() {
-            const [n, a, apps] = await Promise.all([apiJson('GET', '/system/notify'), apiJson('GET', '/system/alerts'), Promise.resolve(_cachedApps)]);
+            const [n, a] = await Promise.all([apiJson('GET', '/system/notify'), apiJson('GET', '/system/alerts')]);
             const body = $id('notify-modal-body');
             if (!n.ok || !a.ok) { body.innerHTML = `<p class="text-xs" style="color:var(--red)">${escapeHtml(n.error || a.error)}</p>`; return; }
             _notifyData = n.data; _alertsData = a.data;

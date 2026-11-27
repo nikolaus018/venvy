@@ -14,7 +14,6 @@ Values from SOPS and Vault win over the app's own variables.
 import asyncio
 import contextlib
 import json
-import logging
 import os
 import re
 import shutil

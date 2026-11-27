@@ -10,7 +10,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 from sqlmodel import Session, select
 
@@ -74,6 +74,11 @@ class _UdpFront(asyncio.DatagramProtocol):
     def __init__(self, fid: int, target: int):
         self.fid, self.target, self.transport = fid, target, None
         self.ups: Dict[tuple, _UdpUpstream] = {}
+        # Clients whose upstream socket is being opened, with what they sent
+        # meanwhile; and the tasks doing it (kept, or they may be collected).
+        self.pending: Dict[tuple, list] = {}
+        self.tasks: set = set()
+        self.closed = False
 
     def connection_made(self, transport):
         self.transport = transport
@@ -86,16 +91,35 @@ class _UdpFront(asyncio.DatagramProtocol):
             up.seen = time.monotonic()
             up.transport.sendto(data)
             return
-        asyncio.ensure_future(self._open(addr, data))
-
-    async def _open(self, addr, first: bytes) -> None:
-        loop = asyncio.get_running_loop()
-        if len(self.ups) > 4096:
+        waiting = self.pending.get(addr)
+        if waiting is not None:
+            # Its socket is on the way: one upstream per client, not one per datagram.
+            if len(waiting) < 64:
+                waiting.append(data)
             return
-        _t, up = await loop.create_datagram_endpoint(lambda: _UdpUpstream(self, addr),
-                                                     remote_addr=("127.0.0.1", self.target))
+        if self.closed or len(self.ups) + len(self.pending) > 4096:
+            return
+        self.pending[addr] = [data]
+        task = asyncio.ensure_future(self._open(addr))
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def _open(self, addr) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            _t, up = await loop.create_datagram_endpoint(lambda: _UdpUpstream(self, addr),
+                                                         remote_addr=("127.0.0.1", self.target))
+        except OSError as exc:
+            self.pending.pop(addr, None)
+            logging.debug("UDP forward %s: no upstream socket for %s: %s", self.fid, addr, exc)
+            return
+        queued = self.pending.pop(addr, [])
+        if self.closed:
+            up.transport.close()
+            return
         self.ups[addr] = up
-        up.transport.sendto(first)
+        for data in queued:
+            up.transport.sendto(data)
 
     def reap(self) -> None:
         now = time.monotonic()
@@ -106,6 +130,10 @@ class _UdpFront(asyncio.DatagramProtocol):
                 self.ups.pop(addr, None)
 
     def close(self) -> None:
+        self.closed = True
+        for task in list(self.tasks):
+            task.cancel()
+        self.pending.clear()
         for up in self.ups.values():
             with contextlib.suppress(Exception):
                 up.transport.close()

@@ -335,7 +335,7 @@ async def _download(http, url: str, dest: Path, sha256: str, log: Callable[[str]
         with open(dest, "wb") as f:
             async for chunk in r.content.iter_chunked(1 << 20):
                 h.update(chunk)
-                f.write(chunk)
+                await asyncio.to_thread(f.write, chunk)
     if h.hexdigest() != sha256.lower():
         raise ToolchainError(f"Checksum mismatch for {url} — not installed.")
     log("Checksum verified.")

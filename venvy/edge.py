@@ -14,14 +14,13 @@
 import asyncio
 import contextlib
 import json
-import logging
 import os
 import re
 import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from venvy import kv, own_hosts
 from venvy.config import PROXY_SECRET, venvy_port

@@ -8,8 +8,6 @@ app takes its access away again. Apps that run as systemd services also get
 the volume mounted read-only when attached read-only.
 """
 import contextlib
-import logging
-import os
 import re
 import shutil
 import subprocess
@@ -52,7 +50,7 @@ def _attached(volume_id: int) -> List[Tuple[int, bool]]:
 
 def apply_acl(volume: Volume) -> None:
     """Make the volume's ACL list exactly the apps attached to it."""
-    from venvy.isolation import _app_username, _isolation_active, _resolve_system_bin
+    from venvy.isolation import _app_username, _isolation_active
     p = create_dir(volume.name)
     if not _isolation_active():
         return

@@ -16,7 +16,7 @@ import json
 import logging
 import re
 import secrets
-from typing import Dict, List, Optional
+from typing import Dict, List
 from urllib.parse import quote
 
 from sqlmodel import Session, select

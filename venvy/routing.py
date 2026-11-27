@@ -343,30 +343,65 @@ def _check_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(got, want)
 
 
-_auth_ok: Dict[Tuple[int, str], float] = {}
+# {(route id, Authorization header): (expires, the stored hash it was checked against)}
+_auth_ok: Dict[Tuple[int, str], Tuple[float, str]] = {}
 
 
-async def basic_auth_ok(rule: Rule, header: Optional[str]) -> bool:
+# Wrong passwords per (route, client address) in the last minute. Past the
+# limit every attempt is refused without being checked: otherwise anyone could
+# guess a route's password as fast as the server runs scrypt — and keep its
+# worker threads busy doing it.
+_AUTH_FAIL_MAX = 10
+_AUTH_FAIL_WINDOW = 60.0
+_auth_fail: Dict[Tuple[int, str], collections.deque] = {}
+
+
+# What an unknown username is checked against, so that it takes as long as a
+# wrong password and the answer time doesn't tell which usernames exist.
+_DUMMY_HASH = hash_password(secrets.token_urlsafe(16))
+
+
+def _auth_failures(key: Tuple[int, str], now: float) -> collections.deque:
+    dq = _auth_fail.get(key)
+    if dq is None:
+        if len(_auth_fail) > 50000:
+            for k in [k for k, v in _auth_fail.items() if not v or now - v[-1] > _AUTH_FAIL_WINDOW]:
+                _auth_fail.pop(k, None)
+            if len(_auth_fail) > 50000:
+                _auth_fail.clear()
+        dq = _auth_fail[key] = collections.deque()
+    while dq and now - dq[0] > _AUTH_FAIL_WINDOW:
+        dq.popleft()
+    return dq
+
+
+async def basic_auth_ok(rule: Rule, header: Optional[str], ip: str = "") -> bool:
     if not rule.users:
         return True
     if not header or not header.lower().startswith("basic "):
         return False
-    key = (rule.route_id or 0, header)
-    now = time.monotonic()
-    if _auth_ok.get(key, 0) > now:
-        return True
     try:
         user, _, pw = base64.b64decode(header[6:].strip()).decode("utf-8").partition(":")
     except Exception:
         return False
     stored = rule.users.get(user)
-    if stored is None:
+    key = (rule.route_id or 0, header)
+    now = time.monotonic()
+    hit = _auth_ok.get(key)
+    # Only while the password it was checked against is still the one stored.
+    if hit is not None and hit[0] > now and stored is not None and hmac.compare_digest(hit[1], stored):
+        return True
+    fails = _auth_failures((rule.route_id or 0, ip), now)
+    if len(fails) >= _AUTH_FAIL_MAX:
         return False
-    ok = await asyncio.to_thread(_check_password, pw, stored)
+    ok = await asyncio.to_thread(_check_password, pw, stored if stored is not None else _DUMMY_HASH)
+    ok = ok and stored is not None
     if ok:
         if len(_auth_ok) > 10000:
             _auth_ok.clear()
-        _auth_ok[key] = now + 300          # skip scrypt for this exact header for 5 minutes
+        _auth_ok[key] = (now + 300, stored)     # skip scrypt for this exact header for 5 minutes
+    else:
+        fails.append(now)
     return ok
 
 
@@ -444,6 +479,11 @@ def cache_ttl(rule: Rule, resp_headers: Dict[str, str]) -> float:
     if not rule.cache_seconds:
         return 0
     if "set-cookie" in resp_headers:
+        return 0
+    # An answer that depends on more than the encoding (Vary: Cookie, a
+    # language, "*") is not the same for the next client: the key doesn't hold it.
+    vary = {v.strip().lower() for v in resp_headers.get("vary", "").split(",") if v.strip()}
+    if vary - {"accept-encoding"}:
         return 0
     cc = resp_headers.get("cache-control", "").lower()
     if any(x in cc for x in ("private", "no-store", "no-cache")):

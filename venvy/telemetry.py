@@ -22,13 +22,12 @@ import contextlib
 import datetime
 import html
 import json
-import logging
-import os
 import re
 import time
 from typing import Dict, List, Optional, Tuple
 
 import aiohttp
+from sqlalchemy import case
 from sqlmodel import Session, delete, func, select
 
 from venvy import kv, monitor, notify
@@ -283,13 +282,12 @@ def purge_samples() -> None:
 def uptime(target: str, hours: int) -> Optional[float]:
     since = utc_now() - datetime.timedelta(hours=hours)
     with Session(engine) as s:
-        total = s.exec(select(func.count()).select_from(UptimeSample)
-                       .where(UptimeSample.target == target, UptimeSample.ts >= since)).one()
-        if not total:
-            return None
-        good = s.exec(select(func.count()).select_from(UptimeSample)
-                      .where(UptimeSample.target == target, UptimeSample.ts >= since, UptimeSample.ok == True)).one()  # noqa: E712
-    return round(100.0 * good / total, 3)
+        # One pass over the samples: how many, and how many of them good.
+        total, good = s.exec(select(func.count(), func.sum(case((UptimeSample.ok == True, 1), else_=0)))  # noqa: E712
+                             .where(UptimeSample.target == target, UptimeSample.ts >= since)).one()
+    if not total:
+        return None
+    return round(100.0 * (good or 0) / total, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -317,10 +315,26 @@ def states() -> dict:
 # Status page
 # ---------------------------------------------------------------------------
 
+# The status page is public: anyone can ask for it as often as they like, and
+# each answer counts a month of samples per item. One answer serves everyone
+# for a few seconds (the page itself reloads once a minute).
+_STATUS_CACHE_SEC = 10.0
+_status_cache: Dict[str, object] = {"at": 0.0, "cfg": None, "data": None}
+
+
 def status_data() -> Optional[dict]:
     cfg = kv.get_json(STATUS_KEY, {}) or {}
     if not cfg.get("enabled"):
         return None
+    now = time.monotonic()
+    if _status_cache["cfg"] == cfg and now - float(_status_cache["at"]) < _STATUS_CACHE_SEC:
+        return _status_cache["data"]          # type: ignore[return-value]
+    data = _status_data(cfg)
+    _status_cache.update(at=now, cfg=cfg, data=data)
+    return data
+
+
+def _status_data(cfg: dict) -> dict:
     want = {int(x) for x in cfg.get("apps", [])}
     items = []
     with Session(engine) as s:

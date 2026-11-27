@@ -1,7 +1,7 @@
 """Findings of docs/review-2026-11-26.md that need a running server: routes and
 port ownership, deploy health without a health check, app-backup restores,
 monitors and volumes for restricted operators."""
-import io, json, socket, sys, tarfile, threading, time
+import io, json, sys, tarfile, threading, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 

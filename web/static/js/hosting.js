@@ -559,7 +559,6 @@
                 apiJson('GET', '/system/status-page'));
             const [tc, st, vols, mons, edge, logs, tele, repl, servers, hjobs, secr, sp] = await Promise.all(reqs);
             const out = { platform: [], alerts: [], network: [], integrations: [], backups: [] };
-            const none = (t) => `<p class="text-xs" style="color:var(--text3)">${t}</p>`;
             const kinds = tc.ok ? tc.data.kinds : [];
             const installed = kinds.reduce((n, k) => n + k.installed.length, 0);
             out.platform.push(_fold('Toolchains', 'tool', installed ? kinds.filter(k => k.installed.length).map(k => `${_H(k.kind)} ${k.installed.map(_H).join(', ')}`).join(' · ') : 'None installed: the host\'s own tools are used',

@@ -228,7 +228,6 @@
             _termSetStatus('connecting');
 
             const container = document.getElementById('terminal-container');
-            const tabEl = document.getElementById('tab-terminal');
             container.innerHTML = '';
 
             const isMobile = window.innerWidth < 768;

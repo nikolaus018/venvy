@@ -1,10 +1,10 @@
 """The runtime table: what it says to run, the static file server, and an
 app of every runtime whose tools this machine has (the rest are checked to be
 refused with an install hint)."""
-import json, os, re, shutil, socket, subprocess, sys, tempfile, time
+import os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
 import httpx
-from harness import Client, admin, server
+from harness import admin, server
 repo = sys.argv[1]; fails = []
 sys.path.insert(0, repo)
 def check(n, c, x=""):

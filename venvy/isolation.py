@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from venvy import runtimes
 from venvy.config import APP_LOGS_DIR, APPS_BASE_DIR, ASSETS_DIR, DATA_DIR, child_base_env

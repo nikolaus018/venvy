@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from venvy.config import APP_LOGS_DIR, DATA_DIR, ASSETS_DIR
+from venvy.config import DATA_DIR, ASSETS_DIR
 from venvy.isolation import _resolve_system_bin
 
 RUN_DIR = Path(os.getenv("VENVY_RUN_DIR", "/run/venvy"))

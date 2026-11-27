@@ -28,6 +28,7 @@ run login_timing "$PYB" t_timing.py "$R"
     run monitor "$PYB" t_monitor.py "$R"
     run platform_unit "$PYB" t_platform_unit.py "$R"
     run review_unit "$PYB" t_review_unit.py "$R"
+    run review_2711 "$PYB" t_review_2711.py "$R"
     run platform "$PYB" t_platform.py "$R"
 ) &
 (

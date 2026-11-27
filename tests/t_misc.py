@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 
-from harness import Client, admin, make_app, server
+from harness import admin, make_app, server
 
 repo, case = sys.argv[1], sys.argv[2]
 PORT = int(os.environ.get("T_PORT", "54993"))
@@ -92,7 +92,7 @@ if case == "terminal_db":
             try:
                 r = await asyncio.to_thread(lambda: httpx.get(base + "/api/health", timeout=8))
                 ok_health = r.status_code == 200
-            except Exception as e:
+            except Exception:
                 ok_health = False
             dt = time.time() - t0
             for ws in socks:

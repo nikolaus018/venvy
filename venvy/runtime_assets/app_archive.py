@@ -10,7 +10,6 @@
         A tar.gz of the given folders on stdout, with every SQLite database
         in it replaced by such a copy. Symlinks are stored, never followed.
 """
-import io
 import json
 import os
 import sqlite3

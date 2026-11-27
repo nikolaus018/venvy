@@ -2,7 +2,7 @@
 (venvy/ports.py), the free-port search, deploy health's port probe, the
 compose rules (checked after the old containers are gone; limits; container
 names), egress rules for container apps and preview domains."""
-import asyncio, json, os, socket, sys, tempfile, threading, types
+import asyncio, os, socket, sys, tempfile, threading, types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 

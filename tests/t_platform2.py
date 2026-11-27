@@ -2,7 +2,7 @@
 release commands, atomic deploys that switch back, artifact deploys (and
 ship.py deploy), the deploy queue, preview apps per branch, app backups with
 consistent SQLite copies, and managing a second Venvy server."""
-import hashlib, hmac, io, json, os, sqlite3, subprocess, sys, tarfile, tempfile, time
+import hashlib, hmac, io, json, os, subprocess, sys, tarfile, tempfile, time
 from pathlib import Path
 import httpx
 from harness import admin, free_port, server

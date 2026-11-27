@@ -61,6 +61,8 @@
             panel.classList.add('tab-content-active');
 
             const btn = document.getElementById(`tabbtn-${mainTab}`);
+            // Code has no panel of its own: it controls the pane it shows.
+            if (inCode) document.getElementById('tabbtn-code')?.setAttribute('aria-controls', `tab-${tab}`);
             if (btn) {
                 btn.classList.add('active');
                 btn.style.color = 'var(--text)';

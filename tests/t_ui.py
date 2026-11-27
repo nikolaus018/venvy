@@ -1,7 +1,7 @@
 """Browser pass over the UI (Playwright + installed Chrome): every view and
 tab is opened, the main flows are exercised, and any uncaught script error
 fails the run. usage: t_ui.py <repo>"""
-import sys, time
+import sys
 from playwright.sync_api import sync_playwright
 from harness import admin, make_app, server
 
@@ -231,5 +231,16 @@ with server(repo, 55010) as (base, data, srv):
         check("data-on-* runs allowlisted Venvy functions with parsed args", pg.evaluate("window.__ran") == ["t-enter", "A", "enter"], str(pg.evaluate("window.__ran")))
         check("data-on-* refuses browser built-ins and fetch", sum(1 for e in errors if "not one of Venvy's functions" in e) >= 2, str(errors[:5]))
         check("data-on-* refuses arbitrary property traversal", any("disallowed property path" in e for e in errors), str(errors[:5]))
+
+        # A viewer: the settings fields, spread over several tabs since v5.1, are read-only.
+        cl.req("POST", "/api/users", json={"username": "uiviewer", "password": "viewer12345", "role": "viewer"})
+        vp = br.new_page(viewport={"width": 1400, "height": 900})
+        vp.goto(base + "/"); vp.wait_for_timeout(1500)
+        vp.fill("#username", "uiviewer"); vp.fill("#password", "viewer12345"); vp.click("#login-submit-btn"); vp.wait_for_timeout(2000)
+        vp.click(f"#app-list .app-row[data-app-id='{a}']"); vp.wait_for_timeout(1500)
+        check("viewer: settings fields in Overview and Health are read-only",
+              vp.is_disabled("#setting-name") and vp.is_disabled("#setting-health-path") and vp.is_disabled("#setting-policy"))
+        check("viewer: the usage range still works", not vp.is_disabled("#usage-range"))
+        vp.close()
         br.close()
 print("FAILED" if fails else "ALL OK", fails); sys.exit(1 if fails else 0)

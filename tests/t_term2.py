@@ -1,7 +1,7 @@
 """An open terminal has the shared environment variables, and must close once its session is gone."""
 import asyncio, sys, time
 import websockets
-from harness import Client, admin, make_app, server
+from harness import admin, make_app, server
 PORT = 55006
 async def run(repo):
     with server(repo, PORT, env={"VENVY_TERMINAL_RECHECK_SEC": "1"}) as (base, d, srv):

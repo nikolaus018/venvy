@@ -19,13 +19,12 @@ import logging
 import os
 import time
 import zlib
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 
 import aiohttp
-from sqlmodel import Session, select
 from starlette.requests import HTTPConnection
 
-from venvy import own_hosts, routing
+from venvy import routing
 from venvy.config import HTTP_CLIENT_LIMITS
 
 _session: Optional[aiohttp.ClientSession] = None
@@ -173,7 +172,7 @@ class DomainProxyMiddleware:
         if not routing.ip_allowed(rule, ip):
             await self._refuse(scope, receive, send, 403, "Your address is not allowed here.")
             return
-        if not await routing.basic_auth_ok(rule, hdrs.get("authorization")):
+        if not await routing.basic_auth_ok(rule, hdrs.get("authorization"), ip):
             await self._refuse(scope, receive, send, 401, "Sign in to continue.",
                                [(b"www-authenticate", b'Basic realm="restricted", charset="UTF-8"')])
             return
@@ -276,8 +275,12 @@ class DomainProxyMiddleware:
 
         cache_key = None
         if rule.cache_seconds and method in ("GET", "HEAD") and "authorization" not in hdrs:
-            gz = "gzip" in hdrs.get("accept-encoding", "") and rule.gzip
-            cache_key = (rule.app_id, host.lower(), path, qs, gz)
+            # Keyed on the encodings the client takes, not only on whether Venvy
+            # gzips: an app that compresses by itself would otherwise have its
+            # gzip or br answer served to a client that can't read it.
+            ae = hdrs.get("accept-encoding", "").lower()
+            encodings = tuple(e for e in ("br", "deflate", "gzip", "zstd") if e in ae)
+            cache_key = (rule.app_id, host.lower(), path, qs, encodings)
             hit = routing.cache_get(cache_key)
             if hit is not None:
                 status, out_headers, body_bytes = hit
@@ -344,8 +347,12 @@ class DomainProxyMiddleware:
             url = f"http://127.0.0.1:{port}{path}" + (f"?{qs}" if qs else "")
             routing.inflight[_pid] += 1
             try:
-                async with _http().request(method, url, headers=headers, data=req_data,
-                                           allow_redirects=False) as resp:
+                # The app sees the client's own headers: aiohttp would otherwise add
+                # "Accept-Encoding: gzip, deflate" (and its own User-Agent) to a
+                # request that has none, and the compressed answer — passed on as it
+                # comes — would reach a client that never said it could read it.
+                async with _http().request(method, url, headers=headers, data=req_data, allow_redirects=False,
+                                           skip_auto_headers=("Accept-Encoding", "User-Agent")) as resp:
                     resp_hop = _HOP | _connection_hop_headers(resp.raw_headers)
                     out = [(k.lower(), v) for k, v in resp.raw_headers if k.decode("latin-1").lower() not in resp_hop]
                     lower = {k.decode("latin-1"): v.decode("latin-1") for k, v in out}

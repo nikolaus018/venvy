@@ -124,11 +124,9 @@
                     // re-renders on its own when the list actually changes.
                     renderAppList(apps);
 
-                    // If settings tab is active, keep dirty indicator in sync with server data
-                    const tabSettings = document.getElementById('tab-settings');
-                    if (tabSettings && !tabSettings.classList.contains('hidden')) {
-                        checkSettingsDirty();
-                    }
+                    // If a tab with the settings form is open, keep its unsaved
+                    // marker in sync with what the server now says.
+                    if (SETTINGS_TABS.has(currentTab)) checkSettingsDirty();
 
                     // If we were showing STALE, repaint from the real status —
                     // just dropping the class would leave the old label behind.

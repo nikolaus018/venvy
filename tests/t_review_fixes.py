@@ -10,7 +10,6 @@
   cloud metadata SSRF blocking, static_server symlink containment, exec_env helper.
 """
 import asyncio
-import datetime
 import json
 import os
 import shutil

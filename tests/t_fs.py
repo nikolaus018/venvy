@@ -1,6 +1,5 @@
 """File-manager behaviour around symlinks + simulated swap-after-check races.
 usage: t_fs.py <repo>"""
-import importlib.util as u
 import os, shutil, sys, tempfile
 import httpx
 from pathlib import Path

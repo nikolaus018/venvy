@@ -130,7 +130,6 @@
                 document.getElementById('confirm-modal-body').classList.toggle('hidden', !body);
 
                 const iconWrap = document.getElementById('confirm-modal-icon');
-                const tone = danger ? 'var(--red-rgb)' : 'var(--accent-rgb)';
                 iconWrap.style.cssText = `background:rgba(${danger ? '239,68,68' : 'var(--accent-rgb)'},0.1);border:1px solid rgba(${danger ? '239,68,68' : 'var(--accent-rgb)'},0.22)`;
                 iconWrap.innerHTML = `<i data-feather="${icon || (danger ? 'trash-2' : 'help-circle')}" class="w-5 h-5" style="color:${danger ? 'var(--red)' : 'var(--accent-light)'}"></i>`;
 

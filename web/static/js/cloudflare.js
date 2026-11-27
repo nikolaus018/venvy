@@ -267,8 +267,6 @@
             noCredsWarn.classList.remove('flex');
 
             // Show a subtle spinner in the card while both fetches complete
-            const cfCard = document.getElementById('cf-no-creds-warn')?.closest('.card, [class*="rounded"]') ||
-                noCredsWarn?.parentElement;
             let _skeleton = document.getElementById('_cf-loading-skeleton');
             if (!_skeleton) {
                 _skeleton = document.createElement('div');

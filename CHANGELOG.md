@@ -5,6 +5,20 @@ the version it runs under System → Venvy → What's new, and the release on Gi
 uses the same text. Every release needs its section here: the release workflow
 stops without one.
 
+## v5.1.1
+
+Fixes from a review of the whole code base (docs/review-2026-11-27.md).
+
+- Apps served on a domain or route no longer send compressed answers to clients that didn't ask for them. Venvy's proxy let its HTTP library ask the app for gzip on every request without an `Accept-Encoding`, and passed the gzip on: curl, many monitoring checks and simple clients got unreadable bytes from any app that compresses by itself.
+- The proxy's cache keeps one answer per encoding the client takes. With the route's own gzip off and an app that compresses by itself, the first visitor's gzip answer could be served to clients that can't read it. Answers that vary on more than the encoding (`Vary: Cookie`, a language, `*`) are no longer cached.
+- A route's basic auth allows ten wrong passwords a minute from one address; past that the address is refused until the minute is over. A changed or removed password stops working at once (a correct one was remembered for five minutes). Unknown user names take as long to refuse as wrong passwords.
+- Uploading a large artifact no longer holds up every other request while the archive is checked, and an upload that is cut off leaves no file behind. Unpacking an artifact that stalls is stopped after 20 minutes instead of holding the deploy for ever.
+- The public status page is worked out at most every ten seconds, however often it is asked for.
+- UDP port forwards open one connection to the app per client, also when a client sends several datagrams at once; those used to each open one and leave all but the last behind.
+- A route's extra headers can't contain control characters (they made every response on the route fail).
+- Polling keeps the unsaved-changes marker of the settings in step again, and a viewer's settings fields are shown read-only again; both still looked for the Settings tab v5.1 removed.
+- `PUT /apps/{id}` with the same port twice in `manual_ports` stores it once.
+
 ## v5.1.0
 
 An app's tabs are reorganised: one tab per question, every setting in one place, and features nobody has set up take one line.

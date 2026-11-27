@@ -6,7 +6,7 @@ gzip, cache), access logs and /metrics, TCP / command health checks, stop
 signals, one-off commands, host jobs, secret files and $APP_DATA_DIR,
 monitors and the status page, TCP and UDP port forwards, volumes, log
 shipping and Vault."""
-import gzip, json, os, socket, sys, threading, time
+import json, os, socket, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 from harness import Sink, admin, free_port, login_as, server

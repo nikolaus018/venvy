@@ -3,7 +3,6 @@ import contextlib
 import errno
 import os
 import secrets
-import shutil
 import stat as _stat
 import urllib.parse
 from pathlib import Path
