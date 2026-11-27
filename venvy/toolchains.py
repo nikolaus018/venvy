@@ -1,7 +1,7 @@
 """Language versions, installed side by side and chosen per app.
 
 The host's own packages (apt's nodejs, cargo, ...) are what an app gets when
-it asks for nothing. An app that names a version — in Settings, or in its
+it asks for nothing. An app that names a version — in Deploy → Build and run, or in its
 repository (.nvmrc, .node-version, package.json "engines", rust-toolchain(.toml),
 .python-version, .go-version, .bun-version, .dvmrc) — runs with that version
 from TOOLCHAINS_DIR, which Venvy downloads on first use:

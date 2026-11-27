@@ -970,7 +970,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         _mark_start_error(session, db_app, f"Unknown runtime '{spec.runtime}'.")
 
     if runtimes.entry_missing(spec.runtime, spec.entrypoint, spec.start_command):
-        _mark_start_error(session, db_app, "No entrypoint configured. Set one (or a start command) in the app's Settings tab first.")
+        _mark_start_error(session, db_app, "No entrypoint configured. Set one (or a start command) in the app's Deploy → Build and run first.")
 
     wd = appspec.work_dir(spec)
     ids = await asyncio.to_thread(_ensure_app_user, spec)
@@ -1019,7 +1019,7 @@ async def _start_app_process(app_id: int, session: Session) -> App:
         # Starting it anyway would run the app without its configuration —
         # against a default database, with no API keys — and look healthy.
         msg = ("This app's environment variables can't be decrypted (the .venvy_key file is missing "
-               "or was replaced). Re-enter them in Settings, or restore the key, then start again.")
+               "or was replaced). Re-enter them in Config → Variables, or restore the key, then start again.")
         _mark_start_error(session, db_app, msg, log_file)
 
     if db_app.process_kind not in ("worker", "tunnel") and not db_app.port and (

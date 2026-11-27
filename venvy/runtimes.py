@@ -105,7 +105,7 @@ RUNTIMES: Dict[str, Runtime] = {r.key: r for r in (
     Runtime(
         key="rust", label="Rust (Cargo)",
         tools=("cargo",),
-        install_hint="re-run the installer with --with-rust, or pick a version in Settings (installed with rustup)",
+        install_hint="re-run the installer with --with-rust, or pick a version in Deploy → Build and run (installed with rustup)",
         entry=OPTIONAL, entry_default="", entry_label="Binary",
         entry_placeholder="blank = the package's binary",
         entry_help="Rust apps are built with cargo build --release and run from target/release/. Name the binary when the crate or workspace has several (cargo build --bin NAME).",
@@ -114,7 +114,7 @@ RUNTIMES: Dict[str, Runtime] = {r.key: r for r in (
     Runtime(
         key="go", label="Go",
         tools=("go",),
-        install_hint="re-run the installer with --with-go, or pick a version in Settings",
+        install_hint="re-run the installer with --with-go, or pick a version in Deploy → Build and run",
         entry=OPTIONAL, entry_default="", entry_label="Package",
         entry_placeholder="blank = . (or e.g. ./cmd/server)",
         entry_help="Go apps are built with go build into .venvy/bin/app and run from there. Name the main package if it is not the app's root folder (e.g. ./cmd/server).",
@@ -164,7 +164,7 @@ RUNTIMES: Dict[str, Runtime] = {r.key: r for r in (
         entry=OPTIONAL, entry_default="", entry_label="Executable",
         entry_placeholder="e.g. ./server or bin/app (or set a start command)",
         entry_help="Runs a program you upload or build — a compiled binary, a script, a server you downloaded. Name the executable (a path inside the app), or write the whole command line in Start command. $PORT and the app's other variables are expanded.",
-        pkg_help="Nothing is managed for a plain command; put an install command in Settings if it needs one.",
+        pkg_help="Nothing is managed for a plain command; put an install command in Deploy → Build and run if it needs one.",
     ),
     Runtime(
         key="docker", label="Docker image / Dockerfile",
@@ -172,7 +172,7 @@ RUNTIMES: Dict[str, Runtime] = {r.key: r for r in (
         install_hint="re-run the installer with --with-docker   (or install Docker Engine)",
         entry=OPTIONAL, entry_default="", entry_label="Image",
         entry_placeholder="e.g. ghcr.io/org/app:1.2 (blank = build the Dockerfile)",
-        entry_help="An image to run, or blank to build the Dockerfile in the app's folder. The container's port (Container port in Settings, default 8080) is published on the app's port on this host; $APP_DATA_DIR is mounted at /data. Docker apps run through the Docker daemon, which is root on this host.",
+        entry_help="An image to run, or blank to build the Dockerfile in the app's folder. The container's port (Container port in Deploy → Build and run, default 8080) is published on the app's port on this host; $APP_DATA_DIR is mounted at /data. Docker apps run through the Docker daemon, which is root on this host.",
         pkg_help="Dependencies are part of the image.",
     ),
     Runtime(
@@ -530,7 +530,7 @@ def start_command(key: str, app_dir: Path, entrypoint: str, port: Optional[int],
     if key == "rust":
         art = rust_artifact(app_dir, entrypoint)
         if art is None:
-            raise ValueError("This crate has several binaries (or is a workspace): name the one to run in Settings → Binary.")
+            raise ValueError("This crate has several binaries (or is a workspace): name the one to run in Deploy → Build and run → Binary.")
         return [str(art)]
     if key == "node":
         if entrypoint:
@@ -546,7 +546,7 @@ def start_command(key: str, app_dir: Path, entrypoint: str, port: Optional[int],
     if key == "java":
         jar = java_artifact(app_dir, entrypoint)
         if jar is None:
-            raise ValueError("No JAR to run: build the app (Deploy) or name the JAR in Settings.")
+            raise ValueError("No JAR to run: build the app (Deploy) or name the JAR in Deploy → Build and run.")
         return ["java", "-jar", str(jar)]
     if key == "ruby":
         bundled = (app_dir / "Gemfile").is_file()
@@ -567,7 +567,7 @@ def start_command(key: str, app_dir: Path, entrypoint: str, port: Optional[int],
         return cmd
     if key == "command":
         if not entrypoint:
-            raise ValueError("Set a start command (or name the executable) in Settings.")
+            raise ValueError("Set a start command (or name the executable) in Deploy → Build and run.")
         return [str(app_dir / entrypoint)]
     if key == "docker":
         if app is None:
@@ -627,13 +627,13 @@ def start_problem(key: str, app_dir: Path, entrypoint: str) -> Optional[str]:
     if key == "rust" and not (app_dir / "Cargo.toml").is_file():
         return "There is no Cargo.toml in the app's folder."
     if key == "rust" and rust_binary(app_dir, entrypoint) is None:
-        return "This crate has several binaries (or is a workspace): name the one to run in Settings → Binary."
+        return "This crate has several binaries (or is a workspace): name the one to run in Deploy → Build and run → Binary."
     if key == "command" and entrypoint:
         cand = app_dir / entrypoint
         if not _inside(app_dir, cand) or not cand.is_file():
             return f"The executable '{entrypoint}' does not exist in the app's folder."
     if key == "docker" and not entrypoint and not (app_dir / "Dockerfile").is_file() and not (app_dir / "Containerfile").is_file():
-        return "Name an image in Settings, or upload a Dockerfile."
+        return "Name an image in Deploy → Build and run, or upload a Dockerfile."
     if key == "compose" and compose_file(app_dir, entrypoint) is None:
         return (f"The compose file '{entrypoint}' is not in the app's folder." if entrypoint
                 else "There is no compose file in the app's folder.")
