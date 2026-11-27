@@ -85,7 +85,7 @@ Settings live in `/etc/venvy/venvy.env`, data in `/var/lib/venvy`, code in `/opt
 
 ## Runtimes
 
-Pick one when you create an app; it can be changed later in Settings. Venvy tells you at start-up
+Pick one when you create an app; it can be changed later in Deploy → Build and run. Venvy tells you at start-up
 (and in the dropdown) which ones this host is missing.
 
 | Runtime | Starts with | Built with | Packages tab |
@@ -157,7 +157,7 @@ otherwise on the first start (or with "Install from manifest" in the Packages ta
 - **Users and roles.** Admin, operator and read-only viewer, with optional TOTP two-factor.
 - **Installable PWA** with light and dark themes, a command palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>)
   and keyboard shortcuts.
-- **Processes.** Workers (Procfile, `venvy.toml` or the Hosting tab) and replicas (`instances`) behind
+- **Processes.** Workers (Procfile, `venvy.toml` or Deploy → Processes) and replicas (`instances`) behind
   the proxy with round-robin load balancing; rolling restarts that drain each process first, and
   zero-downtime restarts of a single instance.
 - **Apps as services.** On a per-app-users install every app is a systemd service of its own: it
@@ -187,11 +187,15 @@ otherwise on the first start (or with "Install from manifest" in the Packages ta
   </tr>
   <tr>
     <td><img src="docs/screenshots/deploy.png" alt="Deploy tab with the log of a deploy"><br><sub>Deploys, with automatic rollback</sub></td>
-    <td><img src="docs/screenshots/settings.png" alt="Usage charts and health check of an app"><br><sub>Usage history and health checks</sub></td>
+    <td><img src="docs/screenshots/overview.png" alt="An app's Overview: status, health, addresses, last deploy, usage"><br><sub>An app at a glance, with its usage history</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/system.png" alt="System view: host usage, activity, alerts, backups, updates"><br><sub>System: host usage, activity, alerts, backups, updates</sub></td>
+    <td><img src="docs/screenshots/network.png" alt="An app's Network tab: its port and every hostname it is reached under"><br><sub>Every hostname of an app in one list</sub></td>
     <td><img src="docs/screenshots/jobs.png" alt="Scheduled jobs of an app"><br><sub>Scheduled jobs</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/system.png" alt="System view in sections: overview, backups, alerts, network, platform, integrations, access"><br><sub>System, in sections</sub></td>
+    <td></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/palette.png" alt="Command palette"><br><sub>Command palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>)</sub></td>

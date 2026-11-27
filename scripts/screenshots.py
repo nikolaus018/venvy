@@ -201,8 +201,8 @@ def main() -> None:
                     pg.screenshot(path=str(OUT / f"{name}.png"))
                     print("  ", name)
 
-                def open_app(pg, app_id):
-                    pg.evaluate(f"selectApp({app_id})")
+                def open_app(pg, app_id, tab="overview"):
+                    pg.evaluate(f"selectApp({app_id}, '{tab}')")
                     pg.wait_for_timeout(1500)
 
                 def type_commands(pg, commands):
@@ -216,7 +216,7 @@ def main() -> None:
 
                 ctx, pg = signed_in(viewport={"width": 1440, "height": 900}, device_scale_factor=2, color_scheme="dark")
                 pg.evaluate("setTheme('dark')")
-                open_app(pg, shop)
+                open_app(pg, shop, "terminal")
                 pg.wait_for_function("window.term && termSocket && termSocket.readyState === 1", timeout=15000)
                 type_commands(pg, terminal)
                 shot(pg, "terminal")
@@ -227,16 +227,15 @@ def main() -> None:
                 shot(pg, "logs", 2000)
                 pg.evaluate("switchTab('deploy')")
                 shot(pg, "deploy", 1500)
-                pg.evaluate("switchTab('settings')")
-                pg.wait_for_timeout(2000)
-                pg.evaluate("document.getElementById('usage-cpu').closest('.card').scrollIntoView({block: 'start'})")
-                shot(pg, "settings", 1200)
+                pg.evaluate("switchTab('overview')")
+                shot(pg, "overview", 2500)
+                pg.evaluate("switchTab('network')")
+                shot(pg, "network", 1800)
                 open_app(pg, reports)
                 pg.evaluate("switchTab('jobs')")
                 shot(pg, "jobs", 1200)
                 pg.click("#system-nav-btn")
                 pg.wait_for_timeout(3000)
-                pg.evaluate("document.getElementById('sys-history-card').scrollIntoView({block: 'start'})")
                 shot(pg, "system", 1200)
                 open_app(pg, shop)
                 pg.evaluate("switchTab('logs')")
@@ -258,7 +257,7 @@ def main() -> None:
                 pg.evaluate("toggleSidebar()")
                 shot(pg, "mobile-sidebar", 900)
                 pg.evaluate("toggleSidebar()")
-                open_app(pg, shop)
+                open_app(pg, shop, "terminal")
                 pg.wait_for_function("window.term && termSocket && termSocket.readyState === 1", timeout=15000)
                 type_commands(pg, ["clear", "ls", f"curl -s localhost:{shop_port}/health; echo"])
                 shot(pg, "mobile-terminal")
